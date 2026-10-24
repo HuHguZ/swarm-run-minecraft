@@ -1,5 +1,5 @@
 // Рой: ход тела — к точке в арене, лут по пути, исполнение команды, засада кемпера, отпуск тела.
-import { WEAPON, distance } from './common'
+import { WEAPON, distance, cellKey, blockCount } from './common'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmMoves (sw: SwarmDriverCtx) {
@@ -28,10 +28,38 @@ export function swarmMoves (sw: SwarmDriverCtx) {
   }
   // Слабый в задаче лута — любой поход (отход «прочь», поиск, обмен) с той же зоной обхода: отход из комнаты с сундуком
   // через дверь мимо врага давал «лут → бегство» (стенд rush 15.10, 3 из 3 оставшихся).
-  const go = (b, at, range = 2, seconds = 4, pathArena = b.swarmTask?.kind === 'loot' ? lootArena(b) : arena) => {
+  // Цена пути, а не запрет по дальности: взлёт/посадка и дефицит ракет против ходьбы и подъёма.
+  // shortcut: время полёта оценочное; заменить замерами маршрутов, когда появится телеметрия лут-полётов.
+  const travelCost = (b, at) => {
+    const m = pos[b.name], rockets = m?.inv?.firework_rocket || 0
+    if (!m?.p) return { walk: Infinity, fly: Infinity }
+    const d = distance(m.p, at), key = 'lootFly:' + b.name + ':' + cellKey(at)
+    const kit = m.inv?.elytra > 0 || m.armor?.torso === 'elytra'
+    const blocks = at.climbFrom === undefined || m.p.y >= at.y - 1 || m.inv?.ender_pearl > 0 ? 0 : Math.max(0, at.y - Math.max(m.p.y, at.climbFrom)) + 3
+    return { walk: blockCount(m.inv) >= blocks ? d / 5.6 + Math.max(0, at.y - m.p.y) : Infinity,
+      fly: kit && rockets >= 2 && !sw.blocked(b, key, String(rockets)) && sw.lootSafe(b, at) ? 4 + d / 20 + 8 / rockets : Infinity }
+  }
+  const go = async (b, at, range = 2, seconds = 4, pathArena = b.swarmTask?.kind === 'loot' ? lootArena(b) : arena, air = false) => {
     lootStep(b, at)
+    const cost = air ? travelCost(b, at) : { walk: 0, fly: Infinity }, round = sw.generation
+    // Полёт не обходит зону угрозы A*: если прямой путь плох, остаётся обычный обход по земле.
+    if (air && cost.fly < cost.walk && sw.lootSafe(b, at)) {
+      const reply = await b.c.call('fly_to', { at: bounded(at), timeoutSeconds: 15, arena: pathArena }).catch(e => ({ detail: { ok: false, why: e.message } }))
+      if (round !== sw.generation || !alive(b.name)) return { status: 'interrupted', detail: { interrupted: true } }
+      const state = (await b.c.call('status').catch(() => null))?.state
+      if (round !== sw.generation || !alive(b.name)) return { status: 'interrupted', detail: { interrupted: true } }
+      if (state?.pos) pos[b.name].p = state.pos
+      if (state?.inventory) pos[b.name].inv = state.inventory
+      const r = detail(reply)
+      log(`🪽 ${b.name}: за лутом/к своему ${cellKey(at)} — ${r.ok ? 'сел' : r.why || reply.status || '?'}`)
+      if (reply.status === 'interrupted' || state?.gliding) return { status: 'interrupted', detail: { ...r, interrupted: true } }
+      if (!r.ok) sw.failed(b, 'lootFly:' + b.name + ':' + cellKey(at), String(pos[b.name]?.inv?.firework_rocket || 0))
+      // fly_to садится рядом; под навесом нужен ещё короткий пеший подход, а не ложное «дошёл».
+      if (r.ok && state?.pos && distance(state.pos, at) <= range) return { status: 'done', detail: { arrived: state.pos } }
+    }
     const down =(pos[b.name]?.p?.y ?? at.y) - at.y > 4
-    return b.c.call('goto', { ...bounded(at), range, timeoutSeconds: down ? Math.max(seconds, 10) : seconds, arena: pathArena, ...(down ? { climb: true } : {}), _hunt: true })
+    const up = at.climbFrom !== undefined && at.y - (pos[b.name]?.p?.y ?? at.y) > 1
+    return b.c.call('goto', { ...bounded(at), range, timeoutSeconds: up ? 20 : down ? Math.max(seconds, 10) : seconds, arena: pathArena, ...(down || up ? { climb: true } : {}), ...(up ? { exactY: true, _climb: true } : {}), _hunt: true })
   }
   const buildGo = (b, at, range = .25) => b.c.call('goto', { ...at, range, timeoutSeconds: 4, surface: 'strict', arena, _hunt: true })
   const detail = r => r?.detail || r || {}
@@ -85,5 +113,5 @@ export function swarmMoves (sw: SwarmDriverCtx) {
     const naked = !Object.keys(pos[b.name]?.inv || {}).some(n => WEAPON.test(n)) || !!b.swarmTask?.data?.weak
     return { r: naked ? 22 : 14, foes: boardOf(b).enemies().filter(e => now() - e.seenAt < (naked ? 10000 : 3000)) }
   }
-  return { bounded, lootStep, weakLoot, lootArena, go, buildGo, detail, execute, forgetCamp, reactCamp, release, ownProtection, renew, lootThreat }
+  return { bounded, lootStep, weakLoot, lootArena, travelCost, go, buildGo, detail, execute, forgetCamp, reactCamp, release, ownProtection, renew, lootThreat }
 }

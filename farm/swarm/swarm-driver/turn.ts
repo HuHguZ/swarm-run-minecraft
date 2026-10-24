@@ -1,19 +1,79 @@
 // Рой: ход бота — фаза задачи, упреждающее перепланирование, шаг задачи.
 import { WEAPON, blockCount, distance, cellKey } from './common'
+import { assessSwarmFight } from '../../../daemon/src/swarm'
+import { ascentActive } from './ascent'
+import { rayBox } from '../../../daemon/src/pick'
+import { earlyFightMove } from './turn-work'
 import type { SwarmDriverCtx, TurnCtx } from './common'
 
 export function swarmTurn (sw: SwarmDriverCtx) {
   const { now, alive, log, pos, arena, cooldown, refresh, say, execute, reactCamp, forgetCamp, go, chestAtHand, loot, grab, detail, positionStep, search, transfer, buildStep, mineStep, bounded, tour, turnFlee, turnRecover, turnHold, turnBuildSite, turnDig, turnLadder, turnGoto, turnFight } = sw
   // Фаза приёма: смена её посреди долгого дела (бой — до 12 игровых с) обрывает дело — иначе старый фронт линии
-  // дерётся после смены, фонтан не смыкается, засада не бьёт. Смена цели в том же бою фазой не считается.
+  // дерётся после смены, фонтан не смыкается, засада не бьёт.
   // Только фазы приёмов: обычное перераспределение (бой ↔ резерв) не обрывает начатое, иначе бой дёргается.
   // Раненый, которому велено отходить (recover), — тоже фаза: бой до 12 с добивал его (лаборатория 13.10, линия: 1 хп → смерть).
   // Отход раненого и бегство от неравного боя — одна фаза «уход»: переключения между ними рвали сам отход (лаборатория 13.10).
-  const phase = t => t ? [t.kind === 'recover' || t.data?.panic ? 'retreat' : '', t.data?.hold, t.data?.fountain, t.data?.ambush && t.kind, t.data?.line !== undefined ? 'line' : '', t.data?.rotation].join('|') : ''
+  const standCell = p => p ? `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` : ''
+  const vacatePhase = (t, at) => {
+    // goto carries only its destination, not a frozen digAvoid snapshot. New neighbouring work cannot invalidate it.
+    if (t.kind === 'goto' && !t.data?.dig) return t.data?.swarmStand ? `vacate:${t.data.swarmStand.x},${t.data.swarmStand.y},${t.data.swarmStand.z}` : ''
+    if (!t.data?.digAvoid?.length) return ''
+    const stand = t.data.swarmStand, to = stand || at
+    // Дальние ямы не отменяют бой; новый резерв на пути рамки к стойке требует свежего digAvoid в RPC.
+    const cells = at ? t.data.digAvoid.filter(s => {
+      const feet = s.feetY ?? s.y + 1
+      return rayBox(at, { x: to.x - at.x, y: to.y - at.y, z: to.z - at.z },
+        { x: s.x - .3, y: feet - .6, z: s.z - .3 }, { x: s.x + 1.3, y: feet + .6, z: s.z + 1.3 }, 1) != null
+    }).map(cellKey).sort().join(';') : ''
+    return `vacate:${cells}:${standCell(stand)}`
+  }
+  const phase = (t, at = null, guard = true) => t ? [t.kind === 'recover' || t.kind === 'flee' || t.data?.panic ? 'retreat' : '', t.data?.hold, t.data?.fountain, t.data?.ambush && t.kind, t.data?.line !== undefined ? 'line' : '', t.data?.rotation, t.data?.dig ? `dig:${t.data.dig}:${!!t.data.undermine}` : '', guard && t.data?.shove ? `shove:${t.data.target}` : '', guard ? vacatePhase(t, at) : ''].join('|') : ''
+  const guardKey = t => JSON.stringify([(t.data?.digAvoid || []).map(p => `${cellKey(p)}:${p.feetY ?? p.y + 1}`).sort(), t.data?.swarmStand ? [t.data.swarmStand.x, t.data.swarmStand.y, t.data.swarmStand.z] : null, t.data?.shove && t.data?.shoveAt ? [t.data.shoveAt.x, t.data.shoveAt.y, t.data.shoveAt.z] : null])
   // Тело горит — идёт выход из лавы (arena dangers → lava_escape): ни стопа смены фазы, ни нового дела — любой вызов
   // отменял выход, и бот стоял в лаве (поток enc, 21.10: «🌋 отхожу» ×5 за 3 с и смерть). Так же уход от динамита
   // (dodge_blast): goto дела отменял его через 0.1–0.7 с, и бот оставался у горящего заряда (стенд бота-противника 22.10).
-  const burning = b => /^(lava_escape|dodge_blast|clear_web)$/.test(b.last?.m || '') && b.last.pending !== false
+  // Щит к падающему с булавой (dangers → swarm_hold whileSmash) — тоже: смена фазы «проигрываем — прячусь» и новое дело
+  // опускали щит за тики до удара, новый подъём не держит 5 т (игра пользователя 22.10: 14 из 18 смертей — «smashed», в журнале
+  // «щит к нему» по 3 раза за секунду перед каждой).
+  // Спасение держит тело до квитанции окончания, а не до отказа очередному приказу драйвера.
+  const burning = b => pos[b.name]?.rescuing || b.maceDefense?.until > now() ||
+    (/^(lava_escape|dodge_blast|clear_web)$/.test(b.last?.m || '') || !!b.shieldHold && b.last?.m === 'swarm_hold') && b.last.pending !== false
+  const price = r => r && (r.duelKillSeconds ?? r.killSeconds) / Math.max(.05, r.duelSurvivalSeconds ?? r.survivalSeconds)
+  // Цена отмены держит обе стороны смены: стройку не рвёт мелкий пересчёт, а отход не кончается тем же новым goto.
+  function ladderTask(b, context) {
+    const { task, board, member, members } = context, running = b.swarmTask
+    if (!task || !running || !member) return task
+    const exit = running.data?.ladderRetreat, leaving = running.data?.ladder && task.kind === 'flee'
+    if (!leaving && !exit) return task
+    const foes = board.enemies(), risk = task.data?.risk || assessSwarmFight(member, foes, members)
+    const after = price(risk), maxHp = member.maxHealth ?? b.swarmLadder?.maxHp ?? exit?.maxHp ?? 20
+    const bow = e => e.threat === 'bow' || /^(bow|crossbow)$/.test(e.equipment?.weapon || '')
+    const exposed = foes.some(e => now() - e.seenAt < 1500 && (distance(e.position, member.position) <= 8 ||
+      (e.sources || []).includes(b.name) && bow(e)))
+    if (leaving) {
+      const work = b.swarmLadder, before = price(work?.risk)
+      // Рана, смертельный залп, контакт и свежий лучник дороже продолжения работы при любой принятой цене.
+      if (work && !exposed && !risk.lethal && !risk.burst && member.health >= work.hp &&
+          member.health / maxHp >= work.hp / work.maxHp && Number.isFinite(before) && Number.isFinite(after) &&
+          after <= before * 1.25) return running
+      return Number.isFinite(after) ? { ...task, data: { ...task.data, ladderRetreat: {
+        key: running.data.ladder, target: task.data?.target ?? risk.target, price: after, hp: member.health, maxHp } } } : task
+    }
+    // Память живёт в текущем flee: смена цели или раунда очищает её вместе с самой задачей.
+    if (task.kind === 'flee') return !task.data?.target || task.data.target === exit.target ? { ...task, data: { ...task.data, ladderRetreat: exit } } : task
+    if (task.data?.ladder !== exit.key || !Number.isFinite(exit.price) || !Number.isFinite(after)) return task
+    const foe = foes.find(e => e.id === exit.target)
+    const facing = foe && now() - foe.seenAt < 1500 && (foe.sources || []).includes(b.name) &&
+      distance(foe.position, member.position) <= (bow(foe) ? 40 : 16)
+    const healed = member.health > exit.hp && member.health / maxHp > exit.hp / exit.maxHp
+    return exposed || facing && (risk.lethal || risk.burst || !healed && after >= exit.price / 1.25) ? running : task
+  }
+  function stopForTask(b, running, task, before, after) {
+    b.swarmTask = task; b.swarmTaskAt = now()
+    if (b.swarmFight) b.swarmFight.stopping = true
+    log(`↪ ${b.name}: смена фазы ${running.kind}${running.data?.fountain ? '/' + running.data.fountain : ''} → ${task.kind}${task.data?.fountain ? '/' + task.data.fountain : ''}${task.data?.hold ? '/' + task.data.hold : ''} (${before.split('|').filter(Boolean).join(', ') || 'обычный бой'} → ${after.split('|').filter(Boolean).join(', ') || 'обычный бой'}) — обрываю дело [${b.last?.m || '-'}]`)
+    b.c.call('stop', running.data?.dig || task.data?.dig || b.swarmAscent ? { _climb: true } : undefined).catch(() => {})
+  }
   function preempt(b) {
     const running = b.swarmTask
     if (burning(b)) return false
@@ -23,22 +83,63 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // В воздухе на элитрах дело не обрываем: «стоп» посреди тарана сажал бота без удара (стенд 21.10, слот 30: 5 из 6
     // таранов «бой кончился в воздухе» — смена фазы fight → flee). Новая фаза начнётся после посадки.
     if (pos[b.name]?.gliding) return false
-    const { task } = refresh(b)
-    if (!task || phase(task) === phase(running)) return false
-    b.swarmTask = task; b.swarmTaskAt = now()
-    log(`↪ ${b.name}: смена фазы ${running.kind}${running.data?.fountain ? '/' + running.data.fountain : ''} → ${task.kind}${task.data?.fountain ? '/' + task.data.fountain : ''}${task.data?.hold ? '/' + task.data.hold : ''} — обрываю дело`)
-    b.c.call('stop').catch(() => {})
+    // Действующий подъём не меняет фазу от очередного пересчёта плана.
+    if (ascentActive(b, pos[b.name], now())) return false
+    const context = refresh(b), task = ladderTask(b, context)
+    const before = phase(running, pos[b.name]?.p), after = phase(task, pos[b.name]?.p)
+    const fight = b.swarmFight
+    if (!task || fight?.stopping) return false
+    const targetChanged = /^(fight|goto)$/.test(running.kind) && /^(fight|goto)$/.test(task.kind) &&
+      running.data?.target && task.data?.target && running.data.target !== task.data.target
+    const move = b.swarmReposition
+    if (move && move.round === sw.generation && move.target === task.data?.target && b.last === move.intent &&
+        b.last?.m === 'goto' && b.last.pending !== false && running.kind === 'fight' && task.kind === 'fight' &&
+        !targetChanged && phase(running, null, false) === phase(task, null, false)) {
+      const foe = context.board?.enemies().find(e => e.id === move.target), m = pos[b.name]
+      const next = foe && m?.p && earlyFightMove(m, task, foe)
+      if (next && next.reason === move.reason && next.range === move.range &&
+          next.at.x === move.at.x && next.at.y === move.at.y && next.at.z === move.at.z) {
+        b.swarmTask = task
+        return false
+      }
+      if (guardKey(running) !== guardKey(task)) {
+        stopForTask(b, running, task, before, after)
+        return true
+      }
+    }
+    if (fight && fight.round === sw.generation && fight.target === task.data?.target && b.last === fight.intent &&
+        running.kind === 'fight' && task.kind === 'fight' && !targetChanged && phase(running, null, false) === phase(task, null, false) && guardKey(running) !== guardKey(task)) {
+      if (fight.pending) return false
+      fight.pending = true
+      const current = () => fight.round === sw.generation && b.swarmFight === fight && b.swarmTask === running &&
+        b.last === fight.intent && b.swarmExecuting && alive(b.name)
+      const reject = () => { if (current()) stopForTask(b, running, task, before, after) }
+      b.c.call('fight_guard', { target: fight.target, roundScope: fight.roundScope, fightId: fight.id,
+        digAvoid: task.data?.digAvoid || [], swarmStand: task.data?.swarmStand || null,
+        shoveAt: task.data?.shove ? task.data.shoveAt || null : null }).then(r => {
+        if (!current()) return
+        if (detail(r)?.accepted === true) b.swarmTask = task
+        else reject()
+      }, reject).finally(() => { fight.pending = false })
+      return false
+    }
+    if (after === before && !targetChanged) return false
+    stopForTask(b, running, task, before, after)
     return true
   }
   async function turn(b) {
     if (burning(b)) return
-    const context = refresh(b), { board, member, task } = context, round = sw.generation
+    const context = refresh(b), { board, member } = context, task = ladderTask(b, context), round = sw.generation
     if (!member || !task) return
     // Участник чужого дела (ждёт передачу, подброс ветром) стоит, пока дело занято (до 15 с), — но не под врагом: стенд
     // бота-противника 22.10, бот с лутом 6 с стоял «вне хода» в 5 бл. от человека.
     const threat = !!pos[b.name] && board.enemies().some(e => now() - e.seenAt < 1500 && distance(e.position, pos[b.name].p) < 8)
-    if (!threat && board.tasks().some(t => t.status === 'claimed' && t.claim.owner !== b.name && t.participants?.includes(b.name))) return
-    if (phase(task) !== phase(b.swarmTask)) b.swarmTaskAt = now()
+    const receiving = !threat && board.tasks().find(t => t.status === 'claimed' && t.claim.owner !== b.name && t.participants?.includes(b.name))
+    if (receiving) {
+      if (receiving.kind === 'transfer' && !b.swarmBusyUntil) await b.c.call('swarm_hold', { sneak: true, enemies: board.enemies().map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 1, arena })
+      return
+    }
+    if (phase(task, pos[b.name]?.p) !== phase(b.swarmTask, pos[b.name]?.p)) b.swarmTaskAt = now()
     b.swarmTask = task
     say(b, task)
     const m = pos[b.name], enemies = board.enemies()
@@ -118,7 +219,8 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     const maneuver = !!(task.data?.fountain || task.data?.ambush || task.data?.hold || task.data?.line !== undefined || task.data?.bait || task.data?.cordon || task.data?.buildKind || task.data?.dig || task.data?.ladder || task.data?.finishing || task.data?.shove)
     tc.maneuver = maneuver
     const armed = Object.keys(m.inv || {}).some(n => WEAPON.test(n))
-    const engage = () => b.c.call('fight', { target: nearest.id, targets: enemies.map(e => e.id), allowPlayer: true, allowRanged: true, timeoutSeconds: 3, retreatAtHealth: 3, arena })
+    const engage = () => task.data?.digAvoid?.length ? turnFight({ ...tc, foe: nearest, task: { ...task, kind: 'fight', data: { ...task.data, target: nearest.id, committed: true } } }) :
+      b.c.call('fight', { target: nearest.id, targets: enemies.map(e => e.id), allowPlayer: true, allowRanged: true, timeoutSeconds: 3, retreatAtHealth: 3, arena })
     if (!maneuver && !contact && !exposed && await transfer(b, context)) return
     if (task.data?.buildKind) {
       await turnBuildSite(tc)
@@ -136,7 +238,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // сквозь дыру только из соседней клетки (луч с высоты глаз 1.62 входит в дыру шириной 1 круче 45°) — за ним (и за невидимым
     // верхом: перила, плиты) шаг на стойку.
     // Готовую дыру — в holes: сектор удара (edgeNear) ставит бьющих так, чтобы отбросило в неё.
-    if (task.data?.dig && !contact) {
+    if (task.data?.dig && (!contact || task.data.undermine)) {
       await turnDig(tc)
       return
     }
@@ -150,7 +252,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // раздадут передачи (пользователь 14.10: «сильные могут сразу много лута брать и передавать своим»).
     const carrier = onslaught && armed && gap > 16 && context.members.some(a => a.id !== b.name && !Object.keys(a.inventory || {}).some(n => WEAPON.test(n)))
     if (!maneuver && !contact && (task.kind === 'loot' || !armed || carrier) && await loot(b, board)) return
-    const bow = !!(m.inv?.bow || m.inv?.crossbow) && !!m.inv?.arrow
+    const bow = !!(m.inv?.bow || m.inv?.crossbow) && !!(m.attackArrows ?? (m.inv?.arrow || 0) + (m.inv?.spectral_arrow || 0))
     // Натиск: строителю не до вышек и маяков — бой (14.10: «бегают вокруг меня»).
     if (!maneuver && !contact && (member.role === 'ranged' && bow || member.role === 'miner-builder' && !onslaught || task.data?.sentry && bow) && await positionStep(b, context, member.role === 'miner-builder' ? 'build' : 'ranged')) return
     if (!maneuver && !contact && (task.data?.sentry || b.swarmPosition?.purpose === 'recover') && b.swarmPosition && distance(m.p, b.swarmPosition.at) < 1.5) { if (exposed && armed) { await engage(); return } await b.c.call('swarm_hold', { sneak: b.swarmPosition?.cover > .5, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 3 }); return }
@@ -175,6 +277,13 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       return
     }
     if (foe && (task.kind === 'fight' || task.data?.dig && contact)) {
+      if (Object.keys(m.inv || {}).some(name => /_spear$/.test(name)) && sw.positionQueries < 2) {
+        const risk = task.data?.risk || assessSwarmFight(member, enemies, context.members)
+        const incomingDps = Number.isFinite(risk.duelSurvivalSeconds) ? member.health / risk.duelSurvivalSeconds : 0
+        sw.positionQueries++
+        try { if (await sw.pairedWind(b, context, foe.position, { enemy: foe.id, incomingDps }).catch(() => false)) return }
+        finally { sw.positionQueries-- }
+      }
       await turnFight(tc)
       return
     }

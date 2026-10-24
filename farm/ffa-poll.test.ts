@@ -200,11 +200,11 @@ test('fresh fight does not inherit a stationary goto anchor', t => {
   assert.equal(f.calls.filter(c => c.method === 'stop').length, 1)
 })
 
-test('queued aim dodge does not cancel a newly started melee fight', t => {
+test('aim stays in the body layer without queuing a cancellation of goto or a new melee fight', t => {
   const { installDangers }: typeof import('./arena/dangers') = require('./arena/dangers')
   const calls: string[] = [], p = { x: 0, y: 64, z: 0 }
-  let queued: any
-  t.mock.method(globalThis, 'setTimeout', fn => { queued = fn; return 0 })
+  const queued: any[] = []
+  t.mock.method(globalThis, 'setTimeout', fn => { queued.push(fn); return 0 })
   t.mock.method(Math, 'random', () => 0)
   const b: any = {
     name: 'A', team: 'blue', last: { m: 'goto' },
@@ -218,12 +218,20 @@ test('queued aim dodge does not cancel a newly started melee fight', t => {
     swarmDriver: { panic: () => false, canEngage: () => true }, log () {}
   }
   installDangers(ctx)
-  b.c.onDanger({ pos: p, dangers: { aims: [{
+  const aim = { pos: p, dangers: { aims: [{
     name: 'Foe', weapon: 'trident',
     at: { x: 5, y: 64, z: 0 }, side: { x: 1, z: 0 }
-  }] } })
-  b.last = { m: 'fight' }
-  queued()
+  }] } }
+  const goto = b.last
+  b.c.onDanger(aim)
+  assert.equal(b.last, goto)
+  assert.equal(ctx.busy.has('A'), false)
+  const fight = { m: 'fight', p: { target: 'Foe' }, pending: true }
+  b.last = fight; ctx.busy.add('A')
+  b.c.onDanger(aim)
+  assert.deepEqual(queued, [], 'прицел не ставит отложенную RPC-реакцию')
+  assert.equal(b.last, fight)
+  assert.equal(ctx.busy.has('A'), true, 'владелец нового боя сохранён')
   assert.deepEqual(calls, [])
 })
 

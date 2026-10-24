@@ -7,7 +7,7 @@
 // ARMS_CACHE_SEARCH=0 — не искать; ARMS_CACHE_PIE=0 — без «пирога» (только толща и узор ходов).
 import { CacheModel } from '../../../daemon/src/swarm/cache-model'
 import { cacheJobs } from '../../../daemon/src/swarm/plan-jobs'
-import { WEAPON, distance, cellKey } from './common'
+import { WEAPON, distance, cellKey, underArrowFire } from './common'
 import type { SwarmDriverCtx } from './common'
 import { REPO_ROOT } from '../../../daemon/src/paths'
 import * as fs from 'fs'
@@ -190,7 +190,7 @@ export function swarmCaches (sw: SwarmDriverCtx) {
     let free = Array.isArray(storage) ? storage.filter(x => !x).length : Math.max(0, 36 - Object.keys(inv(b)).length)
     const junk = Object.entries(inv(b)).filter(([n]) => JUNK.test(n)).sort((a: any, c: any) => c[1] - a[1])
     let dropped = 0
-    for (const [n] of junk) { if (free >= need) break; const r = detail(await b.c.call('drop', { item: n }).catch(() => ({}))); if (r.dropped) { free++; dropped++ } }
+    for (const [n] of junk) { if (free >= need || underArrowFire(b, now())) break; const r = detail(await b.c.call('drop', { item: n }).catch(() => ({}))); if (r.dropped) { free++; dropped++ } }
     return dropped
   }
   // Сундуки, открытые своими (взятием тайника и обычным лутом), — повторно не брать (их содержимое команда уже знает). Свой
@@ -203,35 +203,46 @@ export function swarmCaches (sw: SwarmDriverCtx) {
   // раунды) и из него пришло редкое (незерит, трезубец, булава, тотем, зачарованное яблоко; на нижних ярусах в обычных их нет).
   const RARE = /^(netherite_w+|trident|mace|totem_of_undying|enchanted_golden_apple)$/
   async function take (b, board, at) {
+    if (underArrowFire(b, now())) return false
+    const round = sw.generation
     const k = cellKey(at), allies = bots.filter(o => teamOf(o) === teamOf(b)).map(o => o.name)
     const before = { ...inv(b) }, wornBefore = new Set(Object.values(pos[b.name]?.armor || {}).filter(Boolean) as string[])
     const opened = r => !!r && (r.contents !== undefined || Object.values(r.took || r.moved || {}).some((n: any) => Number(n) > 0))
     const open = async () => detail(await b.c.call('chest_take', { item: 'all', x: at.x, y: at.y, z: at.z, timeoutSeconds: 6, visibleOnly: true, stay: true }).catch(e => ({ why: e.message })))
-    if (distance(pos[b.name].p, center(at)) > 3) await go(b, center(at), 1.5, 5)
+    if (distance(pos[b.name].p, center(at)) > 3) {
+      const r = await go(b, center(at), 1.5, 5, sw.lootArena(b), true)
+      if (round !== sw.generation || !alive(b.name) || r?.status !== 'done' || !detail(r).arrived) return false
+    }
+    if (underArrowFire(b, now())) return false
     let r = await open(), how = 'открыл', picked = 0
     // Крышка: блок над сундуком. Снят (был виден) — открыть снова; над ним воздух — сундук обычный, просто не дотянулся или
     // не в прицеле отсюда: подойти вплотную и открыть с подходом, не ломать (ломать чужой сундук комнаты — терять двойной).
     let lid: any = null
+    if (underArrowFire(b, now())) return false
     if (!opened(r)) {
       lid = detail(await b.c.call('swarm_work', { kind: 'dig', at: { x: at.x, y: at.y + 1, z: at.z }, allies, timeoutSeconds: 8 }).catch(e => ({ why: e.message })))
+      if (underArrowFire(b, now())) return false
       if (lid.done && !lid.already) { r = await open(); how = 'снял крышку и открыл' }
       else if (lid.already) { r = detail(await b.c.call('chest_take', { item: 'all', x: at.x, y: at.y, z: at.z, timeoutSeconds: 8, visibleOnly: true }).catch(e => ({ why: e.message }))); how = 'подошёл и открыл' }
     }
     if (!opened(r) && !lid?.already) {
       await makeRoom(b, 7) // вещи выпадут — подобрать некуда, если рюкзак полон
+      if (underArrowFire(b, now())) return false
       const br = detail(await b.c.call('swarm_work', { kind: 'dig', at, allies, timeoutSeconds: 12 }).catch(e => ({ why: e.message })))
       how = br.done ? 'сломал' : `не взял (${String(br.why || r.why || '?').slice(0, 40)})`
       // Подбор выпавшего: до 10 попыток, конец — две пустые подряд (одна мимо — вещь ещё летит или за спиной).
-      if (br.done) for (let n = 0, miss = 0; n < 10 && miss < 2 && alive(b.name); n++) { const p = detail(await b.c.call('assist', { mode: 'pickup', maxD: 5 }).catch(() => ({}))); if (p.ok) { picked++; miss = 0 } else miss++ }
+      if (br.done) for (let n = 0, miss = 0; n < 10 && miss < 2 && alive(b.name) && !underArrowFire(b, now()); n++) { const p = detail(await b.c.call('assist', { mode: 'pickup', maxD: 5 }).catch(() => ({}))); if (p.ok) { picked++; miss = 0 } else miss++ }
     }
+    if (underArrowFire(b, now())) return false
     // Тайник (крышку держал сплошной блок), открыл, а взять не вышло (в сундуке осталось, взято ничего) — рюкзак полон:
     // освободить место и взять снова. Ради обычного сундука рюкзак не чистится.
     if (/крышку/.test(how) && opened(r) && r.contents && Object.keys(r.contents).length && !Object.values(r.took || {}).some((n: any) => Number(n) > 0)) {
       const dropped = await makeRoom(b, Math.min(9, Object.keys(r.contents).length + 1))
-      if (dropped) { r = await open(); how += `, выбросил ${dropped} стоп. и взял` }
+      if (dropped && !underArrowFire(b, now())) { r = await open(); how += `, выбросил ${dropped} стоп. и взял` }
     }
     if (!opened(r) && !picked) { sw.failed(b, `take:${b.name}:${k}`); log(`🗝 ${b.name}: сундук в толще ${k} — ${how}`); return }
     noteOpened(b, at)
+    if (underArrowFire(b, now())) return true
     await b.c.call('armor', {}).catch(() => {})
     // Что прибавилось в рюкзаке и на теле (взятое из окна, подобранное после слома, надетое) — для журнала и для признака тайника.
     const st = await b.c.call('status').catch(() => null)
@@ -251,7 +262,7 @@ export function swarmCaches (sw: SwarmDriverCtx) {
 
   // Ход копателя (зовёт драйвер: лут-задача или свободный боец). false — не копатель или копать нечем: дальше обычный ход.
   async function turn (b, board) {
-    if (!ON || !pos[b.name]?.p) return false
+    if (!ON || !pos[b.name]?.p || underArrowFire(b, now())) return false
     stats.calls++
     const job = jobsOf(b).get(b.name)
     if (!job) return false
@@ -264,7 +275,7 @@ export function swarmCaches (sw: SwarmDriverCtx) {
     try {
       if (distance(me, center(plan.from)) > 1.6) {
         stats.walks++
-        const raw: any = await go(b, center(plan.from), 0.8, 10).catch(e => ({ status: 'failed', why: e.message }))
+        const raw: any = await go(b, center(plan.from), 0.8, 10, sw.lootArena(b), true).catch(e => ({ status: 'failed', why: e.message }))
         const r = detail(raw)
         // Поход оборвали (смена фазы, тревога, «лезу к цели») — не неудача места: ход окончен, решит следующий.
         if (raw?.status && raw.status !== 'done' && raw.status !== 'failed' && raw.status !== 'timeout') return true
@@ -273,6 +284,7 @@ export function swarmCaches (sw: SwarmDriverCtx) {
       }
       const r = detail(await b.c.call('dig_to', { at: center(plan.to), maxSteps: 6, timeoutSeconds: 20 }).catch(e => ({ why: e.message })))
       if (gen !== sw.generation || !alive(b.name)) return true
+      if (underArrowFire(b, now())) return true
       stats.digs++; stats.dug += r.dug || 0
       log(`⛏ ${b.name}: ход к ${cellKey(plan.to)} — ${r.dug ?? 0} бл. за ${r.steps ?? 0} шаг.${r.why ? ` (${String(r.why).slice(0, 40)})` : ''}, стою ${cellKey(r.at || {})}`)
       if (!r.steps && !r.dug) approachFailed(b, plan)
@@ -285,7 +297,7 @@ export function swarmCaches (sw: SwarmDriverCtx) {
         const allies = bots.filter(o => teamOf(o) === teamOf(b)).map(o => o.name)
         let opened = 0
         for (const c of lineCells(eye0, center3(plan.to))) {
-          if (opened >= 3 || c.x === plan.to.x && c.y === plan.to.y && c.z === plan.to.z) break
+          if (underArrowFire(b, now()) || opened >= 3 || c.x === plan.to.x && c.y === plan.to.y && c.z === plan.to.z) break
           const st = m.stateAt(c.x, c.y, c.z)
           if (st === 1 || st === 3) continue
           const w = detail(await b.c.call('swarm_work', { kind: 'dig', at: c, allies, timeoutSeconds: 8 }).catch(e => ({ why: e.message })))

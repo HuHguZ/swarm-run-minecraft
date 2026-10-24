@@ -6,6 +6,9 @@ export const FOOD = /^(bread|cooked_.*|golden_apple|enchanted_golden_apple)$/
 export const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 export const cellKey = p => `${p.x},${p.y},${p.z}`
 
+// Свежая видимая линия стрельбы дороже лута; за укрытием тихий датчик снимает угрозу сразу.
+export const underArrowFire = (b, at = Date.now()) => !!b.arrowThreat?.active && at >= b.arrowThreat.at && at - b.arrowThreat.at <= 1500
+
 
 // Контекст драйвера: параметры, общее состояние (state.ts) и функции частей; части берут нужное из него при создании,
 // а то, что создаётся позже (обратные ссылки), — через sw при вызове.

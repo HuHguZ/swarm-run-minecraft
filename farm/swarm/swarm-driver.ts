@@ -9,6 +9,7 @@ import { swarmLoot } from './swarm-driver/loot'
 import { swarmClimb } from './swarm-driver/climb'
 import { swarmPosition } from './swarm-driver/position'
 import { swarmSafety } from './swarm-driver/safety'
+import { swarmWind } from './swarm-driver/wind'
 import { swarmTurnTasks } from './swarm-driver/turn-tasks'
 import { swarmTurnWork } from './swarm-driver/turn-work'
 import { swarmTurn } from './swarm-driver/turn'
@@ -27,10 +28,11 @@ export function createSwarmDriver (opts: any) {
   Object.assign(sw, swarmClimb(sw))
   Object.assign(sw, swarmPosition(sw))
   Object.assign(sw, swarmSafety(sw))
+  Object.assign(sw, swarmWind(sw))
   Object.assign(sw, swarmTurnTasks(sw))
   Object.assign(sw, swarmTurnWork(sw))
   Object.assign(sw, swarmTurn(sw))
   Object.assign(sw, swarmLifecycle(sw))
-  const { observe, guardedTurn, release, reset, snapshot, panic, canEngage, refill, boardOf } = sw
-  return { observe, turn: guardedTurn, release, reset, snapshot, panic, canEngage, refill, enemies: b => boardOf(b).enemies() }
+  const { observe, guardedTurn, release, reset, snapshot, panic, canEngage, refill, boardOf, pearlObserve } = sw
+  return { observe, pearlObserve, turn: guardedTurn, release, reset, snapshot, panic, canEngage, refill, enemies: b => boardOf(b).enemies() }
 }

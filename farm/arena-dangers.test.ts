@@ -1,10 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { installDangers } from './arena/dangers'
+import { swarmTurn } from './swarm/swarm-driver/turn'
+import { createDriverState } from './swarm/swarm-driver/state'
+import { swarmLifecycle } from './swarm/swarm-driver/lifecycle'
 
 const turn = () => new Promise(resolve => setImmediate(resolve))
 
-function fixture(t) {
+function fixture(t, extra = {}) {
   const calls: any[] = [], queued: any[] = [], p = { x: 0, y: 64, z: 0 }
   let now = 10000, geometry = 'stone'
   t.mock.method(Date, 'now', () => now)
@@ -20,7 +23,7 @@ function fixture(t) {
   const ctx: any = { round: 1, bots: [b], pos: { A: { p, inv: { bow: 1, arrow: 1, ender_pearl: 1 } } },
     busy: new Set(), out: new Set(), deadNow: new Set(),
     enemiesOf: () => [{ d: 20, mob: false }],
-    swarmDriver: { panic: () => false, canEngage: () => true }, log () {} }
+    swarmDriver: { panic: () => false, canEngage: () => true }, log () {}, ...extra }
   installDangers(ctx)
   const aim = () => {
     b.c.onDanger({ pos: p, dangers: { aims: [{ name: 'Foe', weapon: 'trident',
@@ -34,7 +37,16 @@ function fixture(t) {
     advance: ms => { now += ms }, geometry: value => { geometry = value } }
 }
 
-for (const kind of ['act-ok', 'act-fail', 'act-error', 'dodge', 'dig', 'juke', 'fight', 'flee', 'lava', 'shield']) {
+test('сообщение о спуске печатается без запуска новой реакции', t => {
+  const lines: string[] = [], f = fixture(t, { log: line => lines.push(line), between: true })
+  f.b.c.onDanger({ descent: { height: 7, technique: 'вода' } })
+  assert.equal(lines.length, 1)
+  assert.match(lines[0], /7/)
+  assert.match(lines[0], /вода/)
+  assert.equal(f.calls.length, 0)
+})
+
+for (const kind of ['dodge', 'dig', 'lava', 'shield']) {
   test(`stale ${kind} cannot release or resume over a newer dodge`, async t => {
     const f = fixture(t)
     let oldAfter = 0, newAfter = 0
@@ -47,21 +59,14 @@ for (const kind of ['act-ok', 'act-fail', 'act-error', 'dodge', 'dig', 'juke', '
     } else if (kind === 'shield') {
       f.ctx.pos.A.inv.shield = 1
       f.b.c.onDanger({ pos: f.p, dangers: { smashes: [{ name: 'Foe', ticks: 10, at: f.p }] } })
-    } else {
-      if (kind === 'juke') f.b.swarmTask = { kind: 'flee' }
-      if (kind === 'flee') f.ctx.swarmDriver.panic = () => true
-      f.aim()
-      if (kind === 'fight') { f.calls[0].reply({ ok: true }); await turn() }
     }
     const old = f.calls.at(-1)
-    const expected = kind.startsWith('act-') ? 'pearl_to' : kind === 'dodge' ? 'evade'
+    const expected = kind === 'dodge' ? 'evade'
       : kind === 'dig' ? 'dig_to' : kind === 'lava' ? 'douse_lava' : kind === 'shield' ? 'swarm_hold' : kind
     assert.equal(old.method, expected)
     f.dodge(() => newAfter++)
     const fresh = f.calls.at(-1), count = f.calls.length
-    if (kind === 'act-error') old.reject(new Error('cancelled by newer dodge'))
-    else old.reply(kind === 'act-ok' ? { ok: true } : kind === 'dig' ? { dug: 1 }
-      : { ok: false, why: 'некуда', segments: 0 })
+    old.reply(kind === 'dig' ? { dug: 1 } : { ok: false, why: 'некуда', segments: 0 })
     await turn()
     assert.equal(f.ctx.busy.has('A'), true, 'new dodge still owns busy')
     assert.equal(f.calls.length, count, 'no stale after, juke, dig or repeated evade')
@@ -78,57 +83,41 @@ for (const kind of ['act-ok', 'act-fail', 'act-error', 'dodge', 'dig', 'juke', '
   })
 }
 
-test('a stale act stays stale after the newer dodge has already finished', async t => {
+for (const method of ['goto', 'fight', 'grab', 'ladder_up', 'fly_to']) test(`${method}: aim and flying projectiles leave the active action and its busy owner alone`, async t => {
   const f = fixture(t)
+  const action = { m: method, p: { target: 'Foe', to: { x: 20, y: 68, z: 0 } }, pending: true }
+  f.b.last = action
+  if (method === 'goto' || method === 'ladder_up') f.b.climbing = true
+  if (method === 'grab') f.b.grabbing = true
+  const aim = { name: 'Foe', weapon: 'bow', at: { x: 20, y: 68, z: 0 }, side: { x: 1, z: 0 } }
+  const arrow = { name: 'arrow', from: aim.at, at: f.p, ticks: 2, side: { x: 1, z: 0 } }
+  const potion = { name: 'splash_potion', at: f.p, ticks: 3 }
+  for (const owned of [false, true]) {
+    if (owned) f.ctx.busy.add('A')
+    for (let frame = 0; frame < 5; frame++) {
+      f.report({ aims: [aim], arrows: [{ ...arrow, from: { ...aim.at, x: 20 + frame } }], potions: [potion] })
+      f.flush(); f.advance(300)
+    }
+    await turn()
+    assert.deepEqual(f.calls, [], 'уворот и щит принадлежат слою тела')
+    assert.equal(f.b.last, action, 'цель и владелец дела сохранены')
+    assert.equal(f.ctx.busy.has('A'), owned)
+  }
+})
+
+test('pressure observations remain available to the planner, ignoring an older quiet status', t => {
+  const f = fixture(t)
+  f.advance(10)
   f.aim()
-  const old = f.calls[0]
-  f.dodge()
-  f.calls[1].reply({ ok: true })
-  await turn()
-  old.reply({ ok: false })
-  await turn()
-  assert.deepEqual(f.calls.map(c => c.method), ['pearl_to', 'evade'])
-  assert.equal(f.ctx.busy.has('A'), false)
-})
-
-test('new projectile bypasses the previous projectile of the same kind, repeated reports do not', t => {
-  const f = fixture(t)
-  const arrow = x => ({ name: 'arrow', from: { x, y: 65, z: 10 }, at: f.p, ticks: 8, side: { x: 1, z: 0 } })
-  f.report({ arrows: [arrow(10)] }); f.report({ arrows: [arrow(10)] })
-  assert.equal(f.calls.length, 1)
-  f.report({ arrows: [arrow(11)] })
-  assert.equal(f.calls.length, 2, 'a new trajectory must not wait for a kind cooldown')
-})
-
-test('a continuous aim is one episode even after arbitrary wall time', async t => {
-  const f = fixture(t)
-  delete f.ctx.pos.A.inv.ender_pearl; delete f.ctx.pos.A.inv.bow; delete f.ctx.pos.A.inv.arrow
-  f.b.swarmTask = { kind: 'flee' }
-  f.aim(); f.calls[0].reply({ ok: true, segments: 3 }); await turn()
-  f.advance(3600000)
-  f.report({ aims: [{ name: 'Foe', weapon: 'trident', at: { x: 20, y: 64, z: 0 }, side: { x: 1, z: 0 } }] }); f.flush()
-  assert.equal(f.calls.length, 1, 'a fresh timestamp is not a new aim')
+  assert.equal(f.b.arrowThreat.active, true)
+  f.b.c.onDanger({ pos: f.p, dangers: {}, observedAt: 10000, status: true })
+  assert.equal(f.b.arrowThreat.active, true)
   f.report({})
-  f.report({ aims: [{ name: 'Foe', weapon: 'trident', at: { x: 20, y: 64, z: 0 }, side: { x: 1, z: 0 } }] }); f.flush()
-  assert.equal(f.calls.length, 2, 'confirmed end and re-entry starts a new episode')
-})
-
-test('queued aim is cancelled by a clear observation or a new round', t => {
-  const f = fixture(t)
-  const aim = { name: 'Foe', weapon: 'trident', at: { x: 20, y: 64, z: 0 }, side: { x: 1, z: 0 } }
-  f.report({ aims: [aim] }); f.report({}); f.flush()
-  assert.equal(f.calls.length, 0)
-  f.report({ aims: [aim] }); f.ctx.round++; f.flush()
-  assert.equal(f.calls.length, 0)
-})
-
-test('unanswerable aim retreats from current risk without counting three timed polls', t => {
-  const f = fixture(t)
-  t.mock.method(Math, 'random', () => 0)
-  f.ctx.pos.A.inv = {}; f.ctx.swarmDriver.canEngage = () => false
-  f.aim()
-  assert.equal(f.calls[0].method, 'juke')
-  assert.equal(f.calls[0].params.retreat, true)
+  assert.equal(f.b.arrowThreat.active, false)
+  f.report({ potions: [{ name: 'splash_potion', at: f.p, ticks: 8 }] })
+  assert.equal(f.b.arrowThreat.active, true, 'лут уступает и летящему зелью')
+  f.ctx.between = true; f.report({})
+  assert.equal(f.b.arrowThreat, undefined)
 })
 
 test('a failed dodge blocks only the same direction and stance; geometry or stance releases it', async t => {
@@ -155,66 +144,10 @@ test('a second lingering area remains urgent while another area is being escaped
   assert.equal(f.calls.length, 2)
 })
 
-test('a failed pearl is not retried from an unchanged approach, but an opened route retries immediately', async t => {
-  const f = fixture(t)
-  f.aim(); assert.equal(f.calls[0].method, 'pearl_to')
-  f.calls[0].reply({ ok: false, why: 'нет броска' }); await turn()
-  f.calls.at(-1).reply({ ok: true, segments: 2 }); await turn()
-  f.advance(3600000); f.report({}); f.aim(); await turn()
-  assert.equal(f.calls.filter(c => c.method === 'pearl_to').length, 1)
-  f.calls.at(-1).reply({ ok: true, segments: 2 }); await turn()
-  f.geometry('air'); f.report({}); f.aim(); await turn()
-  assert.equal(f.calls.filter(c => c.method === 'pearl_to').length, 2)
-})
-
-test('in-flight pearl owns busy without an eight-second deadline and a late old-round reply cannot fight', async t => {
-  const f = fixture(t)
-  f.aim(); f.advance(3600000); f.report({}); f.aim()
-  assert.equal(f.calls.filter(c => c.method === 'pearl_to').length, 1)
-  f.ctx.round++; f.calls[0].reply({ ok: true }); await turn()
-  assert.equal(f.calls.filter(c => c.method === 'fight').length, 0)
-})
-
-for (const [method, inv, random] of [
-  ['fly_to', { elytra: 1, firework_rocket: 4 }, .55],
-  ['wind_jump', { wind_charge: 2 }, .55],
-  ['peek_shot', { bow: 1, arrow: 8 }, .8]
-] as const) test(`${method}: an unchanged failed approach waits for world change, not its old cooldown`, async t => {
-  const f = fixture(t)
-  f.ctx.pos.A.inv = { ...inv }
-  t.mock.method(Math, 'random', () => random)
-  f.aim(); assert.equal(f.calls[0].method, method)
-  if (method === 'fly_to') assert.ok(f.calls[0].params.arena, 'the flight keeps to the colosseum: out of it the driver kills as fallen')
-  f.calls[0].reply({ ok: false, used: 0, why: 'потолок в 3 бл.' }); await turn()
-  f.calls.at(-1).reply({ ok: true, segments: 2 }); await turn()
-  f.advance(3600000); f.ctx.pos.A.inv.bread = 4; f.report({}); f.aim(); await turn()
-  assert.equal(f.calls.filter(c => c.method === method).length, 1, 'unrelated stock and elapsed time do not open a ceiling')
-  f.calls.at(-1).reply({ ok: true, segments: 2 }); await turn()
-  f.geometry('air'); f.report({}); f.aim(); await turn()
-  assert.equal(f.calls.filter(c => c.method === method).length, 2)
-})
-
-test('native item readiness remains a body check and never becomes a strategic delay', async t => {
-  const f = fixture(t)
-  f.aim(); f.calls[0].reply({ ok: false, why: 'cooldown' }); await turn()
-  f.calls.at(-1).reply({ ok: true, segments: 1 }); await turn()
-  f.report({}); f.aim(); await turn()
-  assert.equal(f.calls.filter(c => c.method === 'pearl_to').length, 2)
-})
-
-test('failed juke chooses another exit instead of repeating the same impossible direction', async t => {
-  const f = fixture(t)
-  f.b.swarmTask = { kind: 'flee' }
-  f.aim(); f.calls[0].reply({ ok: false, segments: 0, why: 'некуда' }); await turn()
-  f.advance(3600000); f.report({}); f.aim(); await turn()
-  assert.equal(f.calls.filter(c => c.method === 'juke').length, 1)
-  assert.equal(f.calls.at(-1).method, 'take_cover')
-})
-
 // Выход из лавы (lava_escape, pvp/lava-exit) сам пересчитывает клетку выхода раз в 300 мс: другая клетка лавы его не
 // перезапускает (перезапуск — отмена намерения и стоп клавиш; a39 — 🌋 ×5 за 3 с и смерть в яме). После выхода —
 // реакции как прежде.
-test('a lava escape is not restarted by another lava cell; after it, aim and cloud react as before', async t => {
+test('a lava escape is not restarted by another lava cell; after it, aim stays passive and cloud is escaped', async t => {
   const f = fixture(t)
   f.ctx.pos.A.inv.water_bucket = 1
   const lava = x => ({ d: 1, at: { x, y: 64, z: 0 } })
@@ -223,48 +156,9 @@ test('a lava escape is not restarted by another lava cell; after it, aim and clo
   assert.equal(f.calls[0].method, 'lava_escape')
   f.calls[0].reply({ ok: true }); await turn()
   f.b.swarmTask = { kind: 'flee' }; f.aim()
-  assert.equal(f.calls.at(-1).method, 'juke')
+  assert.equal(f.calls.length, 1, 'прицел не начинает отдельный RPC')
   f.report({ clouds: [{ at: f.p, r: 3 }] })
   assert.equal(f.calls.at(-1).method, 'evade')
-})
-
-test('a low-priority arrow does not restart a native pearl transaction', t => {
-  const f = fixture(t)
-  f.aim()
-  f.report({ arrows: [{ name: 'arrow', from: { x: 10, y: 64, z: 1 }, at: f.p, ticks: 10, side: { x: 1, z: 0 } }] })
-  assert.deepEqual(f.calls.map(c => c.method), ['pearl_to'])
-})
-
-test('an older status cannot clear a newer danger before its delayed reaction runs', t => {
-  const f = fixture(t)
-  f.advance(10)
-  f.report({ aims: [{ name: 'Foe', weapon: 'trident', at: { x: 20, y: 64, z: 0 }, side: { x: 1, z: 0 } }] })
-  f.b.c.onDanger({ pos: f.p, dangers: {}, observedAt: 10000, status: true })
-  f.flush()
-  assert.equal(f.calls[0].method, 'pearl_to')
-})
-
-test('checking a blocked pearl during one continuous aim does not keep restarting successful alternatives', async t => {
-  const f = fixture(t)
-  f.aim(); f.calls[0].reply({ ok: false, why: 'нет броска' }); await turn()
-  f.calls.at(-1).reply({ ok: true, segments: 3 }); await turn()
-  const check = async () => {
-    f.b.c.onDanger({ pos: f.p, status: true, dangers: { aims: [{ name: 'Foe', weapon: 'trident', at: { x: 20, y: 64, z: 0 }, side: { x: 1, z: 0 } }] } })
-    f.flush(); await turn()
-  }
-  await check()
-  assert.deepEqual(f.calls.map(c => c.method), ['pearl_to', 'juke'])
-  f.geometry('air'); await check()
-  assert.equal(f.calls.at(-1).method, 'pearl_to', 'the changed corridor can retry during the same aim')
-})
-
-test('an aim observed during another owned operation reacts as soon as that owner releases', t => {
-  const f = fixture(t)
-  const aim = { name: 'Foe', weapon: 'trident', at: { x: 20, y: 64, z: 0 }, side: { x: 1, z: 0 } }
-  f.ctx.busy.add('A'); f.report({ aims: [aim] }); f.flush()
-  assert.equal(f.calls.length, 0)
-  f.ctx.busy.delete('A'); f.report({ aims: [aim] }); f.flush()
-  assert.equal(f.calls[0]?.method, 'pearl_to')
 })
 
 // Ноги в лаве — выход раньше уворота от зелья и стрейфа от прицела (a39: «🌋 0.0 → 🧪↯ рывок → ☠ в лаве»).
@@ -293,15 +187,6 @@ test('feet over lava but not burning: no instant re-run; a failed escape re-runs
   assert.equal(g.calls.length, 2, 'still burning after the escape: again at once, wherever it stands')
 })
 
-test('a shield faces the drawn bow: an arrow without Piercing does not pass it (strafing caught 80 %)', t => {
-  const f = fixture(t)
-  f.ctx.pos.A.inv = { shield: 1 }
-  f.aim()
-  assert.equal(f.calls[0].method, 'swarm_hold')
-  assert.ok(f.calls[0].params.shield && f.calls[0].params.requireShield, 'shield up, not a sneak hold')
-  assert.deepEqual(f.calls[0].params.enemies, ['Foe'])
-})
-
 test('mace from above: the shield in the off hand is a shield — hold it on any lead, never a late dash, never re-raise', t => {
   // Пользователь 21.10: «в последний момент вместо щита убегать начинают — достаю и ваншот». Вторая рука в состоянии тела —
   // { item }, а не { name }: надетый щит читался как «нет щита», и вторая реакция была рывком.
@@ -328,6 +213,59 @@ test('a shield raised against a mace stays up when an arrow comes: no dodge out 
   assert.equal(f.calls.length, 1, 'the arrow hits the shield; a step aside would take the smash')
 })
 
+test('landing web shares the mace hold, leaves fights and raised shields alone, then hands fresh defense to fight', async t => {
+  const smash = { name: 'OtherSwarmBot', ticks: 30, at: { x: 1, y: 64, z: 0 } }
+  const f = fixture(t)
+  f.ctx.pos.A.inv = { shield: 1, cobweb: 1 }
+  f.report({ smashes: [smash] })
+  assert.equal(f.calls[0].method, 'swarm_hold')
+  assert.equal(f.calls[0].params.webSmash, smash.name)
+  assert.equal(f.calls[0].params.shield, true)
+  f.report({ smashes: [{ ...smash, ticks: 32 }] })
+  assert.equal(f.calls.length, 1, 'a new jump does not release the existing shield')
+  f.calls[0].reply({ ok: true }); await turn()
+
+  const fight = fixture(t)
+  fight.ctx.pos.A.inv = { shield: 1, cobweb: 1 }
+  fight.b.last = { m: 'fight', p: { target: smash.name }, pending: true }
+  fight.report({ smashes: [smash] })
+  assert.equal(fight.calls.length, 0, 'the fight owns its web and shield')
+  fight.b.last.p.target = 'AnotherFoe'
+  fight.report({ smashes: [{ ...smash, ticks: 31 }] })
+  assert.equal(fight.calls[0].params.whileSmash, smash.name, 'a third enemy can smash during the duel')
+  fight.calls[0].reply({ ok: true }); await turn()
+
+  for (const elapsed of [100, 1000]) {
+    const g = fixture(t)
+    g.ctx.pos.A.inv = { cobweb: 1 }
+    g.report({ smashes: [smash] })
+    assert.equal(g.calls[0].method, 'swarm_hold')
+    assert.equal(g.calls[0].params.webSmash, smash.name)
+    assert.equal(g.calls[0].params.shield, false)
+    g.advance(elapsed)
+    g.calls[0].reply({ ok: true, web: { placed: true } }); await turn()
+    assert.deepEqual(g.calls.map(c => c.method), ['swarm_hold', 'fight'], 'the body reads current threat after placement, without stale ETA')
+    g.report({ smashes: [{ ...smash, ticks: 2 }] })
+    g.report({ smashes: [{ ...smash, ticks: 36 }] })
+    assert.equal(g.calls.length, 2, 'the follow-up fight survives both imminent landing and another wind jump')
+    g.calls[1].reply({ ok: true }); await turn()
+  }
+})
+
+for (const reject of [false, true]) test(`a ${reject ? 'rejected' : 'failed'} mace shield hands fresh defense to fight, without the original ETA`, async t => {
+  const f = fixture(t)
+  f.ctx.pos.A.inv = { shield: 1 }
+  f.report({ smashes: [{ name: 'Foe', ticks: 2, at: f.p }] })
+  f.advance(1000)
+  if (reject) f.calls[0].reject(new Error('shield transaction failed'))
+  else f.calls[0].reply({ ok: false, why: 'no_shield' })
+  await turn()
+  assert.deepEqual(f.calls.map(c => c.method), ['swarm_hold', 'fight'])
+  assert.equal(f.ctx.busy.has('A'), true, 'the follow-up owns busy after the old hold finishes')
+  f.calls[1].reply({}); await turn()
+  assert.equal(f.ctx.busy.has('A'), false)
+})
+
 test('floor taken from under the feet while a foe is near: step off at once, no drop, before a mace reaction', t => {
   // Пользователь 22.10: «ломаю блоки под ними — они в дырки улетают, ничего не делают».
   const f = fixture(t)
@@ -336,4 +274,107 @@ test('floor taken from under the feet while a foe is near: step off at once, no 
     smashes: [{ name: 'Foe', ticks: 10, at: f.p }] })
   assert.equal(f.calls.length, 1)
   assert.equal(f.calls[0].method, 'evade', 'off the cracked floor first')
+  assert.equal(f.calls[0].params.maxDrop, 0)
+})
+
+test('a shield raised against a mace stays up when the floor cracks: a step off drops the shield under a one-shot', t => {
+  // Игра пользователя 22.10: «пол уходит — схожу» 12 раз за секунду, щит опускался, убит булавой.
+  const f = fixture(t)
+  f.ctx.pos.A.offHand = { item: 'shield', durability: 100 }
+  f.report({ smashes: [{ name: 'Foe', ticks: 16, at: f.p }] })
+  assert.equal(f.calls[0].method, 'swarm_hold')
+  f.report({ floor: [{ name: 'Foe', at: { x: 0.5, y: 63, z: 0.5 }, from: { x: 3, y: 64, z: 0 }, ticks: 0, holes: 1 }], smashes: [{ name: 'Foe', ticks: 10, at: f.p }] })
+  assert.equal(f.calls.length, 1, 'the hold is kept')
+})
+
+function defenseDriver(f) {
+  const task = { kind: 'heal', position: f.p, data: { ally: 'Ally', panic: true } }
+  f.b.swarmExecuting = true
+  f.b.swarmTask = { kind: 'fight', data: { target: 'Foe' } }
+  return swarmTurn({ now: () => Date.now(), alive: () => true, log () {}, pos: f.ctx.pos,
+    refresh: () => ({ member: {}, members: [], task, board: { enemies: () => [], tasks: () => [], facts: () => [] } }),
+    say () {}, chestAtHand: () => false, onslaught: () => false })
+}
+
+test('mace defense inside fight survives phase changes, floor, nearby lava and the wind-bounce gap; landing releases it', async t => {
+  const f = fixture(t), driver = defenseDriver(f)
+  f.ctx.pos.A.inv = { shield: 1 }
+  f.b.last = { m: 'fight', p: { target: 'Foe' }, pending: true }
+  const smash = { name: 'Foe', ticks: 18, at: f.p }
+  f.report({ smashes: [smash] })
+  assert.equal(driver.preempt(f.b), false, 'fight already owns the shield: no stop')
+  f.report({ smashes: [{ ...smash, ticks: 35 }],
+    floor: [{ at: f.p, holes: 1 }], lava: [{ at: f.p, d: 1.4 }],
+    aims: [{ name: 'Foe', weapon: 'bow', at: f.p }],
+    arrows: [{ name: 'arrow', ticks: 3, at: f.p, side: { x: 1, z: 0 } }] })
+  assert.equal(f.calls.length, 0, 'ETA growth and lower-priority hazards keep the same defense')
+  f.report({})
+  f.advance(900)
+  await driver.turn(f.b)
+  assert.equal(f.calls.length, 0, 'healing cannot enter a brief wind-bounce gap')
+  assert.equal(driver.preempt(f.b), false)
+  f.advance(101)
+  assert.equal(driver.preempt(f.b), true, 'after calm, ordinary phase changes resume')
+  assert.equal(f.calls[0].method, 'stop')
+  f.calls[0].reply({}); await turn()
+})
+
+test('a pending evade is one mace response across ETA growth; completion hands continuous defense to fight before healing', async t => {
+  const f = fixture(t), driver = defenseDriver(f)
+  f.ctx.pos.A.inv = {}
+  f.dodge()
+  const evade = f.calls[0]
+  const smash = { name: 'Foe', ticks: 30, at: f.p }
+  f.report({ smashes: [smash] })
+  f.report({ smashes: [{ ...smash, ticks: 40 }] })
+  assert.deepEqual(f.calls.map(c => c.method), ['evade'], 'new ETA never cancels the running escape')
+  assert.equal(driver.preempt(f.b), false)
+  f.b.last.pending = false
+  evade.reply({ ok: true }); await turn()
+  await driver.turn(f.b)
+  assert.deepEqual(f.calls.map(c => c.method), ['evade'], 'no heal between escape and continued defense')
+  f.report({ smashes: [{ ...smash, ticks: 8 }] })
+  assert.equal(f.calls[1]?.method, 'fight', 'handled episode still gets a continuous body response')
+  assert.equal(f.calls[1].params.target, 'Foe')
+  f.report({ smashes: [{ ...smash, ticks: 32 }] })
+  assert.equal(f.calls.length, 2, 'the fight is kept through another wind jump')
+  f.calls[1].reply({}); await turn()
+})
+
+test('a shieldless mace response starts continuous fight even when a one-shot dash is too late', t => {
+  const f = fixture(t)
+  f.ctx.pos.A.inv = {}
+  f.report({ smashes: [{ name: 'Foe', ticks: 2, at: f.p }] })
+  assert.equal(f.calls[0]?.method, 'fight')
+  assert.equal(f.calls[0].params.target, 'Foe')
+})
+
+for (const danger of ['lava', 'blast']) test(`${danger} remains an emergency during a fight's mace defense`, t => {
+  const f = fixture(t)
+  f.b.last = { m: 'fight', p: { target: 'Foe' }, pending: true }
+  const smashes = [{ name: 'Foe', ticks: 18, at: f.p }]
+  f.report({ smashes })
+  f.report({ smashes, ...(danger === 'lava' ? { lava: [{ d: 0, at: f.p }] } : { blasts: [{ at: f.p, fuse: 20, primed: true }] }) })
+  assert.equal(f.calls[0]?.method, danger === 'lava' ? 'lava_escape' : 'dodge_blast')
+})
+
+test('a new arena round clears the old fight mace defense', t => {
+  const f = fixture(t), driver = defenseDriver(f)
+  f.b.last = { m: 'fight', p: { target: 'Foe' }, pending: true }
+  f.report({ smashes: [{ name: 'Foe', ticks: 18, at: f.p }] })
+  assert.equal(driver.preempt(f.b), false)
+  f.ctx.round++
+  f.report({})
+  assert.equal(driver.preempt(f.b), true)
+})
+
+test('driver reset clears a mace response before the next round can take a turn', t => {
+  const f = fixture(t)
+  f.b.last = { m: 'fight', p: { target: 'Foe' }, pending: true }
+  f.report({ smashes: [{ name: 'Foe', ticks: 18, at: f.p }] })
+  assert.ok(f.b.maceDefense)
+  const sw = createDriverState({ bots: [f.b], pos: f.ctx.pos, log () {}, alive: () => true })
+  sw.retries = new Map(); sw.sites = new Map()
+  swarmLifecycle(sw).reset()
+  assert.equal(f.b.maceDefense, undefined)
 })

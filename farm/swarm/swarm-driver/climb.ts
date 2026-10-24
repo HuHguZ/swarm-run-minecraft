@@ -1,6 +1,7 @@
 // Рой: натиск — схватить лучшее у врага, подъём к врагу (лестницы, столбы, пролом), пролом.
 import { ownedCount } from '../../../daemon/src/swarm'
-import { BLOCK, distance, cellKey } from './common'
+import { BLOCK, distance, cellKey, underArrowFire } from './common'
+import { runAscent } from './ascent'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmClimb (sw: SwarmDriverCtx) {
@@ -19,14 +20,38 @@ export function swarmClimb (sw: SwarmDriverCtx) {
   const ARM = { leather: 1, golden: 1.5, chainmail: 2, copper: 2.5, iron: 3, diamond: 4, netherite: 5 }
   const weaponValue = n => n === 'mace' ? 5.5 : n === 'trident' ? 4.5 : /^(\w+)_(sword|axe|spear)$/.test(n) ? (MAT[n.split('_')[0]] || 0) : 0
   const armorOf = n => { const m = /^(\w+)_(helmet|chestplate|leggings|boots)$/.exec(n); return m ? { slot: { helmet: 'head', chestplate: 'torso', leggings: 'legs', boots: 'feet' }[m[2]], v: ARM[m[1]] || 0 } : null }
+  const waitTactics = (b, r) => {
+    const t = r?.state?.tactics
+    if (r?.by?.type !== 'tactical' && !t?.requireObservation && !/^(Tactical|Emergency)$/.test(t?.owner || '')) return false
+    b.swarmFightReply = { ...r, status: 'interrupted' }
+    return true
+  }
+  const ascend = async (b, to, method, params) => {
+    const pending = runAscent(b, pos[b.name], to,
+      () => b.c.call(method, { ...params, _climb: true }).catch(e => ({ status: 'failed', error: e.message })), now)
+    const run = b.swarmAscent, raw = await pending
+    return run.stalled ? { ...raw, ascentStalled: true } : raw
+  }
+  async function leaveArrows(b, foe) {
+    if (!underArrowFire(b, now())) return false
+    const round = sw.generation
+    const cover = await b.c.call('take_cover', { from: foe.id, maxRun: 7, localOnly: true, arena }).catch(e => ({ error: e.message }))
+    if (round !== sw.generation || !sw.alive(b.name) || waitTactics(b, cover)) return true
+    if (!detail(cover).ok) {
+      const r = await b.c.call('flee', { from: [foe.id], timeoutSeconds: 3, safeDist: 14, arena }).catch(e => ({ error: e.message }))
+      waitTactics(b, r)
+    }
+    return true
+  }
   async function grab(b, enemies) {
-    if (b.climbing || (cooldown.get(`grab:${b.name}`) || 0) > now()) return false
+    if (b.climbing || underArrowFire(b, now()) || (cooldown.get(`grab:${b.name}`) || 0) > now()) return false
     cooldown.set(`grab:${b.name}`, now() + 1500)
     const m = pos[b.name], inv = m?.inv || {}
     if (!m?.p) return false
     const near = Math.min(Infinity, ...enemies.filter(e => now() - e.seenAt < 1500).map(e => distance(e.position, m.p)))
     const exposed = enemies.some(e => now() - e.seenAt < 1500 && (e.sources || []).includes(b.name) && distance(e.position, m.p) <= 40)
     const r = detail(await b.c.call('items_near', { radius: 7 }).catch(() => ({})))
+    if (underArrowFire(b, now())) return false
     const best = Math.max(0, ...Object.keys(inv).map(weaponValue))
     const wear = slot => { const n = m.armor?.[slot]; const a = n && armorOf(n); return a ? a.v : 0 }
     const want = (r.items || []).find(it => {
@@ -46,51 +71,69 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     const before = ownedCount({ inventory: inv, armor: m.armor }, want.name)
     let g: any = {}, s: any = null
     b.climbing = true
+    b.grabbing = true
     lootStep(b, want.at, 'grab')
     try {
       const approach = await b.c.call('goto', { ...bounded(want.at), range: 0.4, timeoutSeconds: 3, arena: lootArena(b), _hunt: true, _climb: true }).catch(e => ({ why: e.message }))
+      if (underArrowFire(b, now())) return false
       g = detail(approach)
       if (approach?.status === 'done' && g.arrived) {
         const pickup = detail(await b.c.call('assist', { mode: 'pickup', item: want.name, maxD: 2, arena: lootArena(b), _climb: true }).catch(e => ({ why: e.message })))
         if (!pickup.ok) g.why = pickup.why || 'не подобрал'
       }
       s = await b.c.call('status').catch(() => null)
-    } finally { b.climbing = false }
+    } finally { b.climbing = false; delete b.grabbing }
     const got = !!s?.state && ownedCount(s.state, want.name) > before
     if (s?.state?.inventory) { pos[b.name].inv = s.state.inventory; pos[b.name].armor = s.state.armor || pos[b.name].armor }
     if (!got) failed(b, itemKey(b, want), itemSig(want, inv)); else cleared(itemKey(b, want))
     cooldown.set(`grab:${b.name}`, now() + 1500)
     log(`🫳 ${b.name}: беру ${want.name} в ${want.d} бл.${near < 20 ? ` (враг в ${Math.round(near)} бл.)` : ''} — ${got ? 'взял' : String(g.why || g.error || (g.arrived ? 'дошёл, не поднялось' : 'не дошёл')).slice(0, 40)}`)
-    if (got && armorOf(want.name)) await b.c.call('armor', {}).catch(() => {})
+    if (got && armorOf(want.name) && !underArrowFire(b, now())) await b.c.call('armor', {}).catch(() => {})
     return got
   }
   async function climbTo(b, foe, at) {
     const m = pos[b.name], inv = m.inv || {}, dy = foe.position.y - m.p.y
     const blocks = Object.entries(inv).filter(([n]) => BLOCK.test(n)).reduce((s, [, c]: any) => s + c, 0)
     const pick = Object.keys(inv).some(n => /_pickaxe$/.test(n))
+    // Под луком сначала короткий рассчитанный прыжок на уступ, а не стройка под стрелами.
+    if (underArrowFire(b, now()) && (inv.wind_charge || 0) > 0 && !blocked(b, `wind:${b.name}`, coarse(at))) {
+      const raw = await ascend(b, at, 'wind_leap', { toward: at, arena }), r = detail(raw)
+      if (waitTactics(b, raw)) return true
+      if (r.ok) return true
+      failed(b, `wind:${b.name}`, coarse(at))
+      if (raw.ascentStalled && await leaveArrows(b, foe)) return true
+    }
     // Он на столбе или уступе прямо над нами (по горизонтали ≤ 4, выше на 3–14): динамит под его опору — взрыв ломает
     // столб/песчаник, он падает к нам.
     if (dy <= 4 && Math.hypot(foe.position.x - m.p.x, foe.position.z - m.p.z) <= 4 && await blast(b, foe.position, `под ${foe.id}`)) return true
     if ((inv.elytra || m.armor?.torso === 'elytra') && (inv.firework_rocket || 0) >= 3 && !blocked(b, `fly:${b.name}`, coarse(at))) {
-      const r = detail(await b.c.call('fly_to', { at, timeoutSeconds: 15, arena }).catch(e => ({ why: e.message })))
+      const raw = await ascend(b, at, 'fly_to', { at, timeoutSeconds: 15, arena }), r = detail(raw)
+      if (waitTactics(b, raw)) return true
       if (!r.ok) failed(b, `fly:${b.name}`, coarse(at))
       log(`🪽 ${b.name}: лечу к ${foe.id} (+${Math.round(dy)}) — ${r.ok ? 'долетел' : String(r.why || 'нет').slice(0, 60)}`)
       if (r.ok) return true
+      if (raw.ascentStalled && await leaveArrows(b, foe)) return true
     }
     // Жемчуг поднимается на 15–18 бл. (бросок 1.5 бл/т, гравитация 0.03): выше +16 — сперва лезть, бросать с яруса.
     if ((inv.ender_pearl || 0) > 0 && dy <= 16 && distance(m.p, foe.position) < 40 && !blocked(b, `pearl:${b.name}`, `${coarse(at)}|${inv.ender_pearl}`)) {
-      const r = detail(await b.c.call('pearl_to', { to: at, edgeOk: true, yTop: 45 }).catch(e => ({ why: e.message })))
+      const raw = await ascend(b, at, 'pearl_to', { to: at, edgeOk: true, yTop: 45 }), r = detail(raw)
+      if (waitTactics(b, raw)) return true
       if (!r.ok) failed(b, `pearl:${b.name}`, `${coarse(at)}|${inv.ender_pearl}`)
       log(`🟣 ${b.name}: жемчуг к ${foe.id} (+${Math.round(dy)}) — ${r.ok ? 'долетел' : (typeof r.why === 'object' ? JSON.stringify(r.why) : String(r.stop || r.why || 'нет')).slice(0, 80)}`)
       if (r.ok) return true
+      if (raw.ascentStalled && await leaveArrows(b, foe)) return true
     }
     // Готовая лестница своих, верх которой у цели (в 8 бл.), — по ней: строитель путей лезет по ступеням сам, блоки не нужны.
     const lad = ladderRoutes.filter(l => l.top.y > m.p.y + .6 && l.top.y <= foe.position.y + 1 && l.base.y >= m.p.y - 1 && Math.hypot(l.top.x - foe.position.x, l.top.z - foe.position.z) < 12 && !blocked(b, `ladder:${b.name}:${cellKey(l.base)}`))
       .sort((a, c) => distance(m.p, a.base) - distance(m.p, c.base))[0]
     if (lad) {
-      b.climbing = true
-      const r = detail(await b.c.call('goto', { ...bounded(lad.top), range: 1, timeoutSeconds: 25, arena, _hunt: true, _climb: true }).catch(e => ({ why: e.message })).finally(() => { b.climbing = false }))
-      if (!(r.arrived?.y >= lad.top.y - .5)) failed(b, `ladder:${b.name}:${cellKey(lad.base)}`)
+      const raw = await ascend(b, lad.top, 'goto', { ...bounded(lad.top), range: 1, timeoutSeconds: 25, arena, _hunt: true }), r = detail(raw)
+      if (waitTactics(b, raw)) return true
+      const end = raw?.state?.pos || r.arrived || r.at || pos[b.name]?.p
+      if (!(end?.y >= lad.top.y - .5)) {
+        failed(b, `ladder:${b.name}:${cellKey(lad.base)}`)
+        if (await leaveArrows(b, foe)) return true
+      }
       log(`🪜 ${b.name}: по лестнице своих к ${foe.id} — ${r.arrived ? 'наверху' : String(r.why || r.error || 'нет').slice(0, 60)}`)
       return true
     }
@@ -114,11 +157,11 @@ export function swarmClimb (sw: SwarmDriverCtx) {
       // в воздухе у края крыши, и «дошёл» засчитывался внизу. Промежуточные — по поверхности модели (ступени, проходы) без
       // exactY: точка в воздухе на прямой заставляла строить столбы в коридоре с потолком (галерея: контакт 92 → 157 с).
       const last = k >= 1, dest = last ? foe.position : wp
-      b.climbing = true
-      const r = detail(await b.c.call('goto', { ...bounded(dest), range: 1.5, timeoutSeconds: 15, arena, climb: true, exactY: last, _hunt: true, _climb: true }).catch(e => ({ why: e.message })).finally(() => { b.climbing = false }))
+      const raw = await ascend(b, dest, 'goto', { ...bounded(dest), range: 1.5, timeoutSeconds: 15, arena, climb: true, exactY: last, _hunt: true }), r = detail(raw)
+      if (waitTactics(b, raw)) return true
       const failed = !r.arrived && (now() - t0 < 1500 || /no path|пути нет/i.test(String(r.why || r.error || r.stopped || '')))
       // Поднялся на 3+ почти на месте — построил столб: место под лестницу своим (ladder_up).
-      const end = r.arrived || pos[b.name]?.p
+      const end = raw?.state?.pos || r.arrived || r.at || pos[b.name]?.p
       if (end && end.y - from.y >= 3 && Math.hypot(end.x - from.x, end.z - from.z) <= 1.5) {
         // (столбы лезущих больше не места лестниц — места из модели)
       }
@@ -132,8 +175,14 @@ export function swarmClimb (sw: SwarmDriverCtx) {
       if (!failed && gain < 1 && foe.position.y - (end?.y ?? from.y) > 3) sw.failed(b, `climb:${b.name}`, climbSig)
       // В журнал — отказ и приход наверх (отрезки по 8 бл. — сотни строк за прогон).
       if (failed || k >= 1) log(`🧗 ${b.name}: лезу к ${foe.id} (+${Math.round(dy)}, блоков ${blocks}${pick ? ', кирка' : ''}) — ${r.arrived ? `дошёл, ${Math.round(r.arrived.y - foe.position.y)} по высоте от него` : String(r.why || r.stopped || r.error || (failed ? 'пути нет' : 'не дошёл')).slice(0, 60)}`)
+      if (underArrowFire(b, now()) && (!r.arrived || gain < 1 && foe.position.y - (end?.y ?? from.y) > 3)) {
+        sw.failed(b, `climb:${b.name}`, climbSig)
+        await leaveArrows(b, foe)
+      }
       return true
     }
+    // Повтор отказавшего подъёма и добыча блоков на линии стрелка дороже короткого выхода за угол.
+    if (await leaveArrows(b, foe)) return true
     if (pick && !climbOk && await breach(b, at)) return true
     if (blocks >= needBlocks) return false
     if ((cooldown.get(`dig:${b.name}`) || 0) > now() || blocked(b, `dig:${b.name}`)) return false
@@ -187,10 +236,12 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     // Два жемчуга и больше — сразу бросок с цепочкой до двух (pearl-hop.planRoute: промежуточная посадка на ярусе); один —
     // только если отсюда есть одиночный бросок (pearl_plan). Броска нет — к месту броска (следующий ход бросит оттуда).
     const plan = (inv.ender_pearl || 0) >= 2 ? { ok: true, arc: 'цепочка', jump: '' } : detail(await b.c.call('pearl_plan', { to }).catch(e => ({ why: e.message })))
+    if (underArrowFire(b, now())) return { moved: true }
     let why = plan.why
     if (plan.ok) {
       b.climbing = true
       const r = detail(await b.c.call('pearl_up', { to, maxHops: 2, _climb: true }).catch(e => ({ why: e.message })).finally(() => { b.climbing = false }))
+      if (underArrowFire(b, now())) return { moved: true }
       log(`🟣 ${b.name}: жемчугом наверх (+${Math.round(h.y - me.y)}, ${plan.jump || 'с места'}, ${plan.arc}) — ${r.ok ? 'долетел' : String(r.stop || (typeof r.why === 'object' ? JSON.stringify(r.why) : r.why) || 'нет').slice(0, 80)}${r.at ? ' → ' + cellKey(r.at) : ''}`)
       if (r.ok) { cleared(key); return { arrived: true, at: r.at } }
       // Бросил и не долетел — неудача с этого места; не нашёл броска (жемчуг цел) — к месту броска.
@@ -206,7 +257,7 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     const raw: any = await b.c.call('goto', { ...bounded(spot), range: 1.5, timeoutSeconds: 16, arena, climb: true, _climb: true, _hunt: true }).catch(e => ({ status: 'failed', why: e.message })).finally(() => { b.climbing = false })
     const r = detail(raw)
     // Поход оборвали (смена фазы, тревога) — не неудача места.
-    if (raw?.status === 'interrupted' || raw?.status === 'skipped') return { moved: true }
+    if (raw?.status === 'interrupted' || raw?.status === 'skipped' || underArrowFire(b, now())) return { moved: true }
     log(`🟣 ${b.name}: к месту броска наверх ${cellKey({ x: Math.floor(spot.x), y: spot.y, z: Math.floor(spot.z) })} (цель +${Math.round(h.y - spot.y)}) — ${r.arrived ? 'на месте' : String(r.why || r.stopped || 'не дошёл').slice(0, 50)}`)
     if (!r.arrived) failed(b, spotKey(b, spot.cell))
     return { moved: true }

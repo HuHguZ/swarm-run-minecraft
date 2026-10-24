@@ -1,20 +1,24 @@
 // Рой: команда — доска команды, состав и роли, наблюдение и обновление плана, речь в чат.
 import { SwarmBoard, planPvp, planTransfers } from '../../../daemon/src/swarm'
-import { pvpState } from '../../../daemon/src/swarm/board'
+import { pvpState, knownEnemies } from '../../../daemon/src/swarm/board'
+import { healExchange, pickForager } from '../../../daemon/src/swarm/logistics'
+import { powerOf, weaponScore } from '../../../daemon/src/pvp/arms-graph'
+import { shoveValue, SHOVE, type Edge } from '../../../daemon/src/swarm/shove'
 import { WEAPON, BLOCK, FOOD, distance, cellKey } from './common'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmTeam (sw: SwarmDriverCtx) {
   const { edgeOf, now, pos, bots, alive, aggressive, hostile, sandSpot, hideouts, perches, digSites, log, announce, holes, boards, blueprints, telemetry, plannedAt, planned, walls, cooldown, transfers } = sw
   const preempt = (...a: any[]) => sw.preempt(...a)
-  // Яма на его полу или ниже (не выше: пол 128 при ногах 126.5 засчитывался — Codex 15.10), в 3.5 бл.
-  const edgeNear = p => {
+  // Яма на его полу или ниже; сравниваем её с естественным краем по смертельности и цене цепи.
+  const edgeNear = (p, foe = {}) => {
     const gap = h => Math.hypot(h.x + .5 - p.x, h.z + .5 - p.z)
-    const h = holes.filter(h => (h.feetY ?? h.y + 1) <= p.y + .1 && p.y - (h.feetY ?? h.y + 1) < 1.6 && gap(h) > .1 && gap(h) <= 3.5).sort((a, c) => gap(a) - gap(c))[0]
-    if (!h) return edgeOf ? edgeOf(p) : null
-    const d = gap(h)
-    // Яма-ловушка в полу этажа — падение 6–8 бл. до этажа ниже (watch.ts holeCells): не насмерть, но урон и он внизу.
-    return { x: (h.x + .5 - p.x) / d, z: (h.z + .5 - p.z) / d, drop: h.drop ?? 7, at: d }
+    const edges: Edge[] = holes.filter(h => (h.bottomY ?? h.y) <= p.y + .1 && p.y - (h.feetY ?? h.y + 1) < 1.6 && gap(h) > .1 && gap(h) <= 16)
+      .map(h => ({ x: (h.x + .5 - p.x) / gap(h), z: (h.z + .5 - p.z) / gap(h), drop: h.drop ?? 7, at: gap(h) }))
+    const natural = edgeOf?.(p)
+    if (natural) edges.push(natural)
+    const value = (e: Edge) => shoveValue(foe, e)
+    return edges.sort((a, b) => Number(value(b) >= SHOVE) - Number(value(a) >= SHOVE) || value(b) / (1 + (b.at ?? 0)) - value(a) / (1 + (a.at ?? 0)))[0] || null
   }
   const teamOf = b => b.team || b.name
   const boardOf = b => {
@@ -27,27 +31,42 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     !!pos[o.name]?.p && boardOf(o).enemies().some(e => now() - e.seenAt < 1000 && distance(e.position, pos[o.name].p) <= 3.5)
   const membersOf = b => {
     const roster = bots.filter(o => teamOf(o) === teamOf(b))
-    const stock = roster.filter(a => alive(a.name)).flatMap(a => Object.keys(pos[a.name]?.inv || {}))
+    const stock = [...new Set<string>(roster.filter(a => alive(a.name)).flatMap(a => Object.keys(pos[a.name]?.inv || {})))]
     // Номер в составе команды, а не среди живых: смерть одного не перетасовывает роли всех (ревью 13.10).
-    return roster.filter(o => alive(o.name) && pos[o.name]?.p).map(o => member(o, roster.indexOf(o), stock, b))
+    const team = roster.filter(o => alive(o.name) && pos[o.name]?.p).map(o => member(o, roster.indexOf(o), stock, b))
+    const forager = pickForager(team, sw.forager?.[teamOf(b)])
+    if (forager && sw.forager?.[teamOf(b)] !== forager.id) { (sw.forager ||= {})[teamOf(b)] = forager.id; log(`🧺 ${teamOf(b)}: фуражир ${forager.id} — свои запасы отдаёт бойцам`) }
+    return team
   }
   const member = (o, k, stock, b) => {
-    const m = pos[o.name], inv = m.inv || {}, names = Object.keys(inv)
+    const m = pos[o.name], inv = m.inv || {}, names = Object.keys(inv).filter(n => inv[n] > 0)
     const heal = Object.entries(m.potions || {}).some(([n, c]: any) => /^splash_.*(healing|regeneration)$/.test(n) && c > 0)
-    const role = heal && k % 3 === 1 ? 'healer' : names.some(n => /_pickaxe$/.test(n)) && k % 3 === 0 ? 'miner-builder' : inv.bow && inv.arrow && k % 2 ? 'ranged' : k % 3 === 2 ? 'flank' : 'fighter'
+    const role = heal && k % 3 === 1 ? 'healer' : names.some(n => /_pickaxe$/.test(n)) && k % 3 === 0 ? 'miner-builder' : inv.bow && (m.attackArrows ?? (inv.arrow || 0) + (inv.spectral_arrow || 0)) && k % 2 ? 'ranged' : k % 3 === 2 ? 'flank' : 'fighter'
     const reserve: Record<string, number> = {}, needs: Record<string, number> = {}
     for (const n of names) reserve[n] = BLOCK.test(n) ? 16 : FOOD.test(n) ? 4 : WEAPON.test(n) || /_pickaxe$/.test(n) ? 1 : /potion|pearl|totem|wind_charge/.test(n) ? 1 : 0
-    const melee = names.filter(n => /(_sword|_axe)$/.test(n))
-    if (melee.length > 1) for (const n of melee.slice(1)) reserve[n] = 0
-    if (!names.some(n => WEAPON.test(n))) { const weapon = stock.find(n => WEAPON.test(n)); if (weapon) needs[weapon] = 1 }
+    const weaponRating = n => Math.max(weaponScore(n), ...(m.enchants || []).filter(it => it.name === n && it.slot >= 9 && it.slot <= 44).map(it => weaponScore(n, it.ench)))
+    const melee = names.filter(n => /(_sword|_axe)$/.test(n)).sort((a, b) => weaponRating(b) - weaponRating(a) || a.localeCompare(b))
+    // Бросок выбирает по имени: зачарованный лучший экземпляр держим вместе с его тёзками.
+    for (const n of melee) reserve[n] = n === melee[0] ? weaponRating(n) > weaponScore(n) ? inv[n] : 1 : 0
+    // Одно копьё — ещё не наземный комплект; копьё и булаву донора для тарана/комбо не трогаем.
+    const grounded = n => /(_sword|_axe)$|^(mace|trident)$/.test(n)
+    const groundPower = Math.max(0, ...names.filter(grounded).map(weaponRating))
+    if (!groundPower || o.swarmTask?.data?.rearm) for (const n of stock.filter(grounded)) if (weaponScore(n) > groundPower) needs[n] = 1
+    if (!names.some(n => WEAPON.test(n))) for (const n of stock.filter(n => WEAPON.test(n) && !grounded(n))) needs[n] = 1
     for (const [slot, suffix] of Object.entries({ head: '_helmet', torso: '_chestplate', legs: '_leggings', feet: '_boots' })) {
-      const spare = stock.find(n => n.endsWith(suffix))
-      if (!m.armor?.[slot] && spare) needs[spare] = 1
-      if (m.armor?.[slot]) for (const n of names.filter(n => n.endsWith(suffix))) reserve[n] = 0
+      const armorSlot = { head: 5, torso: 6, legs: 7, feet: 8 }[slot]
+      const rating = (name, onBody = false) => name ? Math.max(powerOf([{ name }]).armor, ...(m.enchants || [])
+        .filter(it => it.name === name && (onBody ? it.slot === armorSlot : it.slot >= 9 && it.slot <= 44)).map(it => powerOf([it]).armor)) : 0
+      const worn = m.armor?.[slot], packed = names.filter(n => n.endsWith(suffix))
+      const owned = Math.max(rating(worn, true), ...packed.map(n => rating(n)))
+      // Просим любое доступное улучшение: один редкий алмазный предмет не закрывает доставку лишнего железа.
+      for (const n of stock.filter(n => n.endsWith(suffix))) if (powerOf([{ name: n }]).armor > owned) needs[n] = 1
+      for (const n of packed) reserve[n] = rating(n) === owned && owned > rating(worn, true) ? rating(n) > powerOf([{ name: n }]).armor ? inv[n] : 1 : 0
     }
     if (inv.bow || inv.crossbow) needs.arrow = 16
     if (role === 'miner-builder') needs[[...blueprints].find(([key]) => key.startsWith(teamOf(b) + ':'))?.[1]?.material || 'cobblestone'] = 16
     if (m.hp < 16 && !names.some(n => FOOD.test(n))) needs.cooked_beef = 4
+    healExchange(m.hp, inv, reserve, needs)
     // Подъём (пользователь 14.10: «залез наверх — бегают внизу, не строятся, не ищут кирку; блоков нет — делать всё, чтобы
     // добыть»): враг выше на 4+, а у меня оружие, но ни кирки, ни блоков на столб (высота + 4) — нужда в блоках (песок поля);
     // принесут передачи от добытчиков (планировщик, gather). Добытчик своё не держит — отдаёт всё.
@@ -58,8 +77,8 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     if (o.swarmTask?.data?.gather) for (const n of names) if (BLOCK.test(n)) reserve[n] = 0
     const worn = Object.values(m.armor || {}).filter(Boolean).length
     const strength = m.hp * (1 + (names.some(n => WEAPON.test(n)) ? 1 : 0)) * (1 + worn * .25)
-    const weapon = names.find(n => /(_sword|_axe|_spear)$|^(mace|trident)$/.test(n))
-    const ench = { sharpness: Math.max(0, ...(m.enchants || []).filter(it => it.name === weapon).map(it => it.ench?.sharpness || 0)), protection: (m.enchants || []).filter(it => it.slot >= 5 && it.slot <= 8).reduce((sum, it) => sum + (it.ench?.protection || 0), 0) }
+    const weapon = melee[0] || names.find(n => /(_spear)$|^(mace|trident)$/.test(n))
+    const ench = { knockback: Math.max(0, ...(m.enchants || []).filter(it => it.name === weapon).map(it => it.ench?.knockback || 0)), sharpness: Math.max(0, ...(m.enchants || []).filter(it => it.name === weapon).map(it => it.ench?.sharpness || 0)), protection: (m.enchants || []).filter(it => it.slot >= 5 && it.slot <= 8).reduce((sum, it) => sum + (it.ench?.protection || 0), 0) }
     // Левая рука (щит, тотем) в рюкзак не входит: без неё надетый щит для доски «пропадал», и кольцо не строилось.
     const offHand = typeof m.offHand === 'string' ? m.offHand : m.offHand?.item || undefined
     if (offHand === 'shield') reserve.shield = 1
@@ -67,12 +86,13 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     // комбинировать»): у кого булава, тот свои держит и просит ещё — подброс и удар сверху; у прочих один — на выход из ямы.
     // И паутину (22.10: «паутиной и булавой добивание»): прижать его перед ударом (smashSetupTurn) — у прочих её берут передачи.
     if (inv.mace) { reserve.wind_charge = inv.wind_charge || 0; needs.wind_charge = 8; needs.cobweb = 2 }
-    return { id: o.name, team: teamOf(o), position: m.p, health: m.hp, strength, role, canHeal: heal, inventory: inv, potions: m.potions || {}, reserve, needs, armor: m.armor || {}, offHand, weapon, ench }
+    return { id: o.name, team: teamOf(o), position: m.p, health: m.hp, strength, role, canHeal: heal, inventory: inv, attackArrows: m.attackArrows, potions: m.potions || {}, reserve, needs, armor: m.armor || {}, offHand, weapon, ench }
   }
   const pincerSent = new Map<string, { key: string; at: number }>()
   const lanceWebSent = new Map<string, { key: string; at: number }>()
   const lanceWebTrace = new Map<string, string>()
   const webSight = new Map<string, { target: string | null; at: number }>()
+  const allocationSent = new Map<string, { key: string; at: number }>()
   const pincerTarget = o => o.last?.m === 'fight' && o.last.pending === true ? o.last.p?.target : null
   const pincerKit = o => {
     const m = pos[o.name]
@@ -85,6 +105,8 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     board.setMembers(membersOf(b))
     for (const e of sightings || []) if (hostile(b, e.id) && board.observe(b.name, at, e)) telemetry.observed++
     preempt(b)
+    sw.windFlank?.(b, sightings)
+    void sw.windObserve?.(b, sightings, at).catch(e => log(`🌬 ${b.name}: ${String(e.message).slice(0, 100)}`))
     const target = pincerTarget(b)
     webSight.set(b.name, { target: sightings?.some(e => e.id === target && e.visible === true) ? target : null, at })
     const pair = target ? bots.filter(o => alive(o.name) && teamOf(o) === teamOf(b) &&
@@ -160,7 +182,7 @@ export function swarmTeam (sw: SwarmDriverCtx) {
         // Точки (стена лестницы, яма, засада) — закрыты, пока споткнувшийся на них стоит там же или у раскрытой засады враг
         // (retry.ts siteOpen), а не 8/4/15 с.
         ladderSites: process.env.ARENA_LADDERS === '0' ? [] : [...walls.values()].filter(t => !t.done && sw.siteOpen('ladder:' + t.key)),
-        digSites: digSites ? p => digSites(p).filter(s => sw.siteOpen('hole:' + cellKey(s)) && !holes.some(h => Math.abs(h.y - s.y) < 2 && Math.hypot(h.x - s.x, h.z - s.z) < 3)) : undefined, campSpots: onslaughtNow ? hideouts.filter(s => sw.siteOpen('camp:' + cellKey(s), board.enemies())) : undefined }))
+        digSites: digSites ? p => digSites(p).filter(s => sw.siteOpen('hole:' + cellKey(s)) && !holes.some(h => h.x === s.x && h.z === s.z && h.y >= s.y - (s.blocks?.length ?? 2) + 1 && (h.bottomY ?? h.y) <= s.y)) : undefined, campSpots: onslaughtNow ? hideouts.filter(s => sw.siteOpen('camp:' + cellKey(s), board.enemies())) : undefined }))
       const chosen = board.doctrineState()?.doctrine, fight = board.teamFight
       if (chosen && chosen !== was) { log(`🧭 ${team}: приём ${was || '—'} → ${chosen}`); say2(`🧭 приём: ${DOCTRINE_RU[chosen] || chosen}`, 'aqua', true) }
       // Штурм и отбой — в журнал и в чат (пользователь 14.10: «как рой показывает интеллект — не вижу»).
@@ -178,11 +200,39 @@ export function swarmTeam (sw: SwarmDriverCtx) {
         say2(`☢ ШТУРМ на ${a.target}! подтвердили ${a.voters.length}: ${a.voters.slice(0, 6).map(short).join(', ')}${a.voters.length > 6 ? '…' : ''} — все до конца`, 'red')
       }
       if (fight && fight.engage !== held) log(`⚖ ${team}: бой ${fight.engage ? 'держим' : 'не держим'} — ${fight.ours} на ${fight.theirs}, потери ≈ ${fight.ourLoss.toFixed(1)} : ${fight.theirLoss.toFixed(1)}${fight.wipedUs && !fight.wipedThem ? ', нас выносят' : ''}`)
-      transfers.set(team, planTransfers(board, members, (donor, recipient, item) => (cooldown.get(`transfer:${donor.id}:${recipient.id}:${item}`) || 0) <= now()))
+      const deliveryFoes = board.enemies(), occupied = new Set(board.tasks().filter(t => t.status === 'claimed').flatMap(t => [t.claim!.owner, ...(t.participants || [])]))
+      transfers.set(team, planTransfers(board, members, (donor, recipient, item) => {
+        const task = planned.get(team)?.get(donor.id), d = task?.data || {}, giver = bots.find(o => o.name === donor.id), receiver = bots.find(o => o.name === recipient.id)
+        // Пропускаем до сортировки: занятый или застрявший донор не закрывает свободного курьера.
+        return !!task && !occupied.has(donor.id) && !occupied.has(recipient.id) && !['flee', 'recover', 'heal'].includes(task.kind) &&
+          !(d.fountain || d.ambush || d.hold || d.line !== undefined || d.bait || d.cordon || d.buildKind || d.dig || d.ladder || d.finishing || d.shove) &&
+          !!giver && !((/^(lava_escape|dodge_blast|clear_web)$/.test(giver.last?.m || '') || giver.shieldHold && giver.last?.m === 'swarm_hold') && giver.last?.pending !== false) &&
+          !(giver.swarmExecuting && giver.last?.m === 'fight' && giver.last.pending === true) &&
+          !deliveryFoes.some(e => now() - e.seenAt < 1000 && distance(e.position, donor.position) <= 4.5 + Math.max(5.6, Math.hypot(e.velocity?.x || 0, e.velocity?.z || 0) * 20)) &&
+          !!receiver && !sw.blocked(receiver, `transfer:transfer:${donor.id}:${recipient.id}:${item}`, item) &&
+          (cooldown.get(`transfer:${donor.id}:${recipient.id}:${item}`) || 0) <= now()
+      }))
       plannedAt.set(team, now())
       // Что видел этот план (враги, хп своих): мгновенная паника — только на новое (safety.ts).
       sw.plannedFoes.set(team, new Set(board.enemies().map(e => e.id)))
       for (const m of members) { const o = bots.find(x => x.name === m.id); if (o) o.plannedHp = m.health }
+    }
+    // Ограничиваем только журнал: смена плана и режима доступна сразу.
+    const allocationAt = now(), sent = allocationSent.get(team)
+    if (!sent || allocationAt - sent.at >= 3000) {
+      const rows = [...(planned.get(team) || [])].sort(([a], [b]) => a.localeCompare(b)).map(([id, t]) =>
+        [id, t.kind, t.data?.target || '', t.data?.role || '', t.data?.shove || t.data?.undermine || t.data?.dig ? 1 : t.kind === 'fight' ? 0 : t.kind === 'loot' || t.kind === 'flee' || t.data?.rearm || t.data?.camp ? 2 : -1] as const)
+      const foes = knownEnemies(board), lethal = foes.map(e => edgeNear(e.position, e)).filter((e, k) => shoveValue(foes[k], e) >= SHOVE)
+      const terrain = !foes.length ? '' : !lethal.length ? 'смертельного края нет — натиск' : `смертельный край в ${Math.min(...lethal.map(e => e!.at ?? 0)).toFixed(1)} бл.`
+      const key = JSON.stringify([sw.generation, rows, terrain])
+      if (key !== sent?.key) {
+        const counts = [0, 0, 0]
+        for (const row of rows) if (row[4] >= 0) counts[row[4]]++
+        const targets = [...new Set(rows.map(row => row[2]).filter(Boolean))].sort().join(', ')
+        const roles = [...new Set(rows.map(row => row[3]).filter(Boolean))].sort().join(', ')
+        allocationSent.set(team, { key, at: allocationAt })
+        log(`🐜 ${team}: распределение — бой ${counts[0]}, сброс/подкоп ${counts[1]}, лут/укрытие ${counts[2]}${targets ? '; цели ' + targets : ''}${roles ? '; роли ' + roles : ''}${terrain ? '; ' + terrain : ''}`)
+      }
     }
     return { board, members, member: members.find(m => m.id === b.name), task: planned.get(team)?.get(b.name) }
   }
