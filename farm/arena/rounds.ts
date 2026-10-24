@@ -29,6 +29,11 @@ export function installRounds (ctx: ArenaContext) {
         if (cm && !names.includes(cm[1])) { ctx.endRound(false, `${cm[1]} написал «${cm[2]}»`).catch(() => {}); continue }
         const m = /\]: (NeuroFarm\S+) (was .+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
         const hm = !m && /\]: (\S+) (was .+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
+        const dead = m || hm, wind = dead && ctx.windOutAt?.[dead[1]]
+        if (wind && Date.now() - wind.at < 4000) {
+          ctx.windKills = (ctx.windKills || 0) + 1; delete ctx.windOutAt[dead[1]]
+          log(`🌬☠ ${dead[1]} сброшен ветром (${wind.kind}, бросал ${wind.by}): ${dead[2]} — всего сбросов ${ctx.windKills}`)
+        }
         if (hm && humans[hm[1]] && !names.includes(hm[1])) {
           log(`☠ ${hm[1]} ${hm[2]}`)
           // Соло (12.10: «умер — раунд заново»; 14.10, двое людей: «логика n людей»): погибший выбыл до конца раунда (зритель),

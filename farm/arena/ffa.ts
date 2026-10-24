@@ -39,7 +39,7 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
   // Нрав — по кругу: в одной толпе разные почерки (crowd.PERSONAS).
   const PERS = Object.keys(crowd.PERSONAS)
   bots.forEach((b, k) => { b.persona = process.env.FFA_PERSONA || PERS[k % PERS.length] })
-  // Команды (6 на 6): красные и синие через одного, цветные ники, без урона по своим.
+  // Команды (6 на 6): красные и синие через одного, цветные ники; дружественный огонь разрешён.
   if (teams) bots.forEach((b, k) => { b.team = CHAMP ? (k ? 'blue' : 'red') : SOLO || k % 2 ? 'blue' : 'red'; b.champ = CHAMP && !k })
   const teamOf = n => bots.find(b => b.name === n)?.team
   // Центр поля: Колизей (600 120 600); гонка вооружений — своя карта arms-layout (ARMS_POS, по умолчанию 2000 100 2000).
@@ -95,7 +95,7 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
     for (const [t, color] of [['red', 'red'], ['blue', 'blue']]) {
       await rcon(i, `team add ${t}`).catch(() => {})
       await rcon(i, `team modify ${t} color ${color}`).catch(() => {})
-      await rcon(i, `team modify ${t} friendlyFire false`).catch(() => {})
+      await rcon(i, `team modify ${t} friendlyFire true`).catch(() => {})
       // По одному: team join берёт одного участника, списком через пробел — никого (10.10: команды были пусты, 4 убийства своих).
       for (const b of bots.filter(b => b.team === t)) await rcon(i, `team join ${t} ${b.name}`).catch(() => {})
     }

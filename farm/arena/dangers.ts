@@ -1,6 +1,6 @@
 'use strict'
-// Угрозы бойцу (сообщения danger от демона): рывок прочь, стрейф и джук от прицела, заливка лавы, ответ тем, что в руках.
-import { SEG_S, SOLO } from './context'
+// Угрозы бойцу: выход из опасной области и защита от булавы; уворот от снарядов подмешивает тело.
+import { SEG_S } from './context'
 import { geared } from './gear'
 import type { ArenaContext } from './context'
 
@@ -16,7 +16,7 @@ type DangerCtx = ReturnType<typeof dangerContext>
 // Общее для реакций (прежние const installDangers): поля арены, текущая реакция бойца и её владение, эпизоды угроз,
 // неудавшиеся выходы и их перепроверка по видимым клеткам.
 function dangerContext (ctx: ArenaContext) {
-  const { arms, bots, pos, busy, out, deadNow, X, Y, Z, R, L, log } = ctx
+  const { bots, pos, busy, out, deadNow, log } = ctx
   // Поздний ответ не освобождает руки и не продолжает реакцию, уже заменённую другой.
   const reactions = new WeakMap<object, { round: number }>()
   const observations = new WeakMap<object, any>()
@@ -74,22 +74,22 @@ function dangerContext (ctx: ArenaContext) {
     b.juking = b.lavaBusy = false
     return true
   }
-  return { ctx, arms, bots, pos, busy, out, deadNow, X, Y, Z, R, L, log, reactions, observations, failures, distance, cell, corridor, inspect,
+  return { ctx, bots, pos, busy, out, deadNow, log, reactions, observations, failures, distance, cell, corridor, inspect,
     retry, remember, beginReaction, ownsReaction, endReaction }
 }
 
 // Рывок прочь (ctx.dodgeAway): спринт с прыжками, запертому — прокоп выхода; неудачный выход запоминается.
 function installDodgeAway (dz: DangerCtx) {
   const { ctx, log, failures, retry, remember, beginReaction, ownsReaction, endReaction } = dz
-  ctx.dodgeAway = (o, me, from, dist, then: (() => void) | null = null, look: any = null, dropOk = false, digOk = dropOk) => {
+  ctx.dodgeAway = (o, me, from, dist, then: (() => void) | null = null, look: any = null, dropOk = false, digOk = dropOk, maxDrop = 3) => {
     let ax = me.x - from.x; let az = me.z - from.z; const L0 = Math.hypot(ax, az)
     if (L0 < 0.5) { const a = Math.random() * 2 * Math.PI; ax = Math.cos(a); az = Math.sin(a) } else { ax /= L0; az /= L0 }
     const to = { x: me.x + ax * dist, y: me.y, z: me.z + az * dist }
-    const key = `evade:${Math.round(ax * 4)},${Math.round(az * 4)}:${dropOk}:${digOk}`
+    const key = `evade:${Math.round(ax * 4)},${Math.round(az * 4)}:${dropOk}:${digOk}:${maxDrop}`
     const run = () => {
       const token = beginReaction(o)
       // Рывок — спринт с прыжками (тело: evade), а не путь до точки (12.10: «бегать и прыгать при увороте»); прыгучесть — своя.
-      const evade = () => o.c.call('evade', { dir: { x: ax, z: az }, ticks: Math.max(4, Math.min(26, dist / 0.33)), jump: Math.random() < (o.dodgeStyle?.jumpy ?? 0.75), look, dropOk })
+      const evade = () => o.c.call('evade', { dir: { x: ax, z: az }, ticks: Math.max(4, Math.min(26, dist / 0.33)), jump: Math.random() < (o.dodgeStyle?.jumpy ?? 0.75), look, dropOk, maxDrop })
       evade().then(async r => {
         if (!ownsReaction(o, token)) return
         let d = r?.detail || r
@@ -116,33 +116,36 @@ function installDodgeAway (dz: DangerCtx) {
 
 // Сообщение danger от демона: эпизоды угроз, выбор одной и ответ на неё.
 function onDanger (dz: DangerCtx, b, m) {
-  const { ctx, pos, busy, out, deadNow, log, reactions, observations, failures, distance } = dz
-  if (ctx.between || out.has(b.name) || deadNow.has(b.name)) { observations.delete(b); failures.delete(b); return }
+  const { ctx, pos, out, deadNow, log, reactions, observations, failures, distance } = dz
+  if (m.descent) { log(`⬇ ${b.name}: спрыгнул на ${Math.round(m.descent.height * 10) / 10} бл. — ${m.descent.technique}`); return }
+  if (ctx.between || out.has(b.name) || deadNow.has(b.name)) { observations.delete(b); failures.delete(b); delete b.arrowThreat; delete b.maceDefense; return }
   if (!m.pos) return
-  // На элитрах уворот клавишами пуст, а его вызов обрывает таран и перелёт (стенд 21.10, слот 30: «cancelled by evade»
-  // в воздухе); от стрел и зелий в полёте уходит само тело (руль тарана).
-  if (pos[b.name]?.gliding) return
   const d = m.dangers || {}
   let seen = observations.get(b)
   if (!seen || seen.round !== ctx.round) { if (seen) failures.delete(b); seen = { round: ctx.round, at: -Infinity, episodes: new Map() }; observations.set(b, seen) }
   const at = m.observedAt ?? Date.now()
   if (at < seen.at) return
   seen.at = at
+  // Драйвер читает давление для цены пути и лута; прицел и полёт снаряда не забирают дело у тела.
+  b.arrowThreat = { at, active: !!d.aims?.length || !!d.arrows?.length || !!d.potions?.length }
+  if (pos[b.name]?.gliding) return
+  // Секунда между прыжками на ветре — та же атака: бой/уворот уже отвечает, плану нельзя вставить stop или лечение.
+  if (b.maceDefense?.round !== ctx.round || b.maceDefense?.until <= Date.now()) delete b.maceDefense
+  if (d.smashes?.length) b.maceDefense = { round: ctx.round, name: d.smashes[0].name, until: Date.now() + 1000 }
   const episodes = new Map<string, any>()
-  for (const [kind, sources] of [['fl', d.floor], ['tn', d.blasts], ['wb', d.web], ['sm', d.smashes], ['pt', d.potions], ['ar', d.arrows], ['am', d.aims], ['lv', d.lava?.filter(v => v.d <= 1.5)], ['cl', d.clouds]] as const) for (const src of sources || []) {
-    // shortcut: wire danger has no projectile ID; launch position plus reset flight ETA distinguishes repeated throws until the protocol includes IDs.
-    const key = `${kind}:${src.id ?? src.entityId ?? (kind === 'am' || kind === 'sm' ? src.name + ':' + (src.weapon || '') : JSON.stringify([src.name, src.from || src.at]))}`
+  for (const [kind, sources] of [['fl', d.floor], ['tn', d.blasts], ['wb', d.web], ['sm', d.smashes], ['lv', d.lava?.filter(v => v.d <= 1.5)], ['cl', d.clouds]] as const) for (const src of sources || []) {
+    const key = `${kind}:${src.id ?? src.entityId ?? (kind === 'sm' ? src.name + ':' + (src.weapon || '') : JSON.stringify([src.name, src.from || src.at]))}`
     const old = seen.episodes.get(key)
-    const episode = old && !(kind !== 'am' && src.ticks > old.src.ticks) ? old : { key, kind, handled: false, from: { ...m.pos } }
+    const episode = old && !(kind !== 'sm' && src.ticks > old.src.ticks) ? old : { key, kind, handled: false, from: { ...m.pos } }
     episode.src = src; episodes.set(key, episode)
   }
   seen.episodes = episodes
   // Ноги всё ещё в лаве и выход кончился «не вышел» — снова выход, где бы ни стоял (иначе тот же эпизод ждёт сдвига на 1.5 бл.).
   // Только по ответу выхода: датчик даёт d = 0 и стоящему на краю ямы (рамка тела над лавой, ноги на полу) — выход отвечал
   // «вышел» сразу, и повтор шёл до 48 раз в секунду, срывая бои (стенд 15×15, a41 21.10: 1981 «🌋 0.0» у одного бота за минуту).
-  const ready = kind => [...episodes.values()].find(e => e.kind === kind && !e.queued && (!e.handled || !reactions.has(b) && (distance(e.from, m.pos) >= 1.5 || kind === 'lv' && e.src.d < 0.5 && b.lavaStuck || m.status && kind === 'am' && failures.get(b)?.size)))
-  const flE = ready('fl'), smE = ready('sm'), ptE = ready('pt'), arE = ready('ar'), amE = ready('am'), lvE = ready('lv'), clE = ready('cl')
-  const fl = flE?.src, sm = smE?.src, pt = ptE?.src, ar = arE?.src, am = amE?.src, lv = lvE?.src, cl = clE?.src
+  const ready = kind => [...episodes.values()].find(e => e.kind === kind && !e.queued && (!e.handled || !reactions.has(b) && (kind === 'sm' || distance(e.from, m.pos) >= 1.5 || kind === 'lv' && e.src.d < 0.5 && b.lavaStuck)))
+  const flE = ready('fl'), smE = ready('sm'), lvE = ready('lv'), clE = ready('cl')
+  const fl = flE?.src, sm = smE?.src, lv = lvE?.src, cl = clE?.src
   // Горящий динамит или блоки его цепочки рядом (датчик threats.blasts) — бег прочь от всех зарядов разом, пока они в
   // досягаемости (dodge_blast: конец по миру). Раньше арена динамит не видела вовсе: уходил только бой, и то от вагонетки
   // (пользователь 22.10: «взрываю динамит цепочкой, ставлю за ним — он не сворачивает вбок»). Идущий уход новые заряды
@@ -160,91 +163,81 @@ function onDanger (dz: DangerCtx, b, m) {
   }
   // Уход от динамита идёт — его не рвать: воронки от взрыва он обходит сам (stepSafe), прочее подождёт.
   if (blastBusy && !(lv && lv.d < 0.5)) return
-  // Паутина на теле — срезать (clear_web): в ней шаг вчетверо медленнее, ни уйти, ни догнать, а прочие реакции бесполезны
-  // (стенд бота-противника 22.10: паутина на боте — 10 с на месте под ударами, «бой ↔ бегство» каждую секунду). Пока
-  // режет — не перезапускать; нечем (ни меча, ни ножниц) — не браться.
-  const wb = [...episodes.values()].find(e => e.kind === 'wb')?.src
+  const maceBusy = b.maceDefense && b.last?.pending !== false &&
+    (b.last?.m === 'fight' && b.last.p?.target === b.maceDefense.name || b.last?.m === 'evade' && reactions.has(b) ||
+      b.last?.m === 'swarm_hold' && (b.shieldHold && b.shieldHold === reactions.get(b) || b.smashWeb && b.smashWeb === reactions.get(b)))
+  if (maceBusy && !(lv && lv.d < 0.5)) return
+  // В бою цену выхода считает webTurn; clear_web — внебоевой fallback, без отмены fight каждые 0.4 с.
+  const wbE = [...episodes.values()].find(e => e.kind === 'wb'), wb = wbE?.src
   const inv = pos[b.name]?.inv || {}
-  if (wb && !(lv && lv.d < 0.5) && !(b.webRun && reactions.get(b) === b.webRun) && Object.keys(inv).some(k => inv[k] > 0 && /_sword$|^shears$/.test(k))) {
-    log(`🕸 ${b.name}: в паутине (${wb.cells} кл.) — срезаю`)
+  const webTools = Object.keys(inv).filter(k => inv[k] > 0 && /_sword$|^shears$|^water_bucket$|^ender_pearl$/.test(k)).sort().map(k => `${k}:${inv[k]}`).join('|')
+  const webFight = b.last?.m === 'fight' && b.last.pending !== false
+  const webFoes = wb ? ctx.enemiesOf(b, m.pos) : []
+  // Контакт принадлежит бою; сближение во время резки считает тело по направленной скорости.
+  const webThreat = !!wb && (!!sm || !!d.aims?.length || webFoes.some(e => e.d <= 3))
+  const webInputs = `${JSON.stringify(wb)}|${webTools}|${webThreat}|${webFoes.map(e => `${e.n}:${Math.floor(e.p.x)},${Math.floor(e.p.y)},${Math.floor(e.p.z)}`).sort().join(';')}`
+  if (wbE && wbE.inputs !== webInputs) { wbE.inputs = webInputs; wbE.handled = false }
+  // Враг рядом, а резку вне боя он сорвал (direct_threat) или контакт уже идёт — в бой: выход из паутины под мечом считает
+  // webTurn (резка/вода/жемчуг/щит по цене). Игра пользователя 24.10: «застревают в паутине» — clear_web отказывал
+  // direct_threat 25 раз подряд, а боя никто не начинал.
+  const webFoe = webFoes.filter(e => !e.mob && e.d <= 8).sort((a, c) => a.d - c.d)[0]
+  if (wb && !wbE.handled && !webFight && (webThreat || wbE.threatened) && webFoe && !(lv && lv.d < 0.5) && !(b.shieldHold && reactions.get(b) === b.shieldHold) && !(b.webRun && reactions.get(b) === b.webRun)) {
+    wbE.handled = true; wbE.threatened = false
+    log(`🕸⚔ ${b.name}: в паутине, ${webFoe.n} в ${webFoe.d.toFixed(1)} бл. — выход из боя (webTurn)`)
     const token = dz.beginReaction(b); b.webRun = token
-    b.c.call('clear_web', {}).then(r => { const x = r?.detail || r; if (dz.ownsReaction(b, token) && x && !x.ok) log(`🕸 ${b.name}: паутину не срезал — ${x.why || `${x.cut} из ${wb.cells}`}${r?.status && r.status !== 'done' ? ' ' + r.status : ''}`) })
+    b.c.call('fight', { target: webFoe.n, allowPlayer: true, allowRanged: true, timeoutSeconds: SEG_S, retreatAtHealth: 3 })
       .catch(() => {}).finally(() => { dz.endReaction(b, token); if (b.webRun === token) b.webRun = null })
     return
   }
-  if (b.webRun && reactions.get(b) === b.webRun) return
-  // Пол уходит из-под ног при враге рядом (датчик тела threats.floorDanger: опора исчезла или трескается) — сойти сразу,
-  // раньше всего, кроме выхода из лавы: в дыру летят за тик (игра пользователя 22.10: «ломаю блоки под ними — они в дырки
-  // улетают, ничего не делают»).
-  if (fl && !(lv && lv.d < 0.5)) {
-    flE.handled = true; flE.from = { ...m.pos }
-    log(`🕳 ${b.name}: пол уходит (${fl.holes} бл.), рядом ${fl.name} — схожу`)
-    // Прочь от дыры, без спуска и копки: вниз — это и есть его ловушка.
-    ctx.dodgeAway(b, m.pos, fl.at, 3, null, null, false, false)
+  if (wb && !wbE.handled && !webFight && !webThreat && !(lv && lv.d < 0.5) && !(b.shieldHold && reactions.get(b) === b.shieldHold) && !(b.webRun && reactions.get(b) === b.webRun)) {
+    wbE.handled = true; wbE.from = { ...m.pos }
+    log(`🕸 ${b.name}: в паутине (${wb.cells} кл.) — срезаю`)
+    const token = dz.beginReaction(b); b.webRun = token
+    b.c.call('clear_web', { allies: dz.bots.filter(o => o.team === b.team).map(o => o.name) }).then(r => { const x = r?.detail || r; if (!dz.ownsReaction(b, token)) return; if (r?.status && r.status !== 'done') wbE.handled = false; if (x?.why === 'direct_threat') { wbE.threatened = true; wbE.handled = false }; if (x && !x.ok) log(`🕸 ${b.name}: паутину не срезал — ${x.why || `${x.cut} из ${wb.cells}`}${r?.status && r.status !== 'done' ? ' ' + r.status : ''}`) })
+      .catch(() => { if (dz.ownsReaction(b, token)) wbE.handled = false }).finally(() => { dz.endReaction(b, token); if (b.webRun === token) b.webRun = null })
     return
   }
-  // Ноги в лаве (d < 0.5) — выход раньше всего: уворот от зелья, стрейф от прицела и шаг от стрелы, пока тело горит, —
-  // смерть (a39: «🌋 0.0 → 🧪↯ рывок → ☠ tried to swim in lava»). Пока выход идёт (lavaBusy), других реакций не начинаю.
+  if (b.webRun && reactions.get(b) === b.webRun) return
+  // Видно разрушение опоры или слышно близкую копку (датчик тела threats.floorDanger) — сойти сразу,
+  // раньше всего, кроме выхода из лавы: в дыру летят за тик (игра пользователя 22.10: «ломаю блоки под ними — они в дырки
+  // улетают, ничего не делают»).
+  // Щит к булаве уже поднят — не сходить: шаг рвёт щит, а удар сверху — ваншот, дыра — нет (игра пользователя 22.10: «пол
+  // уходит — схожу» 12 раз за секунду, щит опускался, убит булавой). Щит ещё не поднят — сперва сойти, как прежде.
+  // Не чаще раза в 1.5 с: та же дыра рядом после шага снова «уходит», и сходы шли по 12 за секунду, обрывая бой под его мечом.
+  if (fl && !(lv && lv.d < 0.5) && !(b.shieldHold && reactions.get(b) === b.shieldHold) && !(Date.now() - (b.floorAt || 0) < 1500)) {
+    flE.handled = true; flE.from = { ...m.pos }; b.floorAt = Date.now()
+    log(`🕳 ${b.name}: ${fl.signal === 'sound' ? 'слышу копку рядом' : `вижу, как пол уходит (${fl.holes} событий)`} — схожу`)
+    // Прочь от дыры, без спуска и копки: вниз — это и есть его ловушка.
+    ctx.dodgeAway(b, m.pos, fl.at, 3, null, null, false, false, 0)
+    return
+  }
+  // Лава под ногами требует отдельного выхода; прицел и снаряды остаются параллельным слоем тела.
   const inLava = !!lv && lv.d < 0.5
   if (b.lavaBusy && reactions.has(b)) return
-  const src = inLava ? lv : sm || pt || ar || am || lv || cl
-  // Повтор той же опасности уже отсеян эпизодом; другая лава/облако тоже могут потребовать нового выхода.
+  const src = inLava ? lv : sm || lv || cl
   if (!src) return
-  if (src === am && (busy.has(b.name) || seen.checking)) return
-  // Щит к булаве поднят — стрела и прицел его не снимают: щит держит и стрелу спереди, а уворот открывает удару сверху (стенд
-  // 22.10, c25: чемпион трижды поднял щит к падающему, ушёл в уворот от стрелы — и булава добила его в открытую).
-  if ((src === ar || src === am) && b.shieldHold && reactions.get(b) === b.shieldHold) return
-  if (reactions.has(b) && /^(pearl_to|fly_to|wind_jump)$/.test(b.last?.m || '') && !sm && !pt && !cl && !lv) return
-  if (b.juking && !sm && !pt && !cl && !lv) return
-  // Лезет к цели (столб, прокоп): от прицела и стрелы не дёргаться — рывок со столба хуже попадания; зелье и булава — да.
-  if (b.climbing && !sm && !pt && !cl && !inLava) return
-  const st = b.dodgeStyle || (b.dodgeStyle = { delay: 40 + Math.random() * 160, skip: 0.05 + Math.random() * 0.15, jumpy: 0.5 + Math.random() * 0.5 })
-  const episode = inLava ? lvE : smE || ptE || arE || amE || lvE || clE
-  // Вторая рука в состоянии тела — { item, durability } (armor.readOffHand). Чтение .name давало «нет щита», как только щит
-  // надет: первая реакция на булаву поднимала щит, следующая — рывок (пользователь 21.10: «в последний момент вместо щита
-  // убегать начинают — достаю и ваншот»; 31 смерть от булавы за 15 мин).
+  if (b.climbing && !b.grabbing && !sm && !cl && !inLava) return
+  const episode = inLava ? lvE : smE || lvE || clE
+  // Вторая рука в состоянии тела — { item, durability }, а не { name }.
   const hand2 = pos[b.name]?.offHand
   const shieldNow = (pos[b.name]?.inv?.shield || 0) > 0 || /shield/.test(String(typeof hand2 === 'string' ? hand2 : hand2?.item ?? hand2?.name ?? ''))
-  // В рукопашной (бой и враг ближе 4.5 бл.) от прицела и стрел не стрейфить: уворот рвёт бой (арена 14.10: один лучник
-  // прицелился — трое бросили свои схватки, ни одного удара; пользователь: «рои вырезают друг друга до конца»).
-  if ((src === am || src === ar) && b.last?.m === 'fight' && ctx.enemiesOf(b, m.pos).some(e => e.d <= 4.5 && !e.mob)) return
-  // Штурм, добивание, сброс — идущий в атаку не бросает её ради уворота от прицела и стрелы: бой сам держит щит и шаг (стенд
-  // 21.10, чемпион с луком: за 4 мин штурма 139 боёв синих оборвали evade/juke/wind_jump/peek_shot — урона ему ноль).
-  const t = b.swarmTask
-  if ((src === am || src === ar) && b.last?.m === 'fight' && t?.kind === 'fight' && (t.data?.assault || t.data?.finishing || t.data?.shove)) return
-  // Вплотную — бить; недоступный выход запоминается отдельно от других способов реакции.
-  if (src === am && (Math.random() < st.skip * 0.5 || distance(am.at, m.pos) <= 3)) return
-  const recheck = episode.handled && distance(episode.from, m.pos) < 1.5
   episode.handled = true; episode.from = { ...m.pos }
-  log(inLava ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — выхожу (lava_escape)` : sm ? `☂ ${b.name}: ${sm.name} падает на меня (сядет через ${sm.ticks} т; ${sm.dbg}) — ${shieldNow ? 'щит к нему' : 'рывок'}` : pt ? `🧪↯ ${b.name}: летит ${pt.name}${pt.role ? ' (' + pt.role + ')' : ''}, ляжет через ${pt.ticks} т — рывок` : lv ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — ${(pos[b.name]?.inv?.water_bucket || 0) > 0 ? 'заливаю водой' : 'отхожу'}` : am ? `🎯↔ ${b.name}: ${am.name} целится в меня (${am.weapon}) — стрейф` : ar ? `🏹↯ ${b.name}: летит ${ar.name}, через ${ar.ticks} т — шаг поперёк` : `🧪☁ ${b.name}: облако зелья — выхожу`)
-  // Стрела — шаг поперёк её полёта (side от тела), на 3 бл.
-  // Целится — зигзаг: шаг поперёк его линии, каждый раз в другую сторону (12.10: «стрейфить заранее, как только нацеливаюсь»).
-  // Лава рядом (12.10: «лаву водой — заранее»): ведро воды есть — залить и забрать воду, нет — отойти. Только соседняя клетка
-  // (≤ 1.5 бл.): ямы лавы на поле в 2–3 бл. рвали каждый поход мимо них рывком «отхожу» (арены 37–38, десятки за раунд) —
-  // путь pathfinder'а и так лаву обходит.
+  log(inLava ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — выхожу (lava_escape)` : sm ? `☂ ${b.name}: ${sm.name} падает на меня (сядет через ${sm.ticks} т; ${sm.dbg}) — ${shieldNow ? 'щит к нему' : inv.cobweb > 0 ? 'паутина и защита' : 'защита в бою'}` : lv ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — ${(pos[b.name]?.inv?.water_bucket || 0) > 0 ? 'заливаю водой' : 'отхожу'}` : `🧪☁ ${b.name}: облако зелья — выхожу`)
   if (src === lv) { dangerLava(dz, b, m, lv); return }
-  if (src === am) { dangerAim(dz, b, m, { am, st, seen, episode, recheck }); return }
-  if (src === ar) { ctx.dodgeAway(b, m.pos, { x: m.pos.x - ar.side.x, z: m.pos.z - ar.side.z }, 3, null, ar.from); return }
   // Булава сверху, а щит есть (14.10: «друг с булавой спокойно их убил в полёте, они даже не смотрели» — рывок за 15 т, а он
   // правит полёт и добивает через секунду: 71 удар замечен, рывки не спасли). mace_smash нет в bypasses_shield (jar 1.21.11):
-  // лицом к падающему и щит до посадки, потом бить его же. Щит встаёт за 5 т — позже, или щита нет, — рывок, как прежде.
+  // лицом к падающему и щит до посадки, потом бить его же.
   // Щит есть — держать его, пока его удар сверху виден (стойка whileSmash): рывок за 6–16 т его не уводит (правит полёт), а
   // щит держит и удар прямо сверху. Уже держу — не перезапускать: новый подъём — ещё 5 т без блока. Поздно (< 6 т) и идёт
-  // бой — не рвать его: бой сам держит щит против булавы (mace/defend).
-  if (sm && shieldNow) {
-    if (b.shieldHold && reactions.get(b) === b.shieldHold || sm.ticks < 6 && b.last?.m === 'fight') return
-    dangerShieldSmash(dz, b, m, sm); return
+  // бой — не рвать его: maceBusy выше сохраняет ответ тела (mace/defend).
+  if (sm && (shieldNow || inv.cobweb > 0)) {
+    if (b.shieldHold && reactions.get(b) === b.shieldHold || b.smashWeb && reactions.get(b) === b.smashWeb) return
+    dangerShieldSmash(dz, b, sm, shieldNow); return
   }
-  // Брызги ложатся в радиусе 4 (ThrownSplashPotion.applySplash), удар булавой — в 3.5: уйти надо на 4.5+ от точки. Ляжет
-  // скоро (≤ 12 тиков) — спринт лицом по ходу (спиной вперёд — шагом, замер potion-above-3: 56 % зелий в цель); есть
-  // время — пятиться, глядя на угрозу. От булавы — бежать, пока он не сел (mace-4: бой после рывка вёл назад под удар).
-  const off = Math.hypot(m.pos.x - src.at.x, m.pos.z - src.at.z)
-  // Без щита от булавы — бежать, только пока успеваем выйти из его досягаемости: 5 бл. от точки посадки спринтом 0.28 б/т
-  // и 4 т на разгон. В последний миг рывок не уводит — он правит полёт и бьёт в спину (игра пользователя 22.10: «либо
-  // убегать, но сразу, пока я ещё вверху»). Не успеваем — не дёргаться: идущий бой продолжается.
-  if (sm && sm.ticks < Math.max(0, 5 - off) / 0.28 + 4) return
-  const urgent = !!sm || (src.ticks ?? 99) <= 12
-  ctx.dodgeAway(b, m.pos, src.at, src === cl ? cl.r + 2 : Math.max(2.5, 4.8 - off, sm ? (sm.ticks + 3) * 0.3 : 0) + Math.random(), sm ? () => { if (geared(pos[b.name])) b.cur = sm.name } : null, urgent ? null : sm ? sm.from : pt ? pt.at : null, !!(sm || pt), true)
+  // Без щита — непрерывный ответ тела, а не рывок с просветом для лечения или возврата под булаву.
+  if (sm) { dangerFightSmash(dz, b, sm); return }
+  // Облако уже лежит на земле: выйти из его радиуса — отдельное дело, в отличие от летящего зелья.
+  ctx.dodgeAway(b, m.pos, cl.at, cl.r + 2, null, null, false, true)
 }
 
 function dangerLava (dz: DangerCtx, b, m, lv) {
@@ -270,133 +263,25 @@ function dangerLava (dz: DangerCtx, b, m, lv) {
   return
 }
 
-function dangerAim (dz: DangerCtx, b, m, { am, st, seen, episode, recheck }) {
-  const { ctx, arms, bots, pos, busy, out, deadNow, X, Y, Z, R, L, log, failures, retry, remember, beginReaction, ownsReaction, endReaction } = dz
-  b.strafe = Math.random() < 0.7 ? -(b.strafe || (Math.random() < 0.5 ? 1 : -1)) : (b.strafe || 1)
-  // Под обстрелом без ответа: уход определяется доступностью стрелка и оценкой боя.
-  const ranged = Object.keys(pos[b.name]?.inv || {}).some(n => /^(bow|crossbow)$/.test(n)) && (pos[b.name]?.inv?.arrow || 0) > 0
-  // Соло (люди против роя, 14.10: «с лука расстрелял — не уворачивались»): прочь — только от недосягаемого (выше 4+),
-  // иначе зигзагом на него (juke advance): бегство по прямой и стрейф на месте — тир для лучника.
-  // Слабый (лут, бегство, погоня) — только прочь: рывок к нему, жемчуг и бой из уворота ломали подготовку (Codex 15.10).
-  const prep = b.swarmTask?.kind === 'flee' || !!b.swarmTask?.data?.weak
-  const retreat = prep || !ranged && (am.at.y - m.pos.y > 4 || !SOLO && !ctx.swarmDriver.canEngage(b, am.name))
-  const advance = SOLO && !retreat
-  // Непрерывный джук тела (juke), пока он целится: рывки с паузами давали 80 % попаданий с 8 бл. (archer-roof-5).
-  const juke = () => {
-    if (retreat && Math.random() < 0.3) log(`🏃 ${b.name}: ${am.name} стреляет, а мне нечем — ухожу зигзагом`)
-    const token = beginReaction(b); b.juking = true
-    b.c.call('juke', { from: am.name, retreat, advance, jumpy: st.jumpy, maxTicks: advance ? 120 : 80 }).then(async r => { const d = r?.detail || r; if (ownsReaction(b, token) && (d?.ok === false || d?.segments === 0)) await remember(b, 'juke', m.pos, am.at, d, token) }).catch(() => {})
-      .finally(() => endReaction(b, token))
-  }
-  // Что в руках — то и в ход (12.10: «ветер — ускорять себя, жемчуг — ближе к стрелку и резко атаковать, блоками
-  // заставиться, на элитрах — если стоит тратить фейерверки; просто стрейфы — мало»). Вес — от положения (он выше,
-  // далеко) и запаса, и у каждого броска — свой случай: одинаково не ходят.
-  // Бой из уворота держит busy до ответа (иначе следующий уворот рвёт его; Codex 15.10).
-  const fightHim = () => {
-    const token = beginReaction(b)
-    return (ctx.swarmDriver.canEngage(b, am.name)
-      ? b.c.call('fight', { target: am.name, allowPlayer: true, allowRanged: true, timeoutSeconds: SEG_S, retreatAtHealth: 3, arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: R, killY: arms ? Y + L.y0 - 3 : undefined } })
-      : b.c.call('flee', { from: [am.name], timeoutSeconds: 3, safeDist: 14 })).catch(() => {}).finally(() => endReaction(b, token))
-  }
-  const act = (key, k, call, ok, after) => {
-    const token = beginReaction(b)
-    call().then(async r => { if (!ownsReaction(b, token)) return false; const d = r?.detail || r || {}; log(`${k} ${b.name} от прицела ${am.name}: ${ok(d) ? 'вышло' : 'нет'} — ${[d.how, d.stop, d.why, d.error].filter(Boolean).map(x => typeof x === 'object' ? JSON.stringify(x).slice(0, 160) : x).join(' ') || (d.rise != null ? 'взлёт ' + d.rise : '')}`); if (!ok(d)) await remember(b, key, m.pos, am.at, d, token); return ok(d) })
-      .catch(async e => { if (ownsReaction(b, token)) await remember(b, key, m.pos, am.at, { error: e.message }, token); return false }).then(async good => {
-        const owned = ownsReaction(b, token)
-        if (!endReaction(b, token) || !owned || b.last?.m === 'fight' || seen.episodes.get(episode.key) !== episode) return
-        if (good && after) after()
-        else if (!good) {
-          const action = b.last
-          const canJuke = !failures.get(b)?.has('juke') || await retry(b, 'juke', pos[b.name]?.p || m.pos, am.at)
-          if (canJuke && b.last === action && !busy.has(b.name) && ctx.round === seen.round && !ctx.between && seen.episodes.get(episode.key) === episode) juke()
-        }
-      }).catch(() => {})
-  }
-  const go = async () => {
-    if (ctx.between || ctx.round !== seen.round || seen.episodes.get(episode.key) !== episode || out.has(b.name) || deadNow.has(b.name)) return
-    if (busy.has(b.name) || seen.checking) { episode.handled = false; return }
-    // За задержку уворота мог начаться бой вплотную — не рвать его (Codex 15.10: «целится → стрейф → 0/0 cancelled»).
-    if (b.last?.m === 'fight' && ctx.enemiesOf(b, pos[b.name]?.p || m.pos).some(e => e.d <= 4.5 && !e.mob)) return
-    if (prep) {
-      if (!failures.get(b)?.has('juke')) { juke(); return }
-      seen.checking = true
-      const action = b.last
-      try {
-        const canJuke = await retry(b, 'juke', m.pos, am.at)
-        const canCover = !canJuke && (!recheck || failures.get(b)?.has('cover')) && await retry(b, 'cover', m.pos, am.at)
-        if (b.last !== action || busy.has(b.name) || ctx.round !== seen.round || seen.episodes.get(episode.key) !== episode) return
-        if (canJuke) juke()
-        else if (canCover) act('cover', '🧱', () => b.c.call('take_cover', { from: am.name, maxRun: 7 }), d => !!d.ok, null)
-      } finally { seen.checking = false }
-      return
-    }
-    if (ctx.swarmDriver.panic(b)) {
-      const token = beginReaction(b)
-      b.c.call('flee', { from: [am.name], timeoutSeconds: 3, safeDist: 14 }).catch(() => {}).finally(() => endReaction(b, token))
-      return
-    }
-    const me = pos[b.name] || {}; const inv = me.inv || {}
-    const dH = Math.hypot(am.at.x - m.pos.x, am.at.z - m.pos.z); const above = am.at.y - m.pos.y; const dist = Math.hypot(dH, above)
-    const opts: { k: string, w: number }[] = [{ k: 'juke', w: 2 }]
-    if ((inv.ender_pearl || 0) > 0 && dist >= 8 && dist <= 45 && (above > 3 || dH > 14)) opts.push({ k: 'pearl', w: above > 3 ? 5 : 3 })
-    if ((inv.elytra || me.armor?.torso === 'elytra') && (inv.firework_rocket || 0) >= 4 && dist > 14) opts.push({ k: 'fly', w: 1.5 + (above > 6 ? 1.5 : 0) })
-    // Против людей (соло) ветер — только вверх к нему: рывок вбок от трезубца уводил из боя (стенд 14.10, поле: 39 рывков,
-    // контакт 18 % времени); уворот — зигзагом на него (juke advance).
-    // У булавы заряды — на взлёт и удар с падения (стенд 21.10, чемпион: «не взлетаю — нет булавы или заряда», а заряды ушли
-    // на уворот от прицела): уворот ветром — только из лишних, сверх двух на взлёт с повтором.
-    if ((inv.wind_charge || 0) > (inv.mace ? 2 : 0) && (!SOLO || above > 2 && above < 8 && dH < 10)) opts.push({ k: 'wind', w: above > 2 && above < 8 && dH < 10 ? 4 : 1.5 })
-    if (above > 3 || !ranged && !SOLO) opts.push({ k: 'cover', w: above > 3 ? 3.5 : 1.5 })
-    // Есть лук — ответить из-за стенки в прыжке (13.10: «ставит блоки, прыгает и стреляет — очень крутой приём»).
-    if (ranged && dist >= 8 && dist <= 35) opts.push({ k: 'peek', w: 3 })
-    // Щит к нему (DeepSeek t7, стенд 21.10: стрелы — главный убийца синих, 60 из 131): стрела без Пронзания в щит не проходит
-    // целиком (damage-model shieldBlocks), а зигзаг с 8 бл. ловил 80 % выстрелов. Щит встаёт за 5 т — до выстрела успевает.
-    // Вплотную (≤ 6 бл.) — не стойка со щитом: он с луком в упор переключается на меч, а бот стоял под ударами и только
-    // после них бежал (игра пользователя 22.10: «просто стоят, когда их атакуют, чего-то ждут»; 18 боёв за 2 раунда
-    // оборвал «щит к нему»). Вторая рука в состоянии тела — { item }.
-    const shield = (inv.shield || 0) > 0 || /shield/.test(String(me.offHand?.item ?? me.offHand?.name ?? me.offHand ?? ''))
-    if (shield && dist > 6) opts.push({ k: 'shield', w: 6 })
-    if (failures.get(b)?.size) {
-      seen.checking = true
-      const action = b.last
-      try {
-        const failed = opts.map(o => failures.get(b)?.has(o.k))
-        const allowed = await Promise.all(opts.map(o => retry(b, o.k, m.pos, am.at)))
-        if (b.last !== action || busy.has(b.name) || ctx.round !== seen.round || seen.episodes.get(episode.key) !== episode || ctx.between) return
-        for (let k = opts.length - 1; k >= 0; k--) if (!allowed[k] || recheck && !failed[k]) opts.splice(k, 1)
-      } finally { seen.checking = false }
-      if (!opts.length) return
-    }
-    let sum = 0; for (const o of opts) { o.w *= 0.5 + Math.random(); sum += o.w }
-    let r = Math.random() * sum; const pick = opts.find(o => (r -= o.w) <= 0) || opts[0]
-    const at = { x: am.at.x, y: am.at.y, z: am.at.z }
-    if (pick.k === 'pearl') act('pearl', '🟣', () => b.c.call('pearl_to', { to: at, edgeOk: true, yTop: 45 }), d => !!d.ok, fightHim)
-    // Полёт — в границах Колизея (стенд 22.10, 15×15 на элитрах: 15 из 71 смерти — «за пределами Колизея», улёт без arena).
-    else if (pick.k === 'fly') act('fly', '🪽', () => b.c.call('fly_to', { at, timeoutSeconds: 20, arena: { x: X + 0.5, y: Y, z: Z + 0.5, r: R, killY: arms ? Y + L.y0 - 3 : undefined } }), d => !!d.ok, fightHim)
-    else if (pick.k === 'wind') {
-      const up = above > 2 && above < 8 && dH < 10
-      const sd = Math.random() < 0.5 ? 1 : -1
-      const to = up ? at : { x: m.pos.x + am.side.x * sd * 6, z: m.pos.z + am.side.z * sd * 6 }
-      act('wind', '💨', () => b.c.call('wind_jump', up ? { up: true, toward: to } : { toward: to }), d => (d.used || 0) > 0, up ? fightHim : null)
-    } else if (pick.k === 'cover') act('cover', '🧱', () => b.c.call('take_cover', { from: am.name, maxRun: 7 }), d => !!d.ok, null)
-    else if (pick.k === 'peek') act('peek', '🏹🧱', () => b.c.call('peek_shot', { target: am.name, shots: 2 }), d => !!d.ok, null)
-    else if (pick.k === 'shield') act('shield', '🛡', () => b.c.call('swarm_hold', { shield: true, requireShield: true, enemies: [am.name], allies: bots.filter(o => o.team === b.team).map(o => o.name), seconds: 1.5 }), d => d.ok !== false && (d.shield?.blockingSeconds ?? 0) > 0, null)
-    else juke()
-  }
-  episode.queued = true
-  setTimeout(() => { episode.queued = false; go().catch(() => {}) }, Math.random() * st.delay)
-  return
+function dangerFightSmash (dz: DangerCtx, b, sm) {
+  const token = dz.beginReaction(b)
+  b.c.call('fight', { target: sm.name, allowPlayer: true, allowRanged: true, timeoutSeconds: SEG_S, retreatAtHealth: 3 })
+    .catch(() => {}).finally(() => dz.endReaction(b, token))
 }
 
-function dangerShieldSmash (dz: DangerCtx, b, m, sm) {
-  const { ctx, bots, pos, beginReaction, ownsReaction, endReaction } = dz
+function dangerShieldSmash (dz: DangerCtx, b, sm, shield = true) {
+  const { bots, pos, beginReaction, ownsReaction, endReaction } = dz
   const token = beginReaction(b)
-  b.shieldHold = token
+  if (shield) b.shieldHold = token
+  else b.smashWeb = token
+  const defend = () => { if (ownsReaction(b, token)) dangerFightSmash(dz, b, sm) }
   // Держать, пока тело видит его удар сверху (whileSmash — датчик threats.smashes), а не по первой оценке посадки: он
   // подскакивает снова (заряд ветра, «Порыв ветра»), щит опускался между прыжками, новый подъём за 1–2 т до удара не держит
   // (5 т задержки), и бот в просвет бежал (игра пользователя 22.10: «до конца щитом прикрываться, пока я не упаду»).
   // seconds — только предохранитель.
-  b.c.call('swarm_hold', { shield: true, requireShield: true, enemies: [sm.name], allies: bots.filter(o => o.team === b.team).map(o => o.name), whileSmash: sm.name, seconds: 20 })
-    .then(r => { if (!ownsReaction(b, token)) return; const d = r?.detail || r; if (d?.ok === false && sm.ticks >= 12) ctx.dodgeAway(b, m.pos, sm.at, 3.5, null, null, true, true); else if (geared(pos[b.name])) b.cur = sm.name })
-    .catch(() => {}).finally(() => { if (b.shieldHold === token) b.shieldHold = null; endReaction(b, token) })
+  b.c.call('swarm_hold', { shield, requireShield: shield, enemies: [sm.name], allies: bots.filter(o => o.team === b.team).map(o => o.name), whileSmash: sm.name, seconds: 20,
+    ...((pos[b.name]?.inv?.cobweb || 0) > 0 ? { webSmash: sm.name } : {}) })
+    .then(r => { if (!ownsReaction(b, token)) return; if (!shield) { defend(); return }; const d = r?.detail || r; if (d?.ok === false && !/^(completed|timeout)$/.test(d?.why || '')) { dz.log(`☂✖ ${b.name}: щит к ${sm.name} снят за ${d.heldSeconds ?? '?'} с (блок ${d.shield?.blockingSeconds ?? '?'} с) — ${d.why}${d.shieldWhy ? ' (' + d.shieldWhy + ')' : ''}${r?.by ? ' by ' + JSON.stringify(r.by) : ''}`); defend() } else if (geared(pos[b.name])) b.cur = sm.name })
+    .catch(defend).finally(() => { if (b.shieldHold === token) b.shieldHold = null; if (b.smashWeb === token) b.smashWeb = null; endReaction(b, token) })
   return
 }

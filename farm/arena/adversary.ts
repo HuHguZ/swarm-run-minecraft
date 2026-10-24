@@ -5,7 +5,7 @@
 // креативе, цепочку динамита за убегающим, булаву сверху, лук издали, паутину на бота. Всё время считает стояние: бот ближе
 // 7 бл. ко мне секунду и дольше не двигается, не бьёт, не держит щит и не ест — «стоит» (время — для лога драйвера).
 // Итог сценария — строка «📋 {json}», общий — «📊 {json}».
-//   node dist/farm/arena/adversary.js <слот> [rush,undermine,tnt,mace,bow,web,idle,pit,tntlate,moat,room] [минут] [имя]
+//   node dist/farm/arena/adversary.js <слот> [rush,undermine,tnt,mace,bow,web,idle,pit,tntlate,moat,room,rim,pearl,launch] [минут] [имя]
 import * as path from 'path'
 import { REPO_ROOT } from '../../daemon/src/paths'
 import { rcon } from './server'
@@ -76,7 +76,7 @@ bot.on('physicsTick', () => {
 
 async function setMode (m: string) {
   // Полёт креатива у mineflayer — тяжесть 0 в его физике: без stopFlying в выживании бот висел над целью (булава не падала).
-  if (m !== 'creative') { try { bot.creative.stopFlying() } catch {} }
+  if (m !== 'creative' && bot.physics.gravity === 0) { try { bot.creative.stopFlying() } catch {} }
   await cmd(`gamemode ${m} ${NAME}`)
   for (let k = 0; k < 20 && bot.game.gameMode !== m; k++) await sleep(100)
 }
@@ -249,8 +249,13 @@ async function web () {
 
 // Стою среди них, не бью (человек осматривается, ест, перекладывает вещи): 10 с у ближайшего бота. Замер: сколько ударов
 // получил я, сколько ботов в 6 бл. за это время ни разу не махнули.
+// ADV_IDLE_S — сколько стоять (по умолчанию 10 с); ADV_ARMOR=1 — надеть незерит с Защитой IV (сильный АФК-красный: пользователь
+// 24.10 «заспавни сильного бота, пусть стоит АФК, а боты думают, что с ним делать» — проверка сброса/подкопа).
+const IDLE_MS = Number(process.env.ADV_IDLE_S || 10) * 1000
 async function idle () {
   await setMode('survival'); await immortal(); await hold('netherite_sword')
+  if (process.env.ADV_ARMOR === '1') for (const [slot, it] of [['head', 'helmet'], ['chest', 'chestplate'], ['legs', 'leggings'], ['feet', 'boots']])
+    await cmd(`item replace entity ${NAME} armor.${slot} with minecraft:netherite_${it}[enchantments={protection:4}]`)
   const t = nearest(e => dist(e) < 40)
   if (!t) return { skip: 'никого рядом' }
   // Встать на пол рядом, а не в стену или яму: телепорт «~2 ~ ~2» ставил меня в колонну или на 2 бл. ниже, и боты честно не
@@ -259,13 +264,91 @@ async function idle () {
     return f?.boundingBox === 'empty' && h?.boundingBox === 'empty' && g?.boundingBox === 'block' && !/lava|fire|cobweb/.test(f.name + g.name) }
   const spot = [[2, 2], [-2, 2], [2, -2], [-2, -2], [3, 0], [-3, 0], [0, 3], [0, -3]].map(([dx, dz]) => t.position.offset(dx, 0, dz).floored()).find(free)
   await cmd(spot ? `tp ${NAME} ${spot.x + .5} ${spot.y} ${spot.z + .5}` : `execute at ${t.username} run tp ${NAME} ~2 ~ ~2`); await sleep(300)
+  const from = bot.entity.position.clone()
+  say(`🧪 idle ${IDLE_MS / 1000} с: ${from.x.toFixed(2)},${from.y.toFixed(2)},${from.z.toFixed(2)} у ${t.username}`)
   const me0 = hurt.get(NAME) || 0, t0 = Date.now(), seen = new Map<string, number>()
-  while (Date.now() - t0 < 10000) {
+  while (Date.now() - t0 < IDLE_MS && bot.entity) {
     await sleep(100)
     for (const e of foes()) if (dist(e) < 6 && !seen.has(e.username)) seen.set(e.username, watch.get(e.username)?.swing ?? -99)
   }
   const idlers = [...seen].filter(([n, s]) => (watch.get(n)?.swing ?? -99) <= s).map(([n]) => n)
-  return { near: seen.size, hitMe: (hurt.get(NAME) || 0) - me0, idlers: idlers.length, who: idlers.slice(0, 6).join(',') }
+  return { from, to: bot.entity?.position, near: seen.size, hitMe: (hurt.get(NAME) || 0) - me0, idlers: idlers.length, who: idlers.slice(0, 6).join(',') }
+}
+
+// Край гребня (проверка сброса ветром, пользователь 24.10): стою на внешнем краю верхнего яруса Колизея и подпрыгиваю, как
+// живой игрок в бою; бессмертен (Сопротивление), но упал ниже линии смерти — драйвер убьёт, как любого. ADV_RIM="x z" —
+// точки через «;» (по умолчанию запад и восток гребня у центра 600 600). Замер: самая низкая высота, умер ли, сколько ударов.
+async function rim () {
+  await setMode('survival'); await immortal(); await hold('netherite_sword')
+  if (process.env.ADV_ARMOR === '1') for (const [slot, it] of [['head', 'helmet'], ['chest', 'chestplate'], ['legs', 'leggings'], ['feet', 'boots']])
+    await cmd(`item replace entity ${NAME} armor.${slot} with minecraft:netherite_${it}[enchantments={protection:4}]`)
+  const spots = (process.env.ADV_RIM || '526.5 600.5;673.5 600.5;600.5 527.5;600.5 672.5').split(';').map(s => s.trim().split(/\s+/).map(Number))
+  let from: any = null
+  for (const [x, z] of spots) {
+    await cmd(`tp ${NAME} ${x} 165 ${z}`); await sleep(2500)
+    for (let k = 0; k < 30 && !bot.entity?.onGround; k++) await sleep(100)
+    if (bot.entity?.onGround && bot.entity.position.y > 145) { from = bot.entity.position.clone(); break }
+  }
+  if (!from) return { skip: 'гребень не нашёлся' }
+  say(`🧪 rim ${IDLE_MS / 1000} с: ${from.x.toFixed(2)},${from.y.toFixed(2)},${from.z.toFixed(2)}`)
+  const me0 = hurt.get(NAME) || 0, t0 = Date.now(), d0 = dead.get(NAME) ?? -1
+  let minY = from.y, jumps = 0
+  while (Date.now() - t0 < IDLE_MS && bot.entity && (dead.get(NAME) ?? -1) === d0) {
+    await sleep(100)
+    minY = Math.min(minY, bot.entity.position.y)
+    if (bot.entity.onGround && (Date.now() - t0) % 2000 < 100) { bot.setControlState('jump', true); await sleep(150); bot.setControlState('jump', false); jumps++ }
+  }
+  const died = (dead.get(NAME) ?? -1) !== d0 || minY < from.y - 30
+  return { from, minY: +minY.toFixed(1), died, jumps, hitMe: (hurt.get(NAME) || 0) - me0 }
+}
+
+// Жемчуг (караул жемчуга роя, пользователь 24.10): на поле бросаю жемчуг на 10–20 бл. в случайную сторону раз в ~6 с.
+// Замер: сколько бросков, сколько раз в 1.5 с после появления рядом (≤ 3 бл.) уже стоял бот — «встретили».
+async function pearl () {
+  await setMode('survival'); await immortal()
+  await cmd(`give ${NAME} minecraft:ender_pearl 16`); await sleep(300)
+  await cmd(`tp ${NAME} 600.5 128 600.5`); await sleep(2500)
+  const t0 = Date.now(); let throws = 0, met = 0
+  const me0 = hurt.get(NAME) || 0
+  while (Date.now() - t0 < IDLE_MS && bot.entity) {
+    const it = bot.inventory.items().find((i: any) => i.name === 'ender_pearl')
+    if (!it) { await cmd(`give ${NAME} minecraft:ender_pearl 16`); await sleep(400); continue }
+    await bot.equip(it, 'hand').catch(() => {})
+    await bot.look(Math.random() * 2 * Math.PI, 0.35 + Math.random() * 0.25, true)
+    const from = bot.entity.position.clone()
+    bot.activateItem(); throws++
+    let landed = false
+    for (let k = 0; k < 40 && !landed; k++) { await sleep(100); landed = bot.entity.position.distanceTo(from) > 3 }
+    if (landed) {
+      let ok = false
+      for (let k = 0; k < 15 && !ok; k++) { await sleep(100); ok = foes().some(e => dist(e) <= 3) }
+      if (ok) met++
+      say(`🟣 жемчуг ${throws}: ${landed ? `сел ${bot.entity.position.x.toFixed(0)},${bot.entity.position.y.toFixed(0)},${bot.entity.position.z.toFixed(0)}` : 'не сел'}${ok ? ', встретили' : ''}`)
+    }
+    await hold('netherite_sword'); await sleep(4500)
+  }
+  return { throws, met, hitMe: (hurt.get(NAME) || 0) - me0 }
+}
+
+// Взлёт (жонглирование роя, пользователь 24.10: «подлетел высоко — закидывают, чтобы поднялся выше и улетел с арены»):
+// на поле среди ботов раз в ~5 с заряд ветра себе под ноги и прыжок — как игрок с булавой. Замер: высшая точка, вылетел ли.
+async function launch () {
+  await setMode('survival'); await immortal()
+  await cmd(`give ${NAME} minecraft:wind_charge 32`); await sleep(300)
+  const near = nearest(); if (near) await cmd(`execute at ${near.username} run tp ${NAME} ~3 ~ ~`); await sleep(1500)
+  const t0 = Date.now(), y0 = bot.entity.position.y, d0 = dead.get(NAME) ?? -1
+  let maxY = y0, minY = y0, launches = 0
+  while (Date.now() - t0 < IDLE_MS && bot.entity && (dead.get(NAME) ?? -1) === d0) {
+    const it = bot.inventory.items().find((i: any) => i.name === 'wind_charge')
+    if (it && bot.entity.onGround) {
+      await bot.equip(it, 'hand').catch(() => {})
+      await bot.look(bot.entity.yaw, -Math.PI / 2, true)
+      bot.setControlState('jump', true); bot.activateItem(); launches++
+      await sleep(120); bot.setControlState('jump', false)
+    }
+    for (let k = 0; k < 50; k++) { await sleep(100); maxY = Math.max(maxY, bot.entity.position.y); minY = Math.min(minY, bot.entity.position.y) }
+  }
+  return { launches, rise: +(maxY - y0).toFixed(1), minY: +minY.toFixed(1), died: (dead.get(NAME) ?? -1) !== d0 }
 }
 
 // Я в яме на 2 бл. ниже, в 2 бл. от бота (пользователь: стояли у края, цель ниже — держали копьё или махали мимо). 10 с жду.
@@ -386,7 +469,7 @@ async function room () {
   return { name, d0: +d0.toFixed(1), lookMs, moveMs, moved, hitMs }
 }
 
-const SCENES: Record<string, () => Promise<any>> = { rush, undermine, tnt, mace, bow, web, idle, pit, tntlate, moat, room }
+const SCENES: Record<string, () => Promise<any>> = { rush, undermine, tnt, mace, bow, web, idle, pit, tntlate, moat, room, rim, pearl, launch }
 const results: any[] = []
 bot.once('spawn', async () => {
   // Креатив ломает сразу; расчёт времени mineflayer падал на зачарованиях предмета в руке («enchantments.concat»).
@@ -409,7 +492,7 @@ bot.once('spawn', async () => {
     const f0 = freezes.length
     // Рой далеко (лутает по ярусам) — к ближайшему боту: сценариям нужны цели рядом.
     const near = nearest()
-    if (scene !== 'rush' && near && dist(near) > 30) { await setMode('survival'); await cmd(`execute at ${near.username} run tp ${NAME} ~ ~1 ~`); await sleep(1500) }
+    if (scene !== 'rush' && scene !== 'rim' && scene !== 'pearl' && scene !== 'launch' && near && dist(near) > 30) { await setMode('survival'); await cmd(`execute at ${near.username} run tp ${NAME} ~ ~1 ~`); await sleep(1500) }
     let r: any
     try { r = await fn() } catch (e: any) { r = { error: e.message } }
     stop()

@@ -35,6 +35,9 @@ export async function setupArmsMap (ctx: ArenaContext) {
       }
       const t1 = Date.now()
       for (let y = y0; y <= y1; y++) await rcon(i, `clone ${X + SX - h} ${y} ${Z - h} ${X + SX + h} ${y} ${Z + h} ${X - h} ${y} ${Z - h}`, 20000).catch(() => {})
+      // Выше копии — воздух до потолка мира (пользователь 23.10: «сверху блоки остаются, которые боты ставят, высоко очень»):
+      // копия кончается на y1, гребень постройки — +42, выше столбы и насесты ботов жили вечно. Слой 161×161 — одна fill.
+      for (let y = Y + 43; y <= 319; y++) await rcon(i, `fill ${X - h} ${y} ${Z - h} ${X + h} ${y} ${Z + h} minecraft:air`, 20000).catch(() => {})
       log(`гонка: Колизей восстановлен из копии за ${((Date.now() - t1) / 1000).toFixed(1)} с`)
     }
     bad = 0
