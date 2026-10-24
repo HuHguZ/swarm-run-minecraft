@@ -161,6 +161,26 @@ function requestStrategicYield (session, p: any = {}) {
   return { accepted: true, receivedAt }
 }
 
+// A guard snapshot belongs to one running intent; it never enters the intent queue or cancels its controller.
+function requestFightGuard (session, p: any = {}) {
+  const current = session.current
+  if (current?.name !== 'fight' || !current.ctl || current.ctl.aborted || current.ctl._ndFightClosed) return { accepted: false, reason: 'no active fight' }
+  for (const key of ['roundScope', 'fightId', 'target']) {
+    if (typeof p?.[key] !== 'string' || !p[key] || p[key] !== current.params?.[key]) return { accepted: false, reason: `${key} mismatch` }
+  }
+  const coordinate = n => Number.isFinite(n) && Math.abs(n) <= 30000000
+  const position = q => q && [q.x, q.y, q.z].every(coordinate)
+  if (!Array.isArray(p.digAvoid) || p.digAvoid.length > 4096 || p.digAvoid.some(q => !position(q) ||
+      ![q.x, q.y, q.z].every(Number.isInteger) || q.feetY !== undefined && !coordinate(q.feetY)) ||
+      p.swarmStand !== null && !position(p.swarmStand) ||
+      p.shoveAt !== undefined && p.shoveAt !== null && !position(p.shoveAt)) return { accepted: false, reason: 'invalid guard snapshot' }
+  const xyz = q => ({ x: q.x, y: q.y, z: q.z })
+  current.params.digAvoid = p.digAvoid.map(q => ({ ...xyz(q), ...(q.feetY !== undefined ? { feetY: q.feetY } : {}) }))
+  current.params.swarmStand = p.swarmStand === null ? null : xyz(p.swarmStand)
+  if (p.shoveAt !== undefined) current.params.shoveAt = p.shoveAt === null ? null : xyz(p.shoveAt)
+  return { accepted: true }
+}
+
 async function fight (session, ctl, opts: any = {}) {
   const w = watchFight(session.bot, ctl)
   const pctl = ctl
@@ -196,6 +216,7 @@ async function fight (session, ctl, opts: any = {}) {
     }
     return { ...r, shield: guard.report(), armor: guard.pre || undefined, mobs: guard.mobs || undefined }
   } finally {
+    pctl._ndFightClosed = true
     if (yieldState) { yieldState.pending = null; yieldState.closed = true }
     w.close()
     bot._ndNoMobAvoid = avoidWas
@@ -520,7 +541,7 @@ async function fightCorridor (fb: FightCtx) {
   return { timeout: true, target: label, swings, targetAlive: entity.isValid, stoodGround: stood || undefined }
 }
 
-export { fight, requestStrategicYield, watchFight, dressForFight, ARMOR_GAP, SWING_MS }
+export { fight, requestStrategicYield, requestFightGuard, watchFight, dressForFight, ARMOR_GAP, SWING_MS }
 export { HOSTILES, RANGED, trackAttackers, liveAttacker, findTarget, nearestHostile, countHostiles } from './combat/foes'
 export { corridorShape, sealCorridor, openRun, headroomAt, openSides, shieldFlanks } from './combat/corridor'
 export { retreat, coverSpots } from './combat/retreat'

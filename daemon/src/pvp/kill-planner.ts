@@ -224,7 +224,8 @@ function run (tpl, st, obs, P) {
       return { dt: sw + dm.BOW_FULL_TICKS + 1, outs: scale(bucket(outs), q) }
     }
     case 'rod': {
-      if (st.rodUsed || !obs.los || st.dist < 3.5 || st.dist > P.rodMax || foe.blocking) return null
+      // Поплавок цепляет без урона; щит влияет на последующий удар, а не на зацеп (FishingHook.onHitEntity).
+      if (st.rodUsed || !obs.los || st.dist < 3.5 || st.dist > P.rodMax) return null
       // Поплавок ~1.2–1.5 б/т: долетает за dist/1.3 тика + заброс; на зацепе — подсечка (тот же тик).
       const dt = sw + 2 + Math.ceil(st.dist / 1.3)
       const pulled = Math.max(2.2, st.dist * (1 - P.rodPullShare))

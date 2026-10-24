@@ -9,6 +9,8 @@ import * as gameClock from '../game-clock'
 // pathfinder.goto уводили в дыры и за упавшей вниз вещью).
 import { executeJump, ROUTE_FRAMES } from '../navigation/parkour'
 import { supportAt } from '../navigation/geometry'
+import { inPickup } from '../drops'
+import { fits, makeRoom } from '../pack'
 
 // Только лечение и регенерация по содержимому (13.10, соло-арена: «зельки неправильно кидают и сами себе урон наносят» —
 // бралось любое взрывное зелье, а в сундуках соло лежат и вред, и яд: «лечение под ноги» вредом себе и своим).
@@ -136,23 +138,35 @@ export async function tossTo (bot: any, ally: any, name: string, count = 1, aren
 // (брошенное игроком — 40 тиков). Без этого бросок «ложился рядом»: гонка 10.10 — 7 передач каптёра, подобрано 0.
 export async function pickup (bot: any, name: string | null, maxD = 6, arena?: any, ctl = { aborted: false }) {
   const me = bot.entity.position
+  const count = () => bot.inventory.items().filter((i: any) => !name || i.name === name).reduce((a: number, i: any) => a + i.count, 0)
+  let before = count()
   // Брошенное союзником у ног (передача роя, 14.10: «бросил, не подобрал» 46 из 59): предмет мал, и луч прицела его часто
   // не видит — в 3 бл. хватает близости; тип вещи приходит метаданными позже самой сущности — без типа тоже берём.
   const seen = (e: any) => { try { return e.position.distanceTo(me) < 3 || pick.canHit(bot, e, { range: maxD + 1 }) } catch { return false } }
-  const nameOf = (e: any) => { try { return e.getDroppedItem()?.name ?? null } catch { return null } }
+  const stackOf = (e: any) => { try { return e.getDroppedItem() ?? null } catch { return null } }
+  const nameOf = (e: any) => stackOf(e)?.name ?? null
   const find = () => (Object.values(bot.entities || {}).filter((e: any) => e && e.name === 'item' && e.position && e.position.distanceTo(me) <= maxD &&
     (!name || nameOf(e) === name || nameOf(e) === null) && seen(e)) as any[]).sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
   // Сущность брошенного приходит от сервера на тик-два позже броска: зовут сразу после него — «не вижу вещи» в 7 из 10.
   let it = find()
   for (let t = 0; t < 20 && !it && !ctl.aborted; t++) { await bot.waitForTicks(1); it = find() }
   if (ctl.aborted) return { ok: false, why: 'прервано' }
-  // Нет на земле, а в рюкзаке есть — уже подобрал сам по дороге (до проверки).
-  if (!it) return (name && bot.inventory.items().some((i: any) => i.name === name)) ? { ok: true, why: `уже подобрал ${name}` } : { ok: false, why: 'не вижу вещи' }
-  const before = bot.inventory.items().filter((i: any) => !name || i.name === name).reduce((a: number, i: any) => a + i.count, 0)
+  // Нет на земле, а рюкзак вырос — уже подобрал сам по дороге (до проверки).
+  if (!it) return count() > before ? { ok: true, why: `уже подобрал ${name || 'вещь'}` } : { ok: false, why: 'не вижу вещи' }
+  const item = nameOf(it) || name
+  if (!name && item) { name = item; before = count() }
+  const amount = stackOf(it)?.count || 1
+  // Полный рюкзак не подбирает даже у ног: освобождаем место только за счёт менее ценного, с резервами pack.
+  if (item && !fits(bot, item, amount)) {
+    await makeRoom(bot, { forItem: item, away: it.position })
+    if (ctl.aborted) return { ok: false, why: 'прервано' }
+    if (count() > before) return { ok: true, why: `подобрал ${name || 'вещь'}` }
+    if (!fits(bot, item, amount)) return { ok: false, why: 'нет места для ' + item }
+  }
   // Подбор — тело в блоке от вещи (рамка игрока + 1 бл.), так что цель — середина её клетки: вещь у стены лежит там, где
   // тело не встанет (unsupported_or_obstructed_target). Старт — с земли: получатель после отмены дела ещё в прыжке
   // (invalid_native_start). Вещь катится — второй подход к её новому месту (стенд 15×15, 21.10: передач дошло 6 из 28).
-  const there = () => { const d = it.position.minus(bot.entity.position); return Math.hypot(d.x, d.z) < 1 && Math.abs(d.y) < 1.5 }
+  const there = () => inPickup(bot.entity.position, it.position)
   const gone = () => it.isValid === false || !bot.entities[it.id]
   let why = 'не подобрал'
   for (let tries = 0; tries < 2 && !ctl.aborted && !gone(); tries++) {
@@ -166,8 +180,10 @@ export async function pickup (bot: any, name: string | null, maxD = 6, arena?: a
     }
     for (let t = 0; t < 45 && there() && !ctl.aborted && !gone(); t++) await bot.waitForTicks(1)
   }
+  // Исчезновение предмета — ещё не квитанция: слот приходит отдельно, а подобрать мог другой игрок.
+  for (let t = 0; gone() && count() <= before && t < 10 && !ctl.aborted; t++) await bot.waitForTicks(1)
   if (ctl.aborted) return { ok: false, why: 'прервано' }
-  const after = bot.inventory.items().filter((i: any) => !name || i.name === name).reduce((a: number, i: any) => a + i.count, 0)
+  const after = count()
   return { ok: after > before, why: after > before ? `подобрал ${name || 'вещь'}` : why }
 }
 

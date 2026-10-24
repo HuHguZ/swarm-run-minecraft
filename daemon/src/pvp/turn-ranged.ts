@@ -9,10 +9,23 @@ import { keyDir } from '../moves'
 import * as ranged from '../ranged'
 import * as read from '../read'
 import * as tempo from '../tempo'
-import { reachFrom, stepSafe } from './body'
+import { digStepSafe, reachFrom, stepSafe } from './body'
 import { findItem } from './potions'
 import { EYE, FAR, FIX, HIT_REACH, TICK_MS, cooldownMs } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+
+function rangedStep (ctx: DuelCtx, changes) {
+  const keys: Record<string, boolean> = {}
+  for (const k of ['forward', 'back', 'left', 'right']) {
+    keys[k] = changes[k] ?? ctx.bot.getControlState(k)
+    if (keys[k] && (!stepSafe(ctx.bot, keyDir(ctx.bot, k)) || !digStepSafe(ctx, keyDir(ctx.bot, k)))) keys[k] = false
+  }
+  const f = keyDir(ctx.bot, keys.forward ? 'forward' : keys.back ? 'back' : ''), s = keyDir(ctx.bot, keys.left ? 'left' : keys.right ? 'right' : '')
+  const n = Math.hypot(f.x + s.x, f.z + s.z)
+  if (n && !digStepSafe(ctx, { x: (f.x + s.x) / n, z: (f.z + s.z) / n })) for (const k of Object.keys(keys)) keys[k] = false
+  for (const k of Object.keys(keys)) ctx.set(k, keys[k])
+  if (!keys.forward) ctx.set('sprint', false)
+}
 
 // Подобрать стрелы.
 export async function arrowPickupTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -90,8 +103,7 @@ export async function crossbowTurn (ctx: DuelCtx, turn: TurnFrame) {
       onLoadTick: () => {
         strafeStep()
         set('forward', false); set('sprint', false)
-        set('left', ctx.strafeKey === 'left' && stepSafe(bot, keyDir(bot, 'left')))
-        set('right', ctx.strafeKey === 'right' && stepSafe(bot, keyDir(bot, 'right')))
+        rangedStep(ctx, { left: ctx.strafeKey === 'left', right: ctx.strafeKey === 'right' })
       },
       arrowCtx: {
         d, fs: fsX, player: true,
@@ -132,12 +144,10 @@ export async function crossbowTurn (ctx: DuelCtx, turn: TurnFrame) {
     }
     strafeStep()
     if (sawRelease()) { strafeStep(1.5, true); st.dodges++; used('ушёл с линии выстрела') }
-    const backK = (toMeK > 0.03 || d < 7) && stepSafe(bot, keyDir(bot, 'back'))
-    const fwdK = d > 14 && !backK && stepSafe(bot, keyDir(bot, 'forward'))
-    set('forward', fwdK); set('back', backK)
-    set('left', ctx.strafeKey === 'left' && stepSafe(bot, keyDir(bot, 'left')))
-    set('right', ctx.strafeKey === 'right' && stepSafe(bot, keyDir(bot, 'right')))
-    set('sprint', fwdK && (bot.food ?? 20) > 6); set('jump', false)
+    const backK = (toMeK > 0.03 || d < 7) && stepSafe(bot, keyDir(bot, 'back')) && digStepSafe(ctx, keyDir(bot, 'back'))
+    const fwdK = d > 14 && !backK && stepSafe(bot, keyDir(bot, 'forward')) && digStepSafe(ctx, keyDir(bot, 'forward'))
+    rangedStep(ctx, { forward: fwdK, back: backK, left: ctx.strafeKey === 'left', right: ctx.strafeKey === 'right' })
+    set('sprint', bot.getControlState('forward') && (bot.food ?? 20) > 6); set('jump', false)
     if (ready('xbKiteNote')) { rest('xbKiteNote', 5000); used('арбалет: держу дистанцию, заряжаю и стреляю') }
     await ctx.sleep(TICK_MS)
     return NEXT
@@ -239,9 +249,7 @@ export async function bowTurn (ctx: DuelCtx, turn: TurnFrame) {
         const mp = bot.entity.position
         const dist = Math.max(0.1, mp.distanceTo(ctx.entity.position))
         const toMe = (v.x * (mp.x - ctx.entity.position.x) + v.z * (mp.z - ctx.entity.position.z)) / dist
-        set('left', ctx.strafeKey === 'left' && stepSafe(bot, keyDir(bot, 'left')))
-        set('right', ctx.strafeKey === 'right' && stepSafe(bot, keyDir(bot, 'right')))
-        set('back', (toMe > 0.05 || !ctx.prof.player) && stepSafe(bot, keyDir(bot, 'back')))
+        rangedStep(ctx, { left: ctx.strafeKey === 'left', right: ctx.strafeKey === 'right', back: toMe > 0.05 || !ctx.prof.player })
       }
     })
     clear()

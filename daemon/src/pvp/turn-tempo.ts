@@ -1,5 +1,6 @@
 import * as read from '../read'
 import * as tempo from '../tempo'
+import * as threats from '../threats'
 import { findItem, potionOf, potionRole } from './potions'
 import { HIT_REACH, TICK_MS } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
@@ -58,7 +59,13 @@ export async function utilTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { blocking, d, dy, hp, meInWeb, r, seesBody, theyUp } = turn
   if (ctx.prof.player && !ctx.perch && !ctx.fort && !meInWeb) {
     ctx.aim = 'free'
-    const ua = await util.step({ entity: ctx.entity, d, dy, r, hp, foeHp: foeHpDecide(ctx.entity), sees: seesBody, theyUp, blocking, busy: tt.state(ctx.entity), vel: () => ctx.track.vel(), others: duo.foes().filter(e => e !== ctx.entity), ctl, allow: (k) => gate(k) })
+    const threat = () => ctx.maceNow?.() || !!ctx.sky?.threat?.() || threats.incoming(ctx.bot).some(p => p.ticks <= 12) || duo.foes().some(e => ctx.vision?.visible?.(e) !== false && e.position.distanceTo(ctx.bot.entity.position) < 3.5)
+    // Приём подручным сам целится (трезубец, «Тягун», ловушки): прицел боя на это время свободен — иначе он каждый тик
+    // поворачивал к врагу и сбивал выпуск рывка (стенд 24.10: riptide_release_aim_changed).
+    const aimWas = ctx.aim
+    ctx.aim = 'free'
+    let ua
+    try { ua = await util.step({ entity: ctx.entity, d, dy, r, hp, foeHp: foeHpDecide(ctx.entity), sees: seesBody, theyUp, blocking, busy: tt.state(ctx.entity), vel: () => ctx.track.vel(), others: duo.foes().filter(e => e !== ctx.entity), ctl, threat, allow: (k) => gate(k) }) } finally { ctx.aim = aimWas }
     ctx.aim = 'target'
     if (ua) { if (ua.rush) ctx.rushActive = true; await holdWeapon(); return NEXT }
   }

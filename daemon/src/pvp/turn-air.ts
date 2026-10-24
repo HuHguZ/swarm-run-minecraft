@@ -1,6 +1,7 @@
 import { goals } from 'mineflayer-pathfinder'
 import { shoot as bowShoot } from '../bow'
 import * as gameClock from '../game-clock'
+import { webCells } from '../hazards'
 import { blockName, keyDir } from '../moves'
 import * as pick from '../pick'
 import * as ranged from '../ranged'
@@ -16,7 +17,7 @@ import { lanceWebRequest } from './turn-approach'
 export function skySenseTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, sky, vision } = ctx
   const { me } = turn
-  turn.meInWeb = blockName(bot, me.floored()) === 'cobweb' || blockName(bot, me.floored().offset(0, 1, 0)) === 'cobweb'
+  turn.meInWeb = webCells(bot).length > 0
   turn.skyThreat = ctx.prof.player && !bot.entity.elytraFlying && vision.visible(ctx.entity) ? sky.threat() : null
 }
 
@@ -134,7 +135,7 @@ export async function flightTurn (ctx: DuelCtx, turn: TurnFrame) {
     const eatSafe = tempo.ON ? tt.safe(tempo.consumeMs('golden_apple')).ok : theirR > 6
     const eqS = ctx.entity.equipment || []
     const hisShield = (!!(eqS[1] && eqS[1].name === 'shield') || !!(eqS[0] && eqS[0].name === 'shield')) && !(foe.shieldOff(ctx.entity) > 1500)
-    const sp0 = sky.decide({ hp, healAt, heal: !!airHeal(), eatSafe, d, dy, foeGrounded: foeGrounded(), hisShield })
+    const sp0 = sky.decide({ hp, healAt, heal: !!airHeal(), eatSafe, safety: turn.safety, safeMedical: !!turn.safeMedical, d, dy, foeGrounded: foeGrounded(), hisShield, prefer: ctx.gp?.pick })
     // Взлёт ради тарана/пике — только если граф боя не нашёл на земле приёма заметно лучше (в воздухе — не мешаем).
     const sp = sp0 && /^(lance|dive)$/.test(sp0.kind) && !bot.entity.elytraFlying && !gate(sp0.kind) ? null : sp0
     // Поддержка — после защит; уход лечиться сохраняет приоритет.
@@ -146,7 +147,7 @@ export async function flightTurn (ctx: DuelCtx, turn: TurnFrame) {
       if (guard) await guard.raise(false)
       ctx.aim = 'free'
       let res = null
-      try { res = await sky.run(ctl, sp, { heal: airHeal, enough: () => (bot.health ?? 0) >= 16, vel: () => ctx.track.vel() }) } catch (e) { res = { note: 'элитры: ' + e.message } }
+      try { res = await sky.run(ctl, sp, { heal: airHeal, enough: () => (bot.health ?? 0) >= 16, vel: () => ctx.track.vel(), chain: ctx.maceChain }) } catch (e) { res = { note: 'элитры: ' + e.message } }
       ctx.aim = 'target'
       clear()
       if (res && res.note) used(res.note)

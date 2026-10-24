@@ -3,7 +3,8 @@
 const gameClock: typeof import('../game-clock') = require('../game-clock')
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const pick: typeof import('../pick') = require('../pick')
-const { TICK_MS, EYE, BODY_H, REACH, KEYS, DEBUG, ON, sleep, yawTo, wrap, r2 }: typeof import('./consts') = require('./consts')
+const maceLift: typeof import('../mace/hands') = require('../mace/hands')
+const { TICK_MS, EYE, BODY_H, REACH, KEYS, DEBUG, ON, sleep, nextTick, yawTo, wrap, r2 }: typeof import('./consts') = require('./consts')
 const { lookVec, fallStep, worldOf, headroom, reachFromBox }: typeof import('./physics') = require('./physics')
 const { findItem, offName, chestName, plainRocket, bestChest, kit, swapChest }: typeof import('./kit') = require('./kit')
 const { choose }: typeof import('./control') = require('./control')
@@ -33,7 +34,7 @@ function smashBonus (h) {
 function divePlan (bot, e, { d, dy, hp, foeGrounded, hisShield = false, W = worldOf(bot) }: any = {}) {
   if (!ON || hisShield) return null
   const k = kit(bot)
-  if (!k.elytra || !k.mace || k.rockets < 2 || !k.chest) return null
+  if (!k.elytra || !k.mace || (k.rockets < 2 && !maceLift.windReady(bot)) || !k.chest) return null
   if (!bot.entity || !bot.entity.onGround || bot.entity.isInWater) return null
   if (hp < 9 || !foeGrounded || Math.abs(dy) > 2 || d < 3 || d > 22) return null
   const me = bot.entity.position
@@ -42,7 +43,7 @@ function divePlan (bot, e, { d, dy, hp, foeGrounded, hisShield = false, W = worl
   return { kind: 'dive' }
 }
 
-async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {}, used = () => {}, allow = null, maxMs = 12000, telemetryHp = e => healthOf(bot, e), arena = null }: any = {}) {
+async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {}, used = () => {}, allow = null, maxMs = 12000, telemetryHp = e => healthOf(bot, e), arena = null, chain = null }: any = {}) {
   const W = worldOf(bot)
   const S = install(bot)
   const out: any = { ok: false, hit: false, note: '' }
@@ -57,8 +58,10 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   const mace = findItem(bot, 'mace')
   try { if (mace && (!bot.heldItem || bot.heldItem.name !== 'mace')) await bot.equip(mace, 'hand') } catch {}
   const maceAt = gameClock.now()
-  try { const rk = bot.inventory.items().find(plainRocket); if (rk && !plainRocket(bot.inventory.slots[45])) await bot.equip(rk, 'off-hand') } catch {}
-  if (!bot.heldItem || bot.heldItem.name !== 'mace' || !plainRocket(bot.inventory.slots[45])) {
+  const windTakeoff = kit(bot).rockets < 2 && maceLift.windReady(bot)
+  const liftItem = it => windTakeoff ? it?.name === 'wind_charge' : plainRocket(it)
+  try { const rk = bot.inventory.items().find(liftItem); if (rk && !liftItem(bot.inventory.slots[45])) await bot.equip(rk, 'off-hand') } catch {}
+  if (!bot.heldItem || bot.heldItem.name !== 'mace' || !liftItem(bot.inventory.slots[45])) {
     await swapChest(bot, 'chest')
     out.note = 'пике: булава или фейерверк не в руках'
     return out
@@ -67,7 +70,40 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   if (DEBUG) console.log('[dive] руки перед взлётом:', hands())
   if (allow) allow()
   const toward = yawTo(bot.entity.position, foe())
-  const to = await takeoff(bot, ctl, { pitch: 1.1, yaw: wrap(toward + Math.PI), stats, arena })
+  let to
+  if (windTakeoff) {
+    // Тот же нативный бросок под ноги, что у windSmash: заряд с земли, затем прыжок.
+    const y0 = bot.entity.position.y
+    for (const key of KEYS) bot.setControlState(key, false)
+    await nextTick(bot)
+    const charges = maceLift.windCount(bot)
+    let useSeen = false, impulseSeen = false
+    const onUse = p => { if (/wind_charge/.test(String(p?.cooldownGroup || '')) && p.cooldownTicks > 0) useSeen = true }
+    const onImpulse = p => { if (p?.playerKnockback?.y > 0) impulseSeen = true }
+    bot._client.on('set_cooldown', onUse); bot._client.on('explosion', onImpulse)
+    try {
+      const fired = await maceLift.fireWind(bot, moved => !ctl.aborted && maceLift.selfWindAim(bot, { moved }), {
+        swap: false, hand: 'off', before: () => bot.setControlState('jump', !ctl.aborted && bot.entity.onGround)
+      })
+      if (fired.fired) await nextTick(bot)
+      bot.setControlState('jump', false)
+      let lifted = false
+      for (let tick = 0; fired.fired && !ctl.aborted && (bot.health ?? 0) > 0 && tick < 10; tick++) {
+        // Jump Boost тоже даёт vy > .55: нужен расход/серверная перезарядка и пакет толчка, не одна скорость.
+        if ((useSeen || maceLift.windCount(bot) < charges) && impulseSeen && !bot.entity.onGround && bot.entity.velocity.y > 0) { lifted = true; break }
+        if (!await nextTick(bot)) break
+      }
+      if (lifted) {
+        bot._ndWind = { impactY: y0, until: gameClock.now() + 2000 }
+        startGlide(bot)
+        await nextTick(bot)
+      }
+      to = { ok: lifted && !ctl.aborted && !!bot.entity.elytraFlying, why: fired.fired ? 'всплеск не открыл полёт' : fired.why }
+    } finally {
+      bot.setControlState('jump', false)
+      bot._client.removeListener('set_cooldown', onUse); bot._client.removeListener('explosion', onImpulse)
+    }
+  } else to = await takeoff(bot, ctl, { pitch: 1.1, yaw: wrap(toward + Math.PI), stats, arena })
   if (!to.ok) { await chestDown(bot, ctl, { stats, arena }); out.note = 'пике: не взлетел — ' + to.why; return out }
   stats.dives = (stats.dives || 0) + 1
   // Набор высоты: точка над ним со сдвигом 6 бл. в нашу сторону, на высоте
@@ -150,6 +186,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
       if (done) return
       try {
         if (ctl.aborted || (bot.health ?? 0) <= 0) return fin('прервали')
+        if (confirmed && chain && (require('../read') as typeof import('../read')).enchLevel(bot, mace, 'wind_burst') > 0) return fin('Wind Burst')
         const b = bot.entity
         if (b.onGround) return fin(hit ? 'сел после удара' : 'сел')
         if (gameClock.now() - tD > 3500) return fin('долго')
@@ -224,7 +261,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
           // удар одним куском; сторож в том же тике зовёт нас первым.
           const doHit = () => {
             try {
-              if (ctl.aborted || e.isValid === false || !pick.canHit(bot, e, { range: REACH })) { hit = null; return }
+              if (ctl.aborted || e.isValid === false || bot.entity.elytraFlying || !(S.fd > 1.5) || bot.entity.velocity.y >= 0 || !pick.canHit(bot, e, { range: REACH })) { hit = null; return }
               // Его щит поднят — «оглушающий»: топор и булава в одном тике (mace.slamHit).
               ;(require('../mace') as typeof import('../mace')).slamHit(bot, e, stats)
             } catch {}
@@ -251,6 +288,13 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
     }
     bot.on('physicsTick', onT)
   })
+  if (res === 'Wind Burst') {
+    // Удар подтверждён сервером; продолжение ждёт реальную скорость отскока и заново оценивает цель.
+    out.chain = await (require('../mace') as typeof import('../mace')).descend(bot, ctl, e, {
+      vel, swap: false, stats, telemetryHp, chain: { ...chain, deadline: Math.min(chain.deadline ?? Infinity, t0 + maxMs) }, maxMs: Math.max(0, maxMs - (gameClock.now() - t0)),
+      initialHit: { at: hit.at, fall: hit.fd, target: e.username || e.name, hp0: hisHp0, charged: true, selfHp: bot.health }
+    })
+  }
   for (const k of KEYS) { try { bot.setControlState(k, false) } catch {} }
   // Мимо на подлёте (не свапнули) — сесть; свапнули и вернули элитры — сесть.
   if (bot.entity.elytraFlying) await land(bot, ctl, { away: null, stats, arena })

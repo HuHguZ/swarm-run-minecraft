@@ -1,4 +1,5 @@
 import { ownsHuntCover } from '../../pearls/hunt-cover'
+import { isAlly } from '../../combat/ally-safety'
 // Тактика: типы порта Minecraft, снимок состояния для телеметрии, наблюдение угроз и выходов (observeTactics).
 import { S4D, digDownCost, boxBuildCost, threatLevel, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from '../state'
 import { lavaCapabilities, inLava } from '../lava-escape'
@@ -165,14 +166,15 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const weapon = items.some(item => /_(sword|axe)$|^trident$|^mace$|_spear$/.test(item.name) && (itemTools ??= (require('../../items') as typeof import('../../items'))).usesLeft(item) >= 4)
   const targetName = session.current?.target || session.current?.params?.target
   const target = targetName ? (Object.values(bot.entities || {}) as MinecraftEntity[]).find(entity =>
-    entity && (entity.username === targetName || entity.name === targetName || '#' + entity.id === targetName)) : null
+    entity && !isAlly(bot, entity) && (entity.username === targetName || entity.name === targetName || '#' + entity.id === targetName)) : null
   // Whoever hit us in the last 10 s is a threat: a player (stress stand: an attacking diamond player stayed "not
   // threatening") and a neutral mob that combat-safety skips unless it is the target - an angry enderman, piglin or
   // zombified piglin (stress stand v2: 6 of 16 deaths that only the real observation had; S1: 5 deaths by zombified piglins).
   const incident = session.autopilot?.lastHurt
   const sameWorld = !!incident && (incident.dimension === undefined || incident.dimension === dimension)
   const struck = sameWorld && incident.sourceId != null && at - incident.at < 10000 ? bot.entities?.[incident.sourceId] : null
-  const attacker = struck && struck !== bot.entity && struck.isValid !== false && (struck.username || /^(enderman|piglin|zombified_piglin)$/.test(struck.name)) ? struck : null
+  const friendlyHit = isAlly(bot, struck)
+  const attacker = struck && struck !== bot.entity && struck.isValid !== false && !isAlly(bot, struck) && (struck.username || /^(enderman|piglin|zombified_piglin)$/.test(struck.name)) ? struck : null
   const bears: any[] = polarBear.risks(bot, sameWorld ? struck?.id : null)
   const bearRoute = bears.filter(bear => !bear.attacking).map(bear => `${bear.e.id}:${bear.e.position.floored()}:${bear.avoiding}`).sort().join('|')
   if (bearRoute !== (session._ndBearRoute ?? '')) {
@@ -207,7 +209,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   }
   // Nearby players are observable facts; they become threats only after an attack or an explicit fight.
   for (const entity of Object.values(bot.entities || {}) as MinecraftEntity[]) {
-    if (!entity?.username || entity === bot.entity || seen.has(entity.id) || !entity.position) continue
+    if (!entity?.username || entity === bot.entity || seen.has(entity.id) || !entity.position || isAlly(bot, entity)) continue
     const distance = entity.position.distanceTo(bot.entity.position)
     if (distance <= 16) enemies.push({ id: entity.id, kind: entity.username, distance, player: true, threatening: false, ...((session._ndFoes as string[] | undefined)?.includes(entity.username) ? { foe: true } : {}) })
   }
@@ -219,7 +221,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   // s4d-smoke bridge, both arms, burned to death / 5 hp.
   // The shot is remembered past the fire it lit: each burning tick (on_fire, no source) replaces autopilot.lastHurt, and
   // the blazes left the list between volleys (natives s4d-ab bridge: CreateDistance "from nobody" while burning).
-  if (sameWorld && incident.byMob && !/mob_attack/.test(String(incident.type || ''))) session._tacticalShotAt = Math.max(session._tacticalShotAt ?? -Infinity, incident.at)
+  if (sameWorld && !friendlyHit && incident.byMob && !/mob_attack/.test(String(incident.type || ''))) session._tacticalShotAt = Math.max(session._tacticalShotAt ?? -Infinity, incident.at)
   const shot = at - (session._tacticalShotAt ?? -Infinity) < 3000
   if (S4D() && (incomingProjectiles > 0 || shot)) {
     for (const h of flee.hostilesAround(bot, 64) as Array<{ e: MinecraftEntity; doc: { range?: number }; d: number }>) {
@@ -305,7 +307,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
         !!session._ndHideCtl && !session._ndHideCtl.aborted
     } catch {}
   }
-  const recentHit = sameWorld && at - incident.at < 1500 && incident.byMob && incident.at > (session._tacticalRetreatSafeAt ?? -Infinity)
+  const recentHit = sameWorld && !friendlyHit && at - incident.at < 1500 && incident.byMob && incident.at > (session._tacticalRetreatSafeAt ?? -Infinity)
   const current = session.current?.name || ''
   const owWater = movement.owDeathWaterOn(bot)
   const waterSafety = process.env.ND_TACTICS_WATER_HURT === '1' || owWater
@@ -372,9 +374,13 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   if (current === 'stronghold' && process.env.ND_SHAFT_STAND !== '0' && /overworld/.test(dimension) && !lava && !burning) {
     try { const here = bot.blockAt(bot.entity.position.floored()); shaftStand = !!here && here.skyLight === 0 } catch {}
   }
+  // Уворот тела ведёт обычный обстрел параллельно делу; ближний бой и аварии остаются тактике.
+  const projectileWork = !!current && !session.current?.ctl?.aborted && !!bot._ndProjectileEvasion?.pressure && (bot.health ?? 0) > (session.cfg?.lowHealth ?? 8) &&
+    !hot && !burning && !hotFloor && !lava && !bears.length && !(recentHit && /^(mob_attack|player_attack)$/.test(String(incident.type))) &&
+    !hostile.some(enemy => enemy.distance <= 4.5 && meleeReachable(enemy) && Math.abs((bot.entities[enemy.id]?.position?.y ?? Infinity) - bot.entity.position.y) < 2.5)
   return { dimension, at, health: bot.health ?? 20, food: bot.food ?? 20, armor: inspected.ourArmor || 0, polarBear: polarBear.plan(session, bears),
     weapon, shield: bot.inventory.slots[45]?.name === 'shield' && clock.now() >= (bot._ndShieldDisabledUntil || 0), owRangedApproachHp,
-    enemies, incomingProjectiles, owGuard: rangedGuard(bot, enemies), burning, hotFloor, lava, lavaAhead, fireResistance,
+    enemies, incomingProjectiles, owGuard: bot._ndProjectileEvasion?.guard ?? rangedGuard(bot, enemies), burning, hotFloor, lava, lavaAhead, fireResistance,
     explosion: !!(creeper && (creeper.swelling || creeper.d <= 3.3)) || blastAlarm, blast: blast?.kind ?? null, dangerousFall: !!fall, emergencyController,
     waterEmergency: movement.owAirEmergency(bot), inWater: wetBody, drowning: (bot.oxygenLevel ?? 20) <= (session._airManaged ? 4 : 8) && movement.inWater(bot), waterEscape: !!session._tacticalWaterEscape, piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand && !(clock.now() < (session._ndCoverUntil || 0)),
     blocks: refuge?.blocks ?? (pack ??= (require('../../pack') as typeof import('../../pack'))).buildCount(bot, /nether/.test(dimension) ? 'the_nether' : 'overworld'),
@@ -403,7 +409,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     // ифриты): ход навыка к бастиону на них не отвечает — 6 стрел за 5 с, 20 → 0 хп без щита (b2-5-1 14.10).
     niche: /nether/.test(dimension) && !!refuge?.niche && refuge.blocks >= 2, netherHide, ghastEdge,
     buildCostHp,
-    shelter, digDownCostHp, protectedEncounter: !!session._refugeBuild && (session._refugeBuild === session.current?.ctl || session._refugeBuild === locks.owner(session)?.ctl) && !session._refugeBuild.aborted || current === 'pearls' && (process.env.ND_HUNT_OPEN_GROUND === '1' && (!session.current?.params?.style || ['foxhole', 'tunnel'].includes(session.current.params.style)) ? ownsHuntCover(session) : !!session.current?.params?.style) && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && (hostile.every(enemy => enemy.kind === 'enderman') || foxholeHolds(bot, hostile)) || current === 'dragon' || current === 'blaze' && (process.env.ND_BLAZE_WORLD_STATE === '0' || !!session._blazeCombatCtl && session._blazeCombatCtl === session.current?.ctl) && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !(process.env.ND_BLAZE_MELEE !== '0' && /^(wither_skeleton|magma_cube)$/.test(enemy.kind)) && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' && !hostile.some(enemy => /^(ghast|skeleton|stray|bogged|blaze)$/.test(enemy.kind)) || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' && !(process.env.ND_WITHER_HIDE === '1' && hostile.some(enemy => enemy.kind === 'wither_skeleton' && enemy.distance <= 10)) || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current) ||
+    shelter, digDownCostHp, protectedEncounter: projectileWork || !!session._refugeBuild && (session._refugeBuild === session.current?.ctl || session._refugeBuild === locks.owner(session)?.ctl) && !session._refugeBuild.aborted || current === 'pearls' && (process.env.ND_HUNT_OPEN_GROUND === '1' && (!session.current?.params?.style || ['foxhole', 'tunnel'].includes(session.current.params.style)) ? ownsHuntCover(session) : !!session.current?.params?.style) && process.env.ND_PEARLS_OWN !== '0' && hostile.length > 0 && (hostile.every(enemy => enemy.kind === 'enderman') || foxholeHolds(bot, hostile)) || current === 'dragon' || current === 'blaze' && (process.env.ND_BLAZE_WORLD_STATE === '0' || !!session._blazeCombatCtl && session._blazeCombatCtl === session.current?.ctl) && !(S4D() && hostile.some(enemy => enemy.kind !== 'blaze' && !(process.env.ND_BLAZE_MELEE !== '0' && /^(wither_skeleton|magma_cube)$/.test(enemy.kind)) && !enemy.player && enemy.distance <= 4.5 && meleeReachable(enemy))) || current === 'bastion' && !hostile.some(enemy => /^(ghast|skeleton|stray|bogged|blaze)$/.test(enemy.kind)) || !!current && (inspected.ourArmor || 0) >= 10 && (bot.health ?? 0) >= 16 && hostile.length > 0 && hostile.every(enemy => /^(silverfish|endermite)$/.test(enemy.kind)) || current === 'portal' && session.current?.params?.mode === 'enter' && !(process.env.ND_WITHER_HIDE === '1' && hostile.some(enemy => enemy.kind === 'wither_skeleton' && enemy.distance <= 10)) || protectedBoat || (aerialCombat || !!session.tempo) && /^(fight|retaliate|defend)$/.test(current) ||
       // Бой на арене с игроком (fight с arena): лечение, отход, щит ведёт сам PvP — тактика тело не отбирает (колизей 10.10:
       // «прервано (tactical)» каждые 1–3 с при 20 хп — бот метался и не бил).
       current === 'fight' && !!session.current?.params?.arena && hostile.some(enemy => enemy.player), embedded, airborne: !bot.entity.onGround && !dryMountedBoat,
@@ -432,4 +438,4 @@ export function shieldCanContinue(state: TacticalState | null): state is Tactica
 // (a39: «прервано (tactical)» и своё бегство вместо выхода — 4 смерти «tried to swim in lava» из 17).
 // Таран по приказу (RPC lance, сцена try-lance 23.10): тактика обрывала его после первого захода.
 const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|lava_escape|wind_jump|pearl_to|fly_to|lance|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
-export function commandedEscape(session: any): boolean { const c = session.current; return !!c && !c.ctl?.aborted && (COMMANDED_ESCAPE.test(c.name || '') || locks.protectedClimb(session)) }
+export function commandedEscape(session: any): boolean { const c = session.current; return !!c && !c.ctl?.aborted && (COMMANDED_ESCAPE.test(c.name || '') || locks.protectedClimb(session) || locks.shieldHold(session)) }

@@ -24,6 +24,7 @@ import { sleep, xyz, inWater } from './movement'
 import { raySees } from './perception'
 import threats = require('./threats')
 import * as throwMod from './throw'
+import { dropOptions, runDrop } from './flee-drop'
 import { stepSafe, keyDir } from './moves'
 import { bodyClear } from './navigation/geometry'
 
@@ -181,6 +182,7 @@ function runLength (bot, dir, max = 10, maxDrop = 3, arena = null) {
   let last = me.clone()
   let len = 0
   let wet = 0
+  const path = []
   for (let s = 1; s <= max; s++) {
     const x = Math.floor(me.x + dir.x * s)
     const z = Math.floor(me.z + dir.z * s)
@@ -219,11 +221,12 @@ function runLength (bot, dir, max = 10, maxDrop = 3, arena = null) {
     y = found
     last = new Vec3(x + 0.5, y, z + 0.5)
     len = s
+    path.push({ pos: last, onGround: true, ticks: 20 / SPRINT_BPS })
     const wf = bot.blockAt(new Vec3(x, y, z))
     const wg = bot.blockAt(new Vec3(x, y - 1, z))
     if ((wf && wf.name === 'water') || (wg && wg.name === 'water')) wet++
   }
-  return { len, end: last, wet }
+  return { len, end: last, wet, path }
 }
 
 // Замкнутость точки (12.10, арена: «убегают в замкнутое пространство — там их легко забить»): заливка по клеткам, где
@@ -284,12 +287,33 @@ function bridgeable (bot, yaw) {
 function insideArena(p, arena) {
   return !arena || Math.abs(p.x - arena.x) + .3 <= arena.r && Math.abs(p.z - arena.z) + .3 <= arena.r && p.y > (arena.killY ?? -64)
 }
-function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [], arena = null, extra: ((o: { dir: { x: number, z: number }, run: number, end: any }) => number) | null = null) {
+// Человек может спрыгнуть вслед: расстояние по высоте не выдаём за бесплатный отрыв.
+function descentCost(bot, hs, end, goals, hurt, ticks, states = []) {
+  const hp = (bot.health ?? 0) + (require('./read') as typeof import('./read')).absorptionOf(bot, bot.entity)
+  if (hurt >= hp) return Infinity
+  const air = states.findIndex(st => !st.onGround)
+  let cost = goalPull(end, goals) + 60 * hurt / (hp - hurt)
+  for (const h of hs) {
+    cost += dangerAt(bot, end, h)
+    if (h.e.username && h.doc.radius && air >= 0 && h.e.position.y > end.y + 3) {
+      const edge = states[air].pos
+      const hisArrival = Math.max(0, Math.hypot(h.e.position.x - edge.x, h.e.position.z - edge.z) - 3) / SPRINT_BPS + (ticks - air) / 20
+      const lead = Math.max(0, hisArrival - ticks / 20)
+      const following = { ...h, e: { ...h.e, position: new Vec3(h.e.position.x, end.y, h.e.position.z) }, doc: { ...h.doc, range: 0, blast: 0 } }
+      cost += dangerAt(bot, end, following) / (1 + lead)
+    }
+    // Цена времени под огнём/в досягаемости — по самой траектории, а не только по тихой конечной клетке.
+    cost += states.length ? states.reduce((sum, st) => sum + dangerAt(bot, st.pos, h) * (st.ticks ?? 1), 0) / 20 : dangerAt(bot, bot.entity.position, h) * ticks / 20
+  }
+  return cost
+}
+function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [], arena = null, extra: ((o: { dir: { x: number, z: number }, run: number, end: any }) => number) | null = null, drops = false) {
   bot = cells(bot)
   const me = bot.entity.position
   let best = null
   const options = []
   const wetStart = inWater(bot)
+  const arenaExit = drops && arena && hs.some(h => h.e.username)
   for (let k = 0; k < 24; k++) {
     const yaw = (k / 24) * Math.PI * 2
     const dir = { x: -Math.sin(yaw), z: -Math.cos(yaw) }
@@ -300,6 +324,8 @@ function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [
     let cost = 0
     for (const h of hs) {
       cost += dangerAt(bot, E, h)
+      // Пробег и падение оплачивают время под ударом одинаково; тихий конец пути не делает сам путь бесплатным.
+      if (arenaExit) cost += run.path.reduce((sum, st) => sum + dangerAt(bot, st.pos, h) * st.ticks, 0) / 20
       // Пробегать мимо моба ближе его досягаемости — хуже, чем стоять.
       const pass = segDist(me, E, h.e.position)
       if (h.doc.radius && pass < 3) cost += h.doc.weight * (3 - pass) * 6
@@ -322,10 +348,28 @@ function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [
     }
     options.push({ yaw, dir, cost, run: run.len, end: E })
   }
-  // Край — только у лучших пяти (12 клеток × до 4 blockAt на каждое; на 750 TPS план раз в 300 игровых мс).
-  options.sort((a, b) => a.cost - b.cost)
-  for (const o of options.slice(0, 5)) o.cost += edgeRisk(bot, o.end) * 3 + enclosure(bot, o.end) * 2
-  for (const o of options.slice(0, 5)) if (!best || o.cost < best.cost) best = o
+  // Шаг вниз — такой же вариант, как бег по ярусу; в основной мир эту оценку арены не переносим.
+  if (arenaExit) options.push(...dropOptions(bot, arena,
+    (end, hurt, ticks, states) => descentCost(bot, hs, end, goals, hurt, ticks, states)))
+  // Штрафы неотрицательны: останавливаемся лишь когда следующий уже дороже лучшего с краем и теснотой.
+  // Сначала известные пути; осмотр пролома нужен, когда геометрии для исполнимого выхода ещё нет.
+  options.sort((a, b) => Number(!!a.drop?.inspect) - Number(!!b.drop?.inspect) || a.cost - b.cost)
+  for (const o of options) {
+    if (best && o.drop?.inspect) break
+    if (best && o.cost >= best.cost) break
+    if (!o.drop?.inspect) o.cost += edgeRisk(bot, o.end) * 3 + enclosure(bot, o.end) * 2
+    // Дорогой прокоп не должен скрывать оставшийся вариант бега по ярусу.
+    // Осмотр до следующего плана сравниваем с трёхсекундным последним боем драйвера.
+    if (o.drop && o.cost >= descentCost(bot, hs, me, [], 0, o.drop.inspect ? 60 : o.drop.plan.ticks + Math.ceil((o.drop.dig?.ms ?? 0) / 50))) continue
+    if (!best || o.cost < best.cost) best = o
+  }
+  if (best?.drop) best.drop.worth = (plan, hurt) => {
+    const end = new Vec3(plan.target.x, plan.target.y, plan.target.z)
+    const hp = (bot.health ?? 0) + (require('./read') as typeof import('./read')).absorptionOf(bot, bot.entity)
+    return descentCost(bot, hs, end, goals, hurt, plan.ticks, plan.states) + (best.drop.riskCost ?? 0) / hp +
+      (best.drop.inspect ? 0 : edgeRisk(bot, end) * 3 + enclosure(bot, end) * 2) <
+      descentCost(bot, hs, bot.entity.position, [], 0, best.drop.inspect ? 60 : plan.ticks)
+  }
   return best
 }
 
@@ -398,7 +442,7 @@ const SPRINT_BPS = 5.6
 // сундуки) — бег к ближней из них дешевле. 0.4 за блок до ближайшей, не больше 8: опасность от врагов весит больше.
 function goalPull (P, goals) {
   if (!goals?.length) return 0
-  return Math.min(8, 0.4 * Math.min(...goals.map(g => Math.hypot(g.x - P.x, g.z - P.z))))
+  return Math.min(8, 0.4 * Math.min(...goals.map(g => Math.hypot(g.x - P.x, Number.isFinite(g.y) ? g.y - P.y : 0, g.z - P.z))))
 }
 
 // Оторвались: ходячие дальше safeDist, а стрелки дальше дальности своего оружия или не видят глаз.
@@ -474,11 +518,31 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
       const now = gameClock.now()
       const swell = hs.find(h => h.swelling && h.d < 6)
       if (!plan || now >= replanAt || swell) {
-        plan = pickDirection(bot, hs, prevYaw, goals, arena)
+        plan = pickDirection(bot, hs, prevYaw, goals, arena, null, true)
         // Прямой бег короткий (стены, комната) или прижали — путь по клеткам к выходу (ND_FLEE_ROUTE=0 — только лучи).
-        if (process.env.ND_FLEE_ROUTE !== '0' && hs.some(h => h.doc.radius > 0 && h.d < 16) && (!plan || plan.run < 8)) {
+        if (process.env.ND_FLEE_ROUTE !== '0' && hs.some(h => h.doc.radius > 0 && h.d < 16) && (!plan || plan.drop || plan.run < 8)) {
           const r = escapeRoute(bot, hs, 1500, 20, goals, arena)
-          if (r) plan = { yaw: r.yaw, run: r.steps, route: true }
+          if (r) {
+            const end = new Vec3(r.to.x + .5, r.to.y, r.to.z + .5)
+            const cost = descentCost(bot, hs, end, goals, 0, Math.ceil(r.steps / SPRINT_BPS * 20)) + edgeRisk(bot, end) * 3 + enclosure(bot, end) * 2
+            if (!plan?.drop || cost < plan.cost) plan = { yaw: r.yaw, run: r.steps, route: true }
+          }
+        }
+        if (plan?.drop) {
+          // Жемчуг сравниваем с тем же выходом до траты предмета; последний прицел пересчитается при броске.
+          stop()
+          const pearl = await pearlOut(bot, hs, arena, plan.cost, goals)
+          if (ctl.aborted) break
+          if (pearl) return { mode: 'ушёл жемчугом вместо падения', pearl, at: xyz(bot.entity.position) }
+          const ok = await runDrop(bot, ctl, plan, edgeGuard, arena, descent => bot.emit('nd_flee_drop', descent))
+          if (ctl.aborted) break
+          // Пролом только открыл обзор: пол за стеной теперь можно увидеть и оценить, а не считать воздухом заранее.
+          if (ok && plan.drop.inspect) { plan = null; replanAt = 0; continue }
+          if (ok) return { mode: plan.drop.exit ? 'проломил выход' : 'спрыгнул на нижний ярус', at: xyz(bot.entity.position), damage: plan.drop.hurt }
+          plan = null; replanAt = 0
+          // Невзведённый MLG/изменившийся блок не должны замыкать микрозадачи и останавливать физику тела.
+          await sleep(50)
+          continue
         }
         replanAt = now + 300
         if (!plan) {
@@ -561,21 +625,30 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
 // тик раньше удара), и отбрасываются лава, пустота и обрывы. Раньше бросок
 // шёл «под 20° в самую тихую сторону» — куда он ляжет на самом деле, никто не
 // считал.
-async function pearlOut (bot, hs, arena = null) {
+async function pearlOut (bot, hs, arena = null, cheaperThan = Infinity, goals = []) {
   const pearl = bot.inventory.items().find(i => i.name === 'ender_pearl')
-  if (!pearl) return null
+  if (!pearl || !throwMod.canSurvivePearl(bot)) return null
+  const price = (tp, land) => {
+    if (!insideArena(tp, arena)) return -Infinity
+    const cost = descentCost(bot, hs, tp, goals, (require('./pearl-hop') as typeof import('./pearl-hop')).pearlDamage(bot), land?.ticks ?? 0)
+      + edgeRisk(bot, tp) * 3 + enclosure(bot, tp) * 2
+    return cost < cheaperThan ? -cost : -Infinity
+  }
+  const pick = throwMod.escapePick(bot, price)
+  if (Number.isFinite(cheaperThan)) {
+    const from = bot.entity.position.offset(0, (require('./pick') as typeof import('./pick')).eyeHeight(bot) - .1)
+    const airborne = !bot.entity.onGround
+    const moved = bot.entity.velocity
+    const quote = pick({ from, moved, airborne, landing: (y, p) => throwMod.landing(bot, from, y, p, throwMod.KINDS.ender_pearl, moved, airborne) })
+    if (!quote || !Number.isFinite(quote.sc)) return null
+  }
   try {
     await bot.equip(pearl, 'hand')
     const r = await throwMod.throwAt(bot, null, {
       item: bot.heldItem,
       // В прыжке на месте, если так перенесёт в более тихое место (06.10: +0.42 к вертикали — на 30 % дальше).
       jump: 'auto',
-      pick: throwMod.escapePick(bot, (tp) => {
-        if (!insideArena(tp, arena)) return -Infinity
-        let cost = 0
-        for (const h of hs) cost += dangerAt(bot, tp, h)
-        return -cost
-      })
+      pick: ctx => { const q = pick(ctx); return q && Number.isFinite(q.sc) ? q : null }
     })
     if (!r || !r.thrown) return null
     await sleep(1500)

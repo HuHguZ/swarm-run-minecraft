@@ -33,8 +33,11 @@ const SETTLE_MS = 250
 // steep — разрешить крутой выстрел вверх (см. peakPitch).
 async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = null, onRelease = null, onHit = null, shouldStop = null, follow = true, mode = 'compensate', point = null, steep = false, drawMs = DRAW_MS, holdWhile = null, holdMaxMs = 2500, traceAim = false, peek = false }: any = {}) {
   const bow = bot.inventory.items().find(i => i.name === 'bow')
-  const arrows = bot.inventory.items().find(i => /arrow$/.test(i.name))
+  const ranged: typeof import('../ranged') = require('../ranged')
+  const first = ranged.firstArrow(bot), player = !!entity?.username || entity?.type === 'player'
+  const arrows = first && ranged.offensiveArrow(first, player) ? first : ranged.pickArrow(bot, { player })?.item
   if (!bow || !arrows) return { shot: false, why: !bow ? 'лука нет' : 'стрел нет' }
+  if (first !== arrows && !(await ranged.readyArrow(bot, arrows))) return { shot: false, why: 'боевая стрела недоступна' }
   // Отменить натяжение без выстрела (ревью Codex 2026-09-30): deactivateItem —
   // это «отпустить кнопку», сервер на нём и стреляет (BowItem.releaseUsing) —
   // «отменил натяжение» выпускал стрелу. Смена слота снимает использование

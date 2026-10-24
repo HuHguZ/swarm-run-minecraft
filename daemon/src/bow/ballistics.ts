@@ -1,6 +1,7 @@
 'use strict'
 // Лук (bow.ts): физика стрелы — константы, полёт, решатели угла и прицела, проверка траектории по блокам.
 import vec3 from 'vec3'
+import { visibleAllies, allyOnSegment, allyWorld } from '../combat/ally-safety'
 // Фабрика vec3 (parseFloat, null → 0,0,0), как прежний require('vec3'); тип — класс Vec3.
 const Vec3 = vec3 as unknown as typeof import('vec3').Vec3
 
@@ -143,7 +144,9 @@ function blockedAt (bot, from, sol, u = { x: 0, y: 0, z: 0 }, speed = SPEED) {
   let p = from.clone()
   let v = { x: dir.x * speed + u.x, y: dir.y * speed + (bot.entity?.onGround ? 0 : u.y), z: dir.z * speed + u.z }
   const ticks = Math.ceil(sol.ticks || 20)
-  for (let t = 0; t < ticks; t++) {
+  const allies = visibleAllies(bot)
+  // A miss or Piercing arrow can continue behind the enemy; check until terrain or world bottom.
+  for (let t = 0; t < ticks || allies.length && p.y >= (bot.game?.minY ?? -64); t++) {
     const step = new Vec3(v.x, v.y, v.z)
     const len = step.norm()
     if (len < 1e-3) break
@@ -151,15 +154,20 @@ function blockedAt (bot, from, sol, u = { x: 0, y: 0, z: 0 }, speed = SPEED) {
     // Цель на дробном тике (ticks 3.4) — от последнего шага нужна только доля
     // (0.4): полный шаг минус 0.8 пролетал цель и упирался в стену за ней
     // (лаборатория 2026-09-27: блейз у стены — «на линии стрельбы блок» 40 раз).
-    const fraction = Math.min(1, (sol.ticks || ticks) - t)
+    const fraction = Math.max(0, Math.min(1, (sol.ticks || ticks) - t))
     const reach = t === ticks - 1 ? Math.max(0, len * fraction - 0.8) : len
     try {
       // Направление — копией: Vec3.normalize() меняет сам вектор (vec3), и
       // раньше step после проверки становился единичным — стрела в симуляции
       // шла блок за тик вместо трёх, и проверялась лишь первая треть пути.
       const hit = bot.world.raycast(p, step.scaled(1 / len), reach, b => b && b.boundingBox === 'block')
-      if (hit) return hit.position
-    } catch { return null }
+      if (hit && t < ticks) return hit.position
+      if (allyOnSegment(bot, allies, p, p.plus(step), t)) return p
+      if (allies.length) {
+        const terminal = bot.world.raycast(p, step.scaled(1 / len), len, b => b && b.boundingBox === 'block')
+        if (terminal && allyWorld(bot).blockAt(terminal.position)?.boundingBox === 'block') return null
+      }
+    } catch { return allies.length ? p : null }
     p = p.plus(step)
     v = { x: v.x * DRAG, y: v.y * DRAG - GRAVITY, z: v.z * DRAG }
   }

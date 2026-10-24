@@ -1,4 +1,5 @@
 'use strict'
+import { isAlly } from './combat/ally-safety'
 const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Общая граница риска для боевых модулей. Тактика моба выбирает атаки,
 // но не может отменить решение о сохранении жизни близостью противника.
@@ -101,6 +102,7 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
 
 function inspect (bot, { target = null, entities = null, observedHit = 0, minHealth = 8,
   phase = 'continue', instantHeal = false, expectedEnemy = null, repelLava = false }: any = {}): SafetyVerdict {
+  if (isAlly(bot, target)) target = null
   const items = bot.inventory.items()
   const data = bot.registry?.foodsByName || (require('minecraft-data') as typeof import('minecraft-data'))(bot.version).foodsByName
   const foodPoints = items.reduce((n, i) => n + (!RISKY.test(i.name) && !/_bucket$/.test(i.name)
@@ -114,7 +116,7 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
   const mobs = []
   let people = 0
   for (const e of [target, ...(entities || (Object.values(bot.entities || {}) as any[]))]) {
-    if (!e?.position || e === bot.entity || e.isValid === false || seen.has(e.id)) continue
+    if (!e?.position || e === bot.entity || e.isValid === false || seen.has(e.id) || isAlly(bot, e)) continue
     seen.add(e.id)
     const base = assess.MOBS[e.name]
     const player = e.name === 'player' || !!e.username

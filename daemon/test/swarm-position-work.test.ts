@@ -89,6 +89,42 @@ test('hold aborts live direct threat, damage, death and cancellation, also durin
   }
 })
 
+test('a shield hold against a falling mace is not broken by that mace as a direct threat', async () => {
+  // Игра пользователя 23.10: стойка снималась «прямой угрозой» за тики до удара, и щит не держал — 5 «smashed» за 20 с.
+  const f = fixture()
+  const shield = { wear: async () => true, raise: async () => {}, blocking: () => true, close() {}, report: () => null, nativeUse: () => ({}) }
+  // './combat' и './threats' берутся внутри стойки — проверка неиспользованных подмен после неё, не при загрузке.
+  const file = path.resolve(__dirname, '../src/swarm-position-work.js'), module = { exports: {} as any }
+  const req = stubRequire(file, { './game-clock': f.clock, './pvp/search': { observedCollision: () => f.world }, './swarm-work': { directThreat: () => ({}) },
+    './combat': { makeShield: () => shield }, './threats': { smashes: () => [{}] } })
+  vm.runInThisContext(`(function (require, module, exports, __filename, __dirname) {${bodySource(file)}
+})`, { filename: file })(req, module, module.exports, file, path.dirname(file))
+  const pending = module.exports.swarmHold({ bot: f.bot }, f.ctl, { seconds: .3, shield: true, whileSmash: 'Foe' })
+  f.bot.emit('physicsTick')
+  const r = await pending
+  assert.notEqual(r.why, 'direct_threat'); assert.equal(r.shield.blockingSeconds > 0, true)
+  assert.deepEqual(req.unmatched(), [])
+})
+
+test('landing web is tried before raising the shield; without a shield it returns to the driver at once', async () => {
+  for (const shieldMode of [true, false]) {
+    const f = fixture(), calls = []
+    const shield = { wear: async () => { calls.push('wear'); return true }, raise: async () => { calls.push('raise') }, blocking: () => true, close() {}, nativeUse: () => ({}) }
+    const file = path.resolve(__dirname, '../src/swarm-position-work.js'), module = { exports: {} as any }
+    const req = stubRequire(file, { './game-clock': f.clock, './pvp/search': { observedCollision: () => f.world }, './swarm-work': { directThreat: () => ({}) },
+      './mace/web': { webSmash: async (bot, name, opts) => {
+        assert.equal(bot, f.bot); assert.equal(name, 'OtherSwarmBot'); assert.equal(opts.shieldTicks, shieldMode ? 11 : Infinity)
+        calls.push('web'); f.bot.emit('physicsTick'); return { placed: true }
+      } }, ...(shieldMode ? { './combat': { makeShield: () => shield }, './threats': { smashes: () => [{}] } } : {}) })
+    vm.runInThisContext(`(function (require, module, exports, __filename, __dirname) {${bodySource(file)}\n})`, { filename: file })(req, module, module.exports, file, path.dirname(file))
+    const r = await module.exports.swarmHold({ bot: f.bot }, f.ctl, { seconds: .3, shield: shieldMode, whileSmash: 'OtherSwarmBot', webSmash: 'OtherSwarmBot' })
+    assert.equal(r.web.placed, true); assert.equal(r.ok, true)
+    if (shieldMode) assert.deepEqual(calls.slice(0, 3), ['web', 'wear', 'raise'])
+    else { assert.deepEqual(calls, ['web']); assert.equal(f.clock.now(), 0) }
+    assert.deepEqual(req.unmatched(), [])
+  }
+})
+
 test('pillar success requires native block packet, actual desired material and supported physical rise', async () => {
   for (const confirmed of [false, true]) {
     const f = fixture()

@@ -19,6 +19,14 @@ export function pvpFlee(S: PvpPlan): void {
   const retreats = pvpState(board).retreats
   for (const [i, m] of team.entries()) {
     const risk = assessSwarmFight(m, enemies, team)
+    // Ракеты разрывают и ближний контакт: смертельный размен (его ближний удар добьёт до моего) — на безопасный насест, даже без
+    // хилки. Только смертельный: «проигранный» (выжить < убить) против человека в незерите — почти любой контакт с полным хп, и рой
+    // бросал бой ради насеста за гребнем, куда не долететь (игра пользователя 23.10: «бегут навстречу и ничего не делают», хп 20).
+    const airExit = risk.lethal && inContact(m, enemies, true, aggressive) ? perchFor(m) : null
+    if (airExit) {
+      put(m, 'flee', { target: risk.target, perch: true, panic: true, risk, reason: 'воздушный отход, ' + risk.reason }, airExit)
+      continue
+    }
     if (hunting(m) && !risk.lethal) continue
     // Погоня за слабым или переигранным (стенд rush 15.10: «прячусь» вело в тупик-камеру, он догонял — бой 1–2 удара и смерть):
     // к своим (и слабым — толпа бьёт его со спины) или в отрыв по открытому (smartFlee тела сам обходит тупики); последний
@@ -31,30 +39,20 @@ export function pvpFlee(S: PvpPlan): void {
     // вплотную лучник — тот же рукопашник, а бег «за укрытие» в 0–1 бл. от него — смерть спиной (игра пользователя 21.10:
     // у людей лук в наборе — 19 из 38 смертей от меча с «ухожу от лучника за укрытие (враг в 1 бл.)»).
     const ranged = !!near && gap > 8 && archer(near)
-    const pursuing = coming || ranged && board.now() - near.seenAt < 1000 || board.tasks().some(t => t.assignedTo === m.id && t.data?.kite && t.data.target === near?.id)
+    // Погоня помнит своё начало отдельно от способа ухода: остановка врага не отправляет нас в копатели.
+    const pursuing = coming || ranged && board.now() - near.seenAt < 1000 || board.tasks().some(t => t.assignedTo === m.id && t.kind === 'flee' && (t.data?.kite || t.data?.pursuit) && t.data.target === near?.id)
     // Начатая рукопашная не рвётся погоней (в контакте он всегда «идёт на меня»; стенд rush 15.10: fight → flee 66 раз, каждый —
     // stop боя): дерущийся уходит, только когда он дальше 6 бл.
     const prevKind = board.tasks().find(t => t.id === `pvp:${m.id}`)?.kind
     // Лутающий уходит от погони с той же границы 16, что и ветка слабых (Codex 15.10: правило погони с 22 обходило
     // гистерезис 16/22 — «лут ↔ бегство» на 17–22 бл.).
     const far = near ? threatReach(near) : 16
-    // Не уйти: он быстрее (бег со «Скоростью» — больше 0.3 б/т против нашего спринта 0.28) и ближе 10 бл., а своих рядом
-    // нет — бег только подставляет спину и упирается в стену или угол (игра пользователя 22.10: «упираются в стену, когда
-    // убегают — забиваю в угол»; голых с лута догонял и бил в спину). Тогда — развернуться и драться (как зажатый).
-    // Начал отбиваться — дерётся, пока он ближе 14 бл.: «идёт на меня» и его скорость мигают от тика к тику, и без этого
-    // бот менял «бой ↔ бегство» каждую секунду со стопом и стоял под стрелами (игра пользователя 22.10: «афкшника с лука
-    // застрелил — никак не реагировал»).
-    const fast = !!near && Math.hypot(v?.x || 0, v?.z || 0) > .3
-    const standing = !!near && gap < 14 && !!board.tasks().find(t => t.id === `pvp:${m.id}` && t.kind === 'fight' && t.data?.lastStand && t.data?.target === near.id)
-    if (near && (standing || coming && fast && gap < 10 && !rallyFor(m, near)) && (weak(m) || outclassed(m, near))) {
-      put(m, 'fight', { target: near.id, enemyPosition: near.position, lastStand: true, reason: `не уйти — он быстрее (враг в ${Math.round(gap)} бл.)` }, near.position)
-      continue
-    }
+    // Скорость погони не исключает спуск и прокоп: последний бой решает тело после реальной проверки выходов.
     if (near && gap <= (prevKind === 'loot' ? far : far + 6) && pursuing && !(prevKind === 'fight' && gap <= 6) && !assault?.voters.includes(m.id) && (weak(m) || outclassed(m, near))) {
       // От лучника — за укрытие (стена ломает линию выстрела), иначе к своим или в отрыв.
       const perch = perchFor(m), cover = !perch && ranged && hideoutFor(m), group = !perch && !cover && rallyFor(m, near)
       markFled(board, m.id)
-      put(m, 'flee', { target: near.id, enemyPosition: near.position, panic: true, ...(perch ? { perch: true } : cover ? { hide: true } : { kite: true, regroup: !!group }), reason: `ухожу от ${cover ? 'лучника за укрытие' : 'погони'} (враг в ${Math.round(gap)} бл.)` }, perch || cover || group || m.position)
+      put(m, 'flee', { target: near.id, enemyPosition: near.position, panic: true, pursuit: true, ...(perch ? { perch: true } : cover ? { hide: true } : { kite: true, regroup: !!group }), reason: `ухожу от ${cover ? 'лучника за укрытие' : 'погони'} (враг в ${Math.round(gap)} бл.)` }, perch || cover || group || m.position)
       continue
     }
     // Отход по миру (retreat.ts): начатый держится, пока мир его не кончит (догнал, оторвался, дошёл до своих, зажило),

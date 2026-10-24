@@ -10,12 +10,15 @@ import { stepSafe } from './body'
 import { findItem, potionOf } from './potions'
 import { HIT_REACH, TICK_MS, cooldownMs } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+import { webSmash } from '../mace/web'
 
 // Булава сверху: тотем, щит, жемчуг или бег.
 export async function maceDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, guard, holdWeapon, mc, pathTo, pvpSkills, ready, rest, set, st, used } = ctx
   const { hp, now, r } = turn
-  const maceThreat = ctx.prof.player ? mc.threat() : null
+  let maceThreat = ctx.prof.player ? mc.threat() : null
+  if (maceThreat && ctx.opts?.maceIntent && ctx.session.current === ctx.opts.maceIntent && !ctx.ctl.aborted)
+    bot._ndMaceDefense = { ctl: ctx.ctl, current: ctx.opts.maceIntent, until: gameClock.now() + 1000 }
   if (maceThreat && !ctx.maceTotem && bot.inventory.slots[45]?.name !== 'totem_of_undying' && bot.heldItem?.name !== 'totem_of_undying') {
     const tt0 = findItem(bot, i => i.name === 'totem_of_undying')
     if (tt0) { ctx.maceTotem = true; bot.equip(tt0, 'hand').then(() => used('тотем в правую руку: булава сверху')).catch(() => { ctx.maceTotem = false }) }
@@ -27,7 +30,35 @@ export async function maceDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
   if (maceThreat) {
     if (ctx.pathing) { pathTo(false); ctx.pathing = false }
     ctx.aim = 'target'
-    const shieldOk = !!(guard && guard.stats && guard.stats.worn) && (maceThreat.eta >= 6 || maceThreat.shielded)
+    // Левую руку могли сменить после дебюта боя; stats.worn не доказывает, что щит всё ещё надет и исправен.
+    const shieldReady = (bot._ndShieldDisabledUntil || 0) <= gameClock.now()
+    const wearTicks = bot.inventory.slots[45]?.name === 'shield' ? 6 : 11 + Math.ceil((bot.player?.ping || 0) / 50)
+    if (guard && shieldReady && (!guard.stats?.worn || bot.inventory.slots[45]?.name !== 'shield') &&
+        maceThreat.eta >= wearTicks && findItem(bot, i => i.name === 'shield')) {
+      await guard.wear()
+      maceThreat = mc.threat()
+      if (!maceThreat) return
+    }
+    const shieldWorn = guard?.stats?.worn && bot.inventory.slots[45]?.name === 'shield' && shieldReady
+    // failure хранит и старый сбой: после отката нужен новый наблюдатель использования, а не вечный отказ от щита.
+    if (shieldWorn && guard.failure?.() && guard.traceState?.()?.want) {
+      await guard.raise(false)
+      maceThreat = mc.threat()
+      if (ctx.ctl.aborted || !maceThreat) return
+      maceThreat.shielded = false
+    }
+    if (!shieldWorn) maceThreat.shielded = false
+    if (!maceThreat.webTried && maceThreat.kind === 'air') {
+      ctx.aim = 'free'
+      const web = await webSmash(bot, ctx.entity.username, { ctl: ctx.ctl,
+        deadlineTicks: maceThreat.eta,
+        shieldTicks: shieldWorn && (maceThreat.shielded || guard?.blocking?.() || guard?.traceState?.()?.want) ? 0 : shieldWorn ? 6 : Infinity,
+        pearlTicks: findItem(bot, i => i.name === 'ender_pearl') && hp > 7 ? 12 : Infinity })
+      ctx.aim = 'target'
+      if (web.attempted) { maceThreat.webTried = true; maceThreat = mc.threat() || maceThreat }
+      if (web.placed) used('паутина в точку его посадки')
+    }
+    const shieldOk = shieldWorn && (maceThreat.eta >= 6 || maceThreat.shielded)
     let how = null
     if (maceThreat.kind === 'above' || shieldOk) {
       how = mace.defend(bot, maceThreat, { guard, entity: ctx.entity, vel: () => ctx.track.vel(), set, keyDir, stepSafe: dir => stepSafe(bot, dir), stats: mc.st })
@@ -46,7 +77,14 @@ export async function maceDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
         if (tt1 && bot.inventory.slots[45]?.name !== 'totem_of_undying') await bot.equip(tt1, 'hand').catch(() => {})
       }
       if (!how) {
-        ctx.aim = 'away'
+        // Бежим от будущей посадки: взгляд «от него сейчас» вёл вдоль его горизонтального полёта под удар.
+        const me = bot.entity.position, v = ctx.track.vel() || { x: 0, z: 0 }
+        const k = (1 - .91 ** Math.min(40, maceThreat.eta)) / .09
+        const dx = me.x - ctx.entity.position.x - v.x * k, dz = me.z - ctx.entity.position.z - v.z * k
+        const yaw = Math.hypot(dx, dz) > .1 ? Math.atan2(-dx, -dz) : maceThreat.escapeYaw ?? bot.entity.yaw + Math.PI / 2
+        maceThreat.escapeYaw = yaw
+        ctx.aim = 'point'; ctx.aimPoint = { yaw, pitch: 0 }
+        await bot.look(yaw, 0, true)
         const fwd = keyDir(bot, 'forward')
         if (stepSafe(bot, fwd)) {
           for (const x of ['back', 'left', 'right']) set(x, false)
@@ -138,6 +176,15 @@ export async function smashTurn (ctx: DuelCtx, turn: TurnFrame) {
     if (hitSoon && ready('smashWaitNote') && mace.smashPlan(bot, ctx.entity)) { rest('smashWaitNote', 4000); used('булава: не взлетаю — его удар или выстрел собьёт взлёт') }
     // Булава и заряд есть, а взлёта нет — почему (smashCheck), раз в 4 с: отказ молчал, и взлётов за раунд было по одному.
     else if (!sp0 && ready('smashWhyNote') && findItem(bot, i => i.name === 'mace')) { const why = mace.smashCheck?.(bot, ctx.entity)?.why; if (why) { rest('smashWhyNote', 4000); used('булава: не взлетаю — ' + why) } }
+    // Нет заряда для взлёта — «Тягун» трезубцем вместо него (дождь/вода), удар булавой с падения.
+    if (!sp0 && !hitSoon && (ctx as any).util?.riptideSmash) {
+      if (guard) await guard.raise(false)
+      // Взгляд — свой на заряд и выпуск: прицел боя каждый тик поворачивал к врагу и сбивал рывок (riptide_release_aim_changed).
+      ctx.aim = 'free'
+      let r
+      try { r = await (ctx as any).util.riptideSmash(ctx.entity, ctl) } finally { ctx.aim = 'target' }
+      if (r?.ok) { await holdWeapon(); return NEXT }
+    }
     if (sp && (!ctx.failedSmash || ctx.failedSmash.inputs !== windInputs(ctx.failedSmash.native))) {
       const first = maceChain.choose(bot.entity.position.y, true)
       if (first) maceChain.onTarget(first)

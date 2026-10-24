@@ -166,6 +166,8 @@ test('crystal separates damage telemetry from the HP estimate used to judge an a
   try { assert.equal(noEstimate.hisHp(f.foe), 20, 'player without an estimate uses a prior, never raw HP') } finally { noEstimate.close() }
 })
 
+const SPEAR_TYPE = (require('../src/gamedata') as typeof import('../src/gamedata')).DAMAGE_TYPES.indexOf('spear')
+
 test('aerial lance confirms its own event independently of exact telemetry and preserves damage samples', async () => {
   for (const confirmed of [true, false]) {
     const f = fixture()
@@ -190,7 +192,7 @@ test('aerial lance confirms its own event independently of exact telemetry and p
     const mod = load('combat/aerial-lance', { '../game-clock': f.clock, '../elytra': sky })
     f.bot.activateItem = () => {
       // The same exact HP decrease only confirms a hit when the damage cause is us.
-      f.clock.setTimeout(() => { f.hp(22); f.bot._client.emit('damage_event', { entityId: 2, sourceCauseId: confirmed ? 2 : 0 }) }, 50)
+      f.clock.setTimeout(() => { f.hp(22); f.bot._client.emit('damage_event', { entityId: 2, sourceTypeId: SPEAR_TYPE, sourceCauseId: confirmed ? 2 : 0, sourceDirectId: confirmed ? 2 : 0 }) }, 50)
     }
     const stats: any = {}
     const result: any = await f.finish(mod.lance(f.bot, { aborted: false }, f.foe, { passes: 1, stats, telemetryHp: f.telemetryHp }))
@@ -245,5 +247,37 @@ test('dive uses confirmed own damage, not a sent swing or exact HP, and removes 
     assert.equal(stats.diveHits || 0, mode === 'own' ? 1 : 0)
     assert.deepEqual(stats.diveDealt, mode === 'own' ? [6] : undefined)
     assert.equal(f.bot._client.listenerCount('damage_event'), 0)
+  }
+})
+
+test('mace threat sees a foe gliding in from beyond 5.5 blocks when he will land on us', async () => {
+  // Игра пользователя 22.10: летел издалека с булавой — угрозы не было, бот сам взлетал зарядом ему навстречу.
+  for (const [vx, expected] of [[-0.9, 'air'], [0.9, null]] as const) {
+    const f = fixture()
+    f.bot._ndMaceInstalled = true
+    const mace = load('mace', { './game-clock': f.clock, './edges': { support: (_b, p) => ({ drop: p.y }) } })
+    f.foe.position = new Vec3(7.5, 8, .5)
+    f.foe.equipment = [{ name: 'mace' }]
+    const tracker = mace.track(f.bot, { enemy: () => f.foe, telemetryHp: f.telemetryHp })
+    try {
+      for (let i = 0; i < 4; i++) { f.foe.position = f.foe.position.offset(vx, 0, 0); await f.step() }
+      f.foe.position = new Vec3(7.5, 8, .5)
+      const t = tracker.threat()
+      assert.equal(t?.kind ?? null, expected, `vx ${vx}`)
+    } finally { tracker.close() }
+  }
+})
+
+test('no wind push into a foe stuck in a cobweb: the web eats the knockback', () => {
+  // Пользователь 23.10: «ветром в паутине в меня кидаются, я всё равно не двигаюсь — просто ресурсы расходуют».
+  for (const web of [false, true]) {
+    const f = fixture()
+    f.bot._ndMaceInstalled = true
+    f.bot.inventory.items = () => [{ name: 'wind_charge', count: 8, type: 1 }]
+    f.foe.position = new Vec3(5.5, 0, .5)
+    f.bot.blockAt = p => ({ position: p.floored(), name: web && p.floored().x === 5 ? 'cobweb' : 'air', boundingBox: 'empty', shapes: [] })
+    const mace = load('mace', { './game-clock': f.clock, './edges': { support: (_b, p) => ({ drop: p.y }), hazardAround: () => false } })
+    const plan = mace.pushPlan(f.bot, f.foe, { busy: 'в паутине' })
+    assert.equal(!!plan, !web, `web ${web}`)
   }
 })

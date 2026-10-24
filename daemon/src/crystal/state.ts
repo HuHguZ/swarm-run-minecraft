@@ -19,7 +19,8 @@ export interface CrystalDeps {
   CX2: boolean
 }
 // Размен от взрыва (crystal.trade): ему и мне после брони и чар, сырые — для окна неуязвимости.
-export interface CrystalTrade { him: number, me: number, meMax: number, himRaw: number, meRaw: number, himSeen: number, meSeen: number }
+export interface CrystalTrade { him: number, me: number, meMax: number, himRaw: number, meRaw: number, himSeen: number, meSeen: number,
+  allyDamage?: number, allyPush?: number, allyRisk?: boolean }
 // Состояние одного create(): опции, счёт, память, бывшие let замыкания (поля с «?» задаются по ходу создания)
 // и функции частей (Object.assign в фасаде).
 export interface CrystalState {

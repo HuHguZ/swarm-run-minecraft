@@ -74,33 +74,33 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
         rest('trap', 2500)
       }
     }
+    const allow = (k) => !ctx.allow || ctx.allow(k)
     // Контрмеры: его поплавок на мне (метаданные поплавка: зацеплен = мой id + 1). Удочка есть — обратный подтяг
     // (оба поплавка тянут к хозяину: кто дёрнул вторым — тот и тянет), иначе — отметка: бой ударит на подлёте.
     const hookOnMe = hookedBy(bot, e)
     if (hookOnMe && ready('rodCounter')) {
       rest('rodCounter', 2000)
       st.hookedOnMe++
-      if (ctx.d >= 3.5 && ctx.d <= ROD_MAX && findItem(bot, i => i.name === 'fishing_rod') && ctx.sees) {
-        st.rod++
-        const r = await rodPull(bot, ctx.ctl, e, { velFn: ctx.vel })
-        if (r.hooked) { st.rodHooked++; st.rodCounter++; used('удочка на удочку — обратный подтяг') } else used('его поплавок на мне — обратный подтяг мимо')
+      if (ready('rod') && allow('rod') && ctx.d >= 3.5 && ctx.d <= ROD_MAX && findItem(bot, i => i.name === 'fishing_rod') && ctx.sees) {
+        rest('rod', 2500)
+        const r = await rodPull(bot, ctx.ctl, e, { velFn: ctx.vel, threatFn: ctx.threat })
+        if (r.casted) st.rod++
+        if (r.hooked) { st.rodHooked++; st.rodCounter++; used('удочка на удочку — обратный подтяг') } else used(r.interrupted ? 'бросил удочку: угроза' : 'его поплавок на мне — обратный подтяг мимо')
         return { did: 'rod', rush: !!r.hooked }
       }
       used('его поплавок на мне — бью на подлёте')
     }
     // Удочка.
     // Граф боя (S7d): удочка/трезубец — только если калькулятор не нашёл заметно лучшего (ctx.allow).
-    const allow = (k) => !ctx.allow || ctx.allow(k)
     if (ready('rod') && ctx.d >= 3.5 && ctx.d <= ROD_MAX) {
       const rp0 = rodPlan(bot, e, { d: ctx.d, dy: ctx.dy, sees: ctx.sees, busy: ctx.busy || {}, theyUp: ctx.theyUp, vel: ctx.vel ? ctx.vel() : null, blocking: !!ctx.blocking })
-      // Граф гасит только «просто подтянуть под удар» (по модели урона сближение бегом обычно не хуже); со столба,
-      // в лаву/яму, едока, стрелка, убегающего — польза вне модели урона, решает сам план удочки.
-      const rp = rp0 && (rp0.why !== 'удочкой подтянул под удар' || allow('rod')) ? rp0 : null
+      // Геометрия ловушки не отменяет цену заброса и промахов по этой цели.
+      const rp = rp0 && allow('rod') ? rp0 : null
       if (rp) {
         rest('rod', 2500)
-        st.rod++
-        const r = await rodPull(bot, ctx.ctl, e, { velFn: ctx.vel })
-        if (r.hooked) { st.rodHooked++; used(rp.why + ' — зацепил и дёрнул' + (r.probe ? ` (сервер: Motion [${r.probe}], расчёт рывка [${r.expect}])` : '')) } else used(rp.why + ' — мимо')
+        const r = await rodPull(bot, ctx.ctl, e, { velFn: ctx.vel, threatFn: ctx.threat })
+        if (r.casted) st.rod++
+        if (r.hooked) { st.rodHooked++; used(rp.why + ' — зацепил и дёрнул' + (r.probe ? ` (сервер: Motion [${r.probe}], расчёт рывка [${r.expect}])` : '')) } else used(r.interrupted ? 'бросил удочку: угроза' : rp.why + ' — мимо')
         return { did: 'rod', rush: !!r.hooked }
       }
     }
@@ -176,6 +176,77 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
     return r
   }
 
+  // «Тягун → булава» (пользователь 24.10, трамплин трезубцем): в дождь или воде рывок крутой дугой к нему, в воздухе — булава
+  // в руку, удар с падения (MaceItem: бонус от fallDistance; попадание гасит падение). Цена промаха — урон падения: допускаем
+  // не больше, чем оставит 8 хп. Лужа впереди не нужна: на арене гроза (wetOrRain).
+  // ND_TRACE_RIPTIDE=1 — почему связка не началась (в вывод демона, раз в 3 с).
+  let whyAt = 0
+  const no = (why: string) => { if (process.env.ND_TRACE_RIPTIDE === '1' && gameClock.now() - whyAt > 3000) { whyAt = gameClock.now(); console.log(`[riptideSmash] ${bot.username}: ${why}`) } return null }
+  const riptideSmash = async (e, ctl) => {
+    if (!ready('riptideSmash')) return null
+    if (!e?.position || !e.onGround) return no('враг не на земле')
+    if (!wetOrRain(bot)) {
+      const f = bot.entity.position.floored(), bio = bot.blockAt(f)?.biome
+      let over = 'небо'
+      for (let y = f.y + 1; y < 320; y++) { const b = bot.blockAt(f.offset(0, y - f.y, 0)); if (!b) { over = `null на ${y}`; break } if (b.boundingBox === 'block' || /water|lava|leaves|glass|barrier/.test(b.name)) { over = `${b.name} на ${y}`; break } }
+      return no(`сухо: дождь ${!!bot.isRaining}, биом ${bio?.name ?? bio?.id} осадки ${bio?.has_precipitation} t ${bio?.temperature}, над головой ${over}, я на ${f.y}`)
+    }
+    if ((bot.health ?? 0) < 12) return no(`хп ${bot.health}`)
+    const t = tridents(bot).filter(x => x.riptide).sort((a, b) => b.riptide - a.riptide)[0], mace = findItem(bot, i => i.name === 'mace')
+    const me = bot.entity.position, d = Math.hypot(e.position.x - me.x, e.position.z - me.z)
+    if (!t || !mace) return no(`трезубец ${!!t}, булава ${!!mace}`)
+    if (d < 4 || d > 14) return no(`до него ${d.toFixed(1)} бл.`)
+    // Промах — падение с вершины (fallDistance − 3): без страховки — не больше, чем оставит 8 хп. Страховка (пользователь 24.10:
+    // «можно же ведро воды себе подкинуть — комбинировать, а не сдаваться»): ведро воды (не в Аду) или паутина — сторож
+    // падения (edges/mlg installFallGuard) гасит промах в последний тик, и высокая дуга «Тягуна» II–III тоже годится.
+    const nether = /nether/.test(String(bot.game?.dimension || ''))
+    const insurance = !nether && findItem(bot, i => i.name === 'water_bucket') ? 'water_bucket' : findItem(bot, i => i.name === 'cobweb') ? 'cobweb' : null
+    const maxApex = insurance ? 48 : (bot.health ?? 0) - 8 + 3
+    const rt: typeof import('../navigation/riptide') = require('../navigation/riptide')
+    const arcs = rt.riptideArcs(t.riptide, me, e.position, maxApex)
+    if (!arcs.length) return no(`дуги нет (Тягун ${t.riptide}, вершина ≤ ${maxApex.toFixed(0)})`)
+    // До заряда — посадка и путь вращения мимо своих (у цели толпа: runRiptide срывал выпуск riptide_allied_spin_collision
+    // уже после 13 тиков заряда, 2 из 4 на стенде); первый годный курс, прямой — первым.
+    bot._ndRiptideMace = { maxDamage: insurance ? 1000 : Math.max(0, (bot.health ?? 0) - 8) }
+    const why: string[] = []
+    let arc = null
+    try { arc = arcs.find(a => { const w = rt.riptideArcSafe(bot, t.riptide, a.yaw, a.pitch); if (w) why.push(w); return !w }) } finally { delete bot._ndRiptideMace }
+    if (!arc) return no(`дуги ${arcs.length}, все отпали: ${[...new Set(why)].join(', ')}`)
+    console.log(`[riptideSmash] ${bot.username}: взлёт (Тягун ${t.riptide}), до него ${d.toFixed(1)} бл., вершина ${arc.apex.toFixed(1)}, страховка ${insurance || 'нет'}`)
+    rest('riptideSmash', 8000)
+    // Связка не делится (стенд 24.10: рой посреди заряда слал goto/flee, бой обрывался — 3 из 5 взлётов «interrupted»): в
+    // статусе — combo (рой этого бота не перебивает), после отрыва спуск ведёт своя отмена — только смерть.
+    const flightMs = 2500 + arc.apex * 120
+    bot._ndCombo = { kind: 'riptide_mace', until: gameClock.now() + 2000 + flightMs }
+    try { return await riptideSmashRun(e, ctl, t, mace, arc, insurance, flightMs) } finally { delete bot._ndCombo }
+  }
+  const riptideSmashRun = async (e, ctl, t, mace, arc, insurance, flightMs) => {
+    // Сторож берёт страховку только из хотбара (waterReady/webReady) — положить туда до взлёта.
+    // Булава — тоже в хотбар: после выпуска взять её сменой слота в тот же тик (bot.equip ждал сервер ~1 с, спуск начинался
+    // уже на падении — стенд 24.10: вершина спуска 14 бл. вместо 39, сел в 15 бл. от него).
+    const hands: typeof import('../mace/hands') = require('../mace/hands')
+    await hands.ensureHotbar(bot, insurance ? ['mace', insurance] : ['mace']).catch(() => {})
+    bot._ndRiptideMace = { maxDamage: insurance ? 1000 : Math.max(0, (bot.health ?? 0) - 8) }
+    let r
+    // Заряд и выпуск — тоже до конца: срок боя (timeoutSeconds 3) кончался посреди 13 тиков заряда.
+    const alive = { get aborted () { return !bot.entity || !((bot.health ?? 0) > 0) } }
+    try { r = await riptide(bot, arc.yaw, arc.pitch, { ctl: alive }) } finally { delete bot._ndRiptideMace }
+    console.log(`[riptideSmash] ${bot.username}: ${r.ok ? 'взлетел' : 'не взлетел — ' + r.why}`)
+    if (!r.ok) { used(`трезубец+булава: не взлетел (${r.why || '?'})`); return r }
+    st.riptide++
+    const slot = hands.hotbarIndex(bot, 'mace')
+    if (slot >= 0) bot.setQuickBarSlot(slot)
+    else try { await bot.equip(mace, 'hand') } catch {}
+    // Спуск: скорость цели — по наблюдённым позициям (сырой entity.velocity у чужого игрока — из редких пакетов), срок —
+    // весь полёт: с вершины 40 бл. подъём и падение ~3.3 с, прежние 3.5 с обрывали спуск у самой цели.
+    const track: typeof import('../bow/track') = require('../bow/track')
+    const res = await (require('../mace') as typeof import('../mace')).descend(bot, alive, e, { stats: st, vel: () => track.observedVelocity(e), maxMs: flightMs })
+    used(`трезубец+булава: «Тягун ${r.level}» дугой вверх на ${arc.apex.toFixed(0)} бл. — ${res?.hit ? 'удар булавой с падения' : 'мимо'}`)
+    const me2 = bot.entity.position, ep = e.position
+    console.log(`[riptideSmash] ${bot.username}: ${res?.hit ? `удар булавой с падения ${res.hit.fall} бл.` : 'мимо'} — ${res?.why}, вершина ${(res?.peak - ep.y).toFixed(1)}, за ${res?.ms} мс, конец в ${Math.hypot(me2.x - ep.x, me2.z - ep.z).toFixed(1)} бл. от него`)
+    return { ...r, hit: !!res?.hit }
+  }
+
   const chorusMaybe = async (ctl, ctx) => {
     if (!ready('chorus')) return null
     const ch = escapeChoice(bot, ctx)
@@ -205,7 +276,7 @@ function create (bot, { used = () => {}, tt = null }: any = {}) {
     if (bits.length) used('подручное: ' + bits.join(', '))
   }
 
-  return { step, chorusMaybe, riptideAway, stuckOf: (e) => stuckOf(bot, e), stats: st, close }
+  return { step, chorusMaybe, riptideAway, riptideSmash, stuckOf: (e) => stuckOf(bot, e), stats: st, close }
 }
 
 export { create }

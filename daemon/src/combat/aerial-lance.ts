@@ -11,7 +11,7 @@
 //  * кого: ProjectileUtil.getHitEntitiesAlong — отрезок от глаз+взгляд·2.0 до глаз+взгляд·(4.5 + max(0, взгляд·мой ход
 //    за тик)), рамка цели раздута на 0.125, блоки (COLLIDER) обрывают; одну цель — раз в 10 тиков (wasRecentlyStabbed);
 //  * щит (Items.SHIELD BlocksAttacks: 90°, все типы, задержка 0.25 с) держит урон типа spear спереди; копьё щит не
-//    выбивает (Weapon(1), без disableBlocking) — против поднятого щита таран не планируем;
+//    выбивает (Weapon(1), без disableBlocking) — щит держит только спереди: таран не планируем, лишь когда он смотрит на нас;
 //  * ракета до копья: mainhand fallback меняет слот и сбрасывает use;
 //    offhand firework сам server use копья не сбрасывает.
 import * as clock from '../game-clock'
@@ -21,6 +21,7 @@ import * as spear from '../spear'
 import { leadTarget } from '../bow/track'
 import { hitboxOf } from '../pick'
 import { ROCKET_MAX_TICKS } from '../elytra/consts'
+import { damageTypeName } from '../gamedata'
 
 const EYE_FLY = 0.4
 const MIN_R = 2.0
@@ -156,12 +157,19 @@ export function ownHit (pk: any, myId: number, foeId: number): boolean {
   return !!pk && pk.entityId === foeId && pk.sourceCauseId === myId + 1
 }
 
+/** Item.Properties.spear sets DAMAGE_TYPE=SPEAR; a kinetic contact has our direct and causal entity IDs. */
+export function ownSpearHit(pk: any, myId: number, foeId: number): boolean {
+  return ownHit(pk, myId, foeId) && pk.sourceDirectId === myId + 1 && damageTypeName(pk.sourceTypeId) === 'spear'
+}
+
 // Годится ли таран сейчас (на земле или уже в полёте): элитры, ≥3 простых ракет, копьё, хп, место над собой и над ним,
 // его щит не в деле. Нагрудник не нужен: есть — после посадки вернётся на тело (lanceLand), нет — элитры на теле ничего
 // не отнимают. Требование нагрудника не пускало на таран голых с элитрами, копьём и ракетами (стенд 21.10, ARMS_AIR=1:
 // у 29 синих — ни одного тарана, у чемпиона в незерите — 4 убийства копьём за 2 минуты).
+// Щит у него — не запрет (пользователь 24.10: «пускай пробуют копьём на того, у кого щит — в несколько игроков пробьют»):
+// щит держит спереди, а рой заходит со всех сторон; отказ — только тому, на кого он сейчас смотрит.
 export function lancePlan (bot: any, e: any, { d, hp, hisShield = false }: any = {}) {
-  if (!sky.ON || hisShield) return null
+  if (!sky.ON || hisShield && bot.entity?.position && e?.position && facing(e, bot.entity.position) > 0.5) return null
   const k = sky.kit(bot)
   const sp = spear.spearOf(bot)
   if (!k.elytra || k.rockets < 3 || !sp) return null
@@ -230,7 +238,7 @@ function healthOf (bot: any, e: any): number | null {
 
 // Таран: взлёт → набор высоты и отход на разбег → заход (ракета, затем копьё «использовать») → касание → выход
 // вверх → повтор (до passes) → посадка без кругов и нагрудник назад. stats — общая статистика элитр (report()).
-export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {} as any, used = (_: string) => {}, allow = null as any, maxMs = 45000, passes = 8, arena = null as any, telemetryHp = e => ehpTele(bot, e) }: any = {}) {
+export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {} as any, used = (_: string) => {}, allow = null as any, maxMs = 45000, passes = 8, arena = null as any, telemetryHp = e => ehpTele(bot, e), afterPass = null }: any = {}) {
   const ln = lanceContext(bot, ctl, e, { vel, stats, used, allow, maxMs, passes, arena, telemetryHp })
   const { t0, out, valid, sp, onHurt, stopUse } = ln
   if (!sp) { out.note = 'таран: копья нет'; return out }
@@ -248,12 +256,24 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
   try {
     while (valid() && out.passes < passes && clock.now() - t0 < maxMs && sky.gliding(bot.entity)) {
       if (sky.rocketCount(bot) < 1 || (bot.health ?? 0) < 6) break
+      // После пике возвращаем ракеты в левую, копьё — в правую до разбега и зарядки.
+      try {
+        const rocket = bot.inventory.items().find(sky.plainRocket)
+        if (rocket && !sky.plainRocket(bot.inventory.slots[45])) await bot.equip(rocket, 'off-hand')
+        if (!valid()) break
+        if (bot.heldItem?.name !== name) await bot.equip(sp.item, 'hand')
+      } catch { break }
+      if (!valid() || bot.heldItem?.name !== name || !sky.plainRocket(bot.inventory.slots[45])) break
       const climb = await lanceRunUp(ln)
       if (climb.why !== 'разбег' && climb.why !== 'долго') break
       if (!valid() || !sky.gliding(bot.entity)) break
       const res = await lanceApproach(ln)
       if (!valid() || !sky.gliding(bot.entity)) break
       await lanceExit(ln, res)
+      if (valid() && sky.gliding(bot.entity) && /^(попал|мимо)$/.test(res.why) && afterPass) {
+        const combo = await afterPass(ln.ctl)
+        if (combo?.hit) { out.hit = true; out.maceHits = (out.maceHits || 0) + 1 }
+      }
     }
   } finally {
     if (ln.S.lance === flight) delete ln.S.lance
@@ -295,7 +315,7 @@ function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats
   // Попадание — его damage_event, причина которого — я (sourceCauseId = мой id + 1), пока копьё «в деле».
   // entityHurt без источника (падение, кинетическая, его кристалл) касанием не считается (замечание проверки S7b в).
   const onHurt = (pk: any) => {
-    if (!ln.using || !bot.entity || !ownHit(pk, bot.entity.id, e.id)) return
+    if (!ln.using || !bot.entity || !ownSpearHit(pk, bot.entity.id, e.id)) return
     ln.hitAt = clock.now()
   }
   const stopUse = () => { if (ln.using) { ln.using = false; try { if ((ctl as any)._ndFlightOwner.active) bot.deactivateItem() } catch {} } }
@@ -551,7 +571,7 @@ async function lanceLand (ln: LanceCtx) {
   // Сесть — всегда, даже если бой уже кончился (убил в воздухе) или его прервали: элитры без руля — хуже любого
   // перехвата (тактика летать не умеет). Прерывает посадку только смерть. Бой кончился (ctl прерван) — посадка
   // идёт фоном, а отчёт возвращается сразу: иначе «стоп» арены обгонял отчёт дуэли (s7e: у обоих пустые ROUND).
-  out.hit = out.hits > 0
+  out.hit = out.hit || out.hits > 0
   out.ok = true
   if ((bot.health ?? 0) <= 0) { out.note = `элитры: таран копьём ${out.passes} заход(а), попаданий ${out.hits} — погиб в воздухе`; stats.lanceDeaths = (stats.lanceDeaths || 0) + 1; return out }
   const landCtl = sky.flightControl(bot, ctl, true)
@@ -586,7 +606,7 @@ async function lanceLand (ln: LanceCtx) {
     out.landed = !!l.ok
     out.ms = clock.now() - t0
     stats.lanceSelf = r2((stats.lanceSelf || 0) + out.self)
-    out.note = `элитры: таран копьём ${out.passes} заход(а), попаданий ${out.hits}${out.dealt ? `, снял ${r2(out.dealt)}` : ''}${out.self ? `, себе −${out.self}` : ''}, посадка ${l.ok ? 'цела' : (l.why || '?')}`
+    out.note = `элитры: таран копьём ${out.passes} заход(а), попаданий ${out.hits}${out.maceHits ? `, булавой ${out.maceHits}` : ''}${out.dealt ? `, снял ${r2(out.dealt)}` : ''}${out.self ? `, себе −${out.self}` : ''}, посадка ${l.ok ? 'цела' : (l.why || '?')}`
   }
   if (ctl.aborted && bot.entity.elytraFlying) {
     finish().then(account).catch(() => {})

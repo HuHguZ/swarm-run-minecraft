@@ -2,6 +2,7 @@ import * as gameClock from '../game-clock'
 import * as mace from '../mace'
 import { thundering } from '../perception'
 import * as spear from '../spear'
+import { rodChance } from '../utility/rod'
 import { findItem } from './potions'
 import { TICK_MS } from './rules'
 import { type DuelCtx, type TurnFrame } from './turn'
@@ -9,7 +10,7 @@ import { type DuelCtx, type TurnFrame } from './turn'
 // Граф боя раз в 5 тиков: план калькулятора и длинные приёмы.
 export async function fightGraphTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { GRAPH, bot, co, fg, foe, holdWeapon, ready, rest, sky, skyOver, st, traceT0 } = ctx
-  const { d, hp, now } = turn
+  const { d, dy, hp, now } = turn
   // Граф боя (S7d): раз в 5 тиков — план калькулятора (kill-planner: удар/крит/топор/копьё/булава/арбалет/лук/удочка/
   // трезубец/кристалл/якорь) и длинные приёмы (таран, пике) → лучший по чистому урону в секунду; ветки ниже
   // исполняют приём, только если граф его не отверг (gate). Ближнее оружие — по урону в секунду против его брони.
@@ -21,14 +22,16 @@ export async function fightGraphTurn (ctx: DuelCtx, turn: TurnFrame) {
       obs.foeSky = obs.storm ? skyOver(ctx.entity) : false
       // Булава с падения: взлёт зарядом ветра — подъём и спуск ~28 тиков, высота по потолку (mace.smashPlan).
       try { const smp = findItem(bot, i => i.name === 'mace') ? mace.smashPlan(bot, ctx.entity) : null; if (smp) obs.smash = { h: smp.h, ticks: 28 } } catch {}
-      const cp = require('./kill-planner').planAttack(obs, { depth: 3 })
+      const cp = require('./kill-planner').planAttack(obs, { depth: 3, pHit: { rod: rodChance(bot, ctx.entity) } })
       const opts = []
       // У экземпляра elytra.create нет ON (флаг ND_ELYTRA — у модуля): проверка всегда истинна; поведение не трогаю.
       if (GRAPH && sky.ON !== false) {
         const sp0 = spear.spearOf(bot)
         if (sp0 && require('../combat/aerial-lance').lancePlan(bot, ctx.entity, { d, hp, hisShield: obs.foe.blocking })) opts.push(fg.lanceOption(obs, sp0.item.name, bot._ndFightXp || (bot._ndFightXp = {})))
-        const dv = findItem(bot, i => i.name === 'mace') && findItem(bot, i => i.name === 'elytra') ? 12 : 0
-        if (dv) opts.push(fg.diveOption(obs, dv, bot._ndFightXp || (bot._ndFightXp = {})))
+        // Считать только доступное пике: тот же план и пауза, что у исполнителя.
+        const hisShield = [obs.foe.main, obs.foe.off].some(i => i?.name === 'shield') && !(foe.shieldOff(ctx.entity) > 1500)
+        const dv = sky.planDive({ d, dy, hp, foeGrounded: ctx.foeGrounded(), hisShield })
+        if (dv) opts.push(fg.diveOption(obs, 12, bot._ndFightXp || (bot._ndFightXp = {})))
       }
       ctx.gp = fg.decide(obs, cp, opts)
       st.calc = st.calc || { plans: 0, kinds: {} }

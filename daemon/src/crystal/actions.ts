@@ -70,10 +70,11 @@ function createActions (S: CrystalState, deps: CrystalDeps) {
     if (!losClear(bot, eye, pt)) { st.wallHit++; fail('второй луч: кристалл за блоком'); return false }
     await bot.lookAt(pt, true).catch(() => {})
     const before = bot._ndBlockedHits || 0
-    const fw = CX2 && noteAttack ? freshWorth(c.position) : null
+    const fw = freshWorth(c.position)
+    if (!fw.t || fw.t.allyRisk) { fail('кристалл: нет безопасного размена для своих'); return false }
     try { bot.attack(c) } catch { return false }
     if ((bot._ndBlockedHits || 0) > before) { fail('сторож прицела'); return false }
-    noteBlast(fw)
+    if (CX2 && noteAttack) noteBlast(fw)
     const rec = mine.get(c.id) || { at: gameClock.now() }
     rec.hitAt = gameClock.now()
     mine.set(c.id, rec)
@@ -186,8 +187,10 @@ function createActions (S: CrystalState, deps: CrystalDeps) {
 
   async function shoot (ctl, c, ctx) {
     const selfRisk = () => { try { return boom.blast(bot, c.position, P, bot.entity.position, { def: boom.defenseOf(bot, bot.entity), seen: 1 }).dmg >= effHp(bot, bot.entity) - 4.5 } catch { return true } }
+    const allyRisk = () => { try { const t = freshWorth(c.position).t; return !t || !!t.allyRisk } catch { return true } }
     const lineRisk = () => { try { const o = crystalInLine(c); return !!(o && !freshWorth(o.position).ok) } catch { return true } }
     if (selfRisk()) { fail('выстрел: себе смертельно'); return false }
+    if (allyRisk()) { fail('выстрел: под взрывом союзник'); return false }
     const other = crystalInLine(c)
     if (other) {
       // Ближний кристалл на линии — выстрел достанется ему; стрелять, только если
@@ -196,7 +199,7 @@ function createActions (S: CrystalState, deps: CrystalDeps) {
       if (!fw.ok) { fail('выстрел: на линии другой кристалл'); return false }
       c = other
     }
-    const r = await boom.shootAt(bot, ctl, c, { anyBow: true, drawMs: c.position.distanceTo(bot.entity.position) > 10 ? 900 : 550, shouldStop: () => (ctx.stop && ctx.stop()) || selfRisk() || lineRisk() }).catch(e => ({ shot: false, why: e.message }))
+    const r = await boom.shootAt(bot, ctl, c, { anyBow: true, drawMs: c.position.distanceTo(bot.entity.position) > 10 ? 900 : 550, shouldStop: () => (ctx.stop && ctx.stop()) || selfRisk() || allyRisk() || lineRisk() }).catch(e => ({ shot: false, why: e.message }))
     if (r && r.shot) {
       if (CX2 && noteAttack) noteBlast(freshWorth(c.position), true)
       const rec = mine.get(c.id) || { at: gameClock.now() }

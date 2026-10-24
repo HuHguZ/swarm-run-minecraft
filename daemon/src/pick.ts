@@ -253,6 +253,7 @@ function install (bot) {
   const raw = bot.attack
   bot._ndBlockedHits = 0
   bot.attack = function (target, swing) {
+    if ((require('./combat/ally-safety') as typeof import('./combat/ally-safety')).isAlly(bot, target)) { bot._ndBlockedHits++; return }
     try {
       if (process.env.ND_PICK_GUARD !== '0' && target && target.position && typeof target.id === 'number' && target.width != null && bot.entity) {
         const a = aim(bot, target)

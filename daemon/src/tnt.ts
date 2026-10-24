@@ -8,8 +8,30 @@
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import build = require('./build')
 import pick = require('./pick')
+import { blastTeamRisk } from './combat/ally-safety'
 
-async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6, exact = false, beforeIgnite = null }: any = {}) {
+function tntTeamRisk(bot, center) {
+  return blastTeamRisk(bot, center, 4)
+}
+
+// activateBlock performs another asynchronous smooth look. Keep the final guard and 1.21.11 click in one stack.
+function igniteTntNow(bot, c, { reach = 4.5, ctl = null, beforeIgnite = null }: any = {}) {
+  if (ctl?.aborted || beforeIgnite && !beforeIgnite() || bot.blockAt(c)?.name !== 'tnt' || !/^(flint_and_steel|fire_charge)$/.test(bot.heldItem?.name))
+    return { ok: false, why: 'обстановка изменилась перед поджигом' }
+  const eye = pick.eyeOf(bot), { yaw, pitch } = bot.entity
+  const dir = new Vec3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch))
+  const hit = pick.blockOnRay(bot, eye, dir, reach)
+  if (!hit?.pos.equals(c) || !pick.blockAim(bot, c, { range: reach, seeThrough: null })) return { ok: false, why: 'динамит закрыт прицелом' }
+  const cursor = eye.plus(dir.scaled(hit.t)).minus(c)
+  const faces = [[1, 'y', 1], [0, 'y', 0], [2, 'z', 0], [3, 'z', 1], [4, 'x', 0], [5, 'x', 1]] as const
+  const face = [...faces].sort((a, b) => Math.abs(cursor[a[1]] - a[2]) - Math.abs(cursor[b[1]] - b[2]))[0][0]
+  const allyRisk = tntTeamRisk(bot, c.offset(.5, 0, .5))
+  if (allyRisk.unsafe) return { ok: false, why: 'союзник под взрывом динамита', allyRisk }
+  bot._client.write('block_place', { location: c, direction: face, hand: 0, cursorX: cursor.x, cursorY: cursor.y, cursorZ: cursor.z, insideBlock: false, sequence: 0, worldBorderHit: false })
+  return { ok: true }
+}
+
+async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6, exact = false, beforeIgnite = null }: any = {}): Promise<{ ok: boolean, placed?: any, lit?: boolean, why?: string, allyRisk?: ReturnType<typeof tntTeamRisk> }> {
   const bot = session.require()
   if (!at || ![at.x, at.y, at.z].every(Number.isFinite)) return { ok: false, why: 'нужна точка at' }
   const items = bot.inventory.items()
@@ -27,6 +49,7 @@ async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6, exact = fal
     // Вплотную к точке (ноги цели), не у себя (15.10: «динамит криво — задел своего, а не красного; под игрока прям ставить»).
     const off = Math.hypot(c.x + 0.5 - at.x, c.z + 0.5 - at.z)
     if (off > maxOff || c.offset(0.5, 0, 0.5).distanceTo(bot.entity.position) < 1.2) continue
+    if (tntTeamRisk(bot, c.offset(.5, 0, .5)).unsafe) continue
     cells.push({ c, cost: off + Math.abs(dy) * 1.5 })
   }
   cells.sort((a, b) => a.cost - b.cost)
@@ -43,8 +66,8 @@ async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6, exact = fal
     const aim = pick.blockAim(bot, c, { range: reach, seeThrough: null })
     if (!aim) return { ok: false, placed: c, lit: false, why: 'динамит закрыт прицелом' }
     await bot.lookAt(aim, true)
-    if (ctl?.aborted || beforeIgnite && !beforeIgnite() || !pick.blockAim(bot, c, { range: reach, seeThrough: null })) return { ok: false, placed: c, lit: false, why: 'обстановка изменилась перед поджигом' }
-    await bot.activateBlock(block).catch(() => {})
+    const ignition = igniteTntNow(bot, c, { reach, ctl, beforeIgnite })
+    if (!ignition.ok) return { ...ignition, placed: c, lit: false }
     await bot.waitForTicks(3)
     // Зажжённый динамит — уже сущность, в клетке пусто.
     const lit = bot.blockAt(c)?.name !== 'tnt'
@@ -53,4 +76,4 @@ async function tntAt (session, ctl, { at, reach = 4.5, maxOff = 1.6, exact = fal
   return { ok: false, why }
 }
 
-export { tntAt }
+export { tntAt, tntTeamRisk, igniteTntNow }

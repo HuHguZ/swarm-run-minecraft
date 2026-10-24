@@ -42,7 +42,7 @@
 
 import * as gameClock from './game-clock'
 import * as boom from './boom'
-import { P, anchorReady, r1, shieldCovers } from './crystal/geometry'
+import { P, anchorReady, r1, shieldCovers, shieldUpOf } from './crystal/geometry'
 import { kitOf } from './crystal/scoring'
 import { createCrystalState } from './crystal/state'
 import type { CrystalDeps } from './crystal/state'
@@ -52,6 +52,7 @@ import { createEvasion } from './crystal/evade'
 import { createActions } from './crystal/actions'
 import { createPlanner } from './crystal/plan'
 import { createRunner } from './crystal/run'
+import { seesPlayer } from './pvp/last-seen'
 
 const ON = process.env.ND_CRYSTAL !== '0'
 const DEBUG = !!process.env.ND_DEBUG_CRYSTAL
@@ -75,7 +76,21 @@ function trade (bot, center, him, me, dHim, dMe, cache, { himAt = null, meAt = n
   if (himShield && h.raw > 0 && shieldCovers(him, himAt, center)) h = { ...h, dmg: 0, raw: 0, blocked: true }
   const m = boom.blast(bot, center, power, meAt || me.position, { def: dMe, cache })
   const mx = boom.blast(bot, center, power, meAt || me.position, { def: dMe, seen: 1 })
-  return { him: h.dmg, me: m.dmg, meMax: mx.dmg, himRaw: h.raw, meRaw: m.raw, himSeen: h.seen, meSeen: m.seen }
+  // No ally HP prior: an unknown wounded teammate must not pay for our blast.
+  // Crystal friendlyFire=false cancels HP damage, but ServerExplosion still pushes
+  // after ServerPlayer's early false return. Ownerless anchors bypass that protection.
+  const team = bot.teamMap?.[bot.username]
+  let allyDamage = 0, allyPush = 0
+  if (team?.team) for (const e of Object.values(bot.entities || {}) as any[]) {
+    if (!e?.position || e === me || e === him || e.isValid === false || !e.username || bot.players?.[e.username]?.gamemode === 3 || bot.teamMap?.[e.username]?.team !== team.team || e.position.distanceTo(center) > power * 2) continue
+    if (e._ndVisible === false || !seesPlayer(bot, e)) continue
+    const a = boom.blast(bot, center, power, e.position, { def: boom.defenseOf(bot, e), cache })
+    const friendly = power === P && typeof team.friendlyFire === 'number' && !(team.friendlyFire & 1)
+    if (!friendly && !(shieldUpOf(bot, e) && shieldCovers(e, null, center))) allyDamage += a.dmg
+    allyPush += a.kb.norm()
+  }
+  return { him: h.dmg, me: m.dmg, meMax: mx.dmg, himRaw: h.raw, meRaw: m.raw, himSeen: h.seen, meSeen: m.seen,
+    allyDamage, allyPush, allyRisk: allyDamage > 0 || allyPush > 0 }
 }
 
 // ---------------------------------------------------------------- бой

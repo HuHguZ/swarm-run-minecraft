@@ -10,7 +10,7 @@ import { pvpFlee, pvpRecover } from './plan-flee'
 import { pvpTargets, ringShields, pvpBuilders, falseWeakness, falseRetreat, fountain } from './plan-doctrines'
 import { pvpSectors, pvpGather, coverHurt, pvpDiggers, pvpLadders, pvpCampers } from './plan-jobs'
 import { assignFighters, commitPlan } from './plan-assign'
-import { strongFew } from './race'
+import { strongFew, ineffectiveDamage } from './race'
 
 export function planPvp(board: SwarmBoard, members: SwarmMember[], options: PvpOptions = {}): Map<string, SwarmTask> {
   board.setMembers(members)
@@ -19,7 +19,9 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: PvpO
   const enemies = knownEnemies(board)
 
   // Натиск — против людей (соло) и против сильного меньшинства (race.ts strongFew): мир решает, как играть.
-  const aggressive = !!options.aggressive || strongFew(state, team, enemies, options.foesLeft, options.killsBy)
+  ineffectiveDamage(state, team, enemies)
+  const strong = strongFew(state, team, enemies, options.foesLeft, options.killsBy)
+  const aggressive = !!options.aggressive || strong
   const doctrine = options.doctrine ?? keepDoctrine(board, team, aggressive)
   if (!doctrines.includes(doctrine)) throw new Error('Invalid doctrine')
   const plan = new Map<string, SwarmTask>()

@@ -32,7 +32,7 @@ function fixture () {
     }
   }
   bot.blockAt = p => { const q = p.floored(); const name = water && q.y === 0 ? 'water' : q.y < 0 ? 'stone' : 'air'; return {
-    name, position: q, boundingBox: name === 'stone' ? 'block' : 'empty', getProperties: () => ({ level: 0 })
+    name, position: q, boundingBox: name === 'stone' ? 'block' : 'empty', shapes: name === 'stone' ? [[0, 0, 0, 1, 1, 1]] : [], getProperties: () => ({ level: 0 })
   } }
   const session: any = { bot }
   const oldClutch = process.env.ND_CLUTCH; process.env.ND_CLUTCH = '0'
@@ -134,4 +134,43 @@ test('a quick pickup waits for the existing damage receipt before reporting save
     assert.equal(f.guard.saved, 0); assert.equal(f.guard.missed, 1); assert.equal(f.guard.picked, 1)
     assert.equal(f.guard.placed, null)
   } finally { f.close() }
+})
+
+test('план паутины переживает отмену в воздухе, ставит по видимой грани в Аду и прекращается после посадки', async () => {
+  for (const how of ['air', 'ground', 'blocked', 'late']) {
+    const f = fixture()
+    const oldClutch = process.env.ND_CLUTCH
+    try {
+      delete process.env.ND_CLUTCH
+      f.bot.game.dimension = 'minecraft:the_nether'
+      f.bot.inventory.slots[37] = { name: 'cobweb', slot: 37, count: 2 }
+      f.bot._genericPlace = (ref, face, opts) => {
+        assert.equal(f.bot.heldItem?.name, 'cobweb')
+        assert.deepEqual([ref.position.y, face.y, opts.delta.y], [-1, 1, 1])
+        f.bot._client.write('block_place', { held: f.bot.heldItem.name })
+      }
+      assert.equal(f.guard.webReady().ok, true)
+      assert.equal(f.guard.waterReady().ok, false)
+      const release = f.guard.planWater({ owner: 'drop', until: f.game.now() + 3000, material: 'cobweb' })
+      assert.equal(typeof release, 'function')
+      f.bot._ndParkourForecast = { intentional: true }
+      if (how === 'ground') release()
+      else {
+        await f.tick(3.9, -.3); release()
+        if (how === 'blocked') f.bot.entities = { obstacle: { name: 'player', position: new Vec3(.5, 0, .5), height: 1.8, width: 2 } }
+        if (how === 'late') {
+          const before = f.bot.look
+          f.bot.look = (yaw, pitch) => { f.bot.inventory.slots[37] = null; return before(yaw, pitch) }
+        }
+      }
+      await f.tick(2.2, -.8)
+      const placements = f.packets.filter(p => p.name === 'block_place')
+      assert.equal(placements.length, how === 'air' ? 1 : 0, how)
+      if (how === 'air') {
+        assert.deepEqual(f.packets.map(p => p.name), ['look', 'block_place'])
+        await f.land(); assert.equal(f.guard.missed, 1, 'неподтверждённая паутина не считается спасением')
+        await f.fall(); assert.equal(f.packets.filter(p => p.name === 'block_place').length, 1)
+      }
+    } finally { if (oldClutch == null) delete process.env.ND_CLUTCH; else process.env.ND_CLUTCH = oldClutch; f.close() }
+  }
 })

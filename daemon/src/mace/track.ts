@@ -16,7 +16,7 @@ export function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any)
     pushes: 0, pushHits: 0, knockoffs: 0, pushWhy: {}, threats: 0, shieldUps: 0, dodges: 0, threatHp: 0,
     counterHits: 0, mlg: 0
   }
-  const his = { id: null, y: null, vy: 0, air: false, launchedAt: 0, peak: null, maceAt: 0, airSince: 0, hist: [] }
+  const his = { id: null, y: null, vy: 0, vx: 0, vz: 0, air: false, launchedAt: 0, peak: null, maceAt: 0, airSince: 0, hist: [] }
   let active = null
   let pushWatch = null
   let hpLast = bot.health ?? 20
@@ -34,12 +34,15 @@ export function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any)
       // Позиции чужих приходят пакетами, не в такт нашему тику: скорость — по
       // окну в ~150 мс, иначе она скачет между нулём и двойной.
       const now = gameClock.now()
-      his.hist.push({ y, t: now })
+      his.hist.push({ x: e.position.x, y, z: e.position.z, t: now })
       while (his.hist.length > 2 && now - his.hist[0].t > 160) his.hist.shift()
       const h0 = his.hist[0]
-      const vy = now - h0.t > 30 ? (y - h0.y) / ((now - h0.t) / 50) : 0
+      const dtT = now - h0.t > 30 ? (now - h0.t) / 50 : 0
+      const vy = dtT ? (y - h0.y) / dtT : 0
       his.y = y
       his.vy = vy
+      his.vx = dtT ? (e.position.x - h0.x) / dtT : 0
+      his.vz = dtT ? (e.position.z - h0.z) / dtT : 0
       const air = !grounded(bot, e, vy)
       if (air && !his.air) { his.airSince = gameClock.now(); his.peak = y }
       if (!air) { his.peak = null; his.launchedAt = 0 }
@@ -76,11 +79,16 @@ export function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any)
     // вниз и упал от вершины на 1.5+): подпрыгивать на своём столбе — не угроза
     // (арена 2026-09-26: «булава сверху ×21» от прыжков на столбе).
     const dropping = his.vy < -0.3 && his.peak != null && his.peak - e.position.y > 1.5 && his.peak - me.y > 3.5 && dh < 3.5
-    if (his.air && dy > 1.5 && dh < 5.5 && (launched || mace || dropping)) {
-      // Когда он будет на высоте нашей головы: прогон по вертикали.
-      let yy = e.position.y; let vv = his.vy; let n = 0
-      const headY = me.y + 1.8
-      while (n < 40 && !(vv < 0 && yy <= headY + 1.2)) { vv = (vv - 0.08) * 0.98; yy += vv; n++ }
+    // Когда он будет на высоте нашей головы: прогон по вертикали.
+    let yy = e.position.y; let vv = his.vy; let n = 0
+    const headY = me.y + 1.8
+    while (n < 40 && !(vv < 0 && yy <= headY + 1.2)) { vv = (vv - 0.08) * 0.98; yy += vv; n++ }
+    // Летит издалека с булавой (взлёт зарядом в разбеге, элитры): к посадке он над нами, хоть сейчас и дальше 5.5 — иначе
+    // угрозы нет, и мы сами взлетали зарядом ветра ему навстречу (игра пользователя 22.10: «летел на него с булавой — он
+    // кидал заряды под ноги»). Горизонталь в воздухе гаснет медленно (×0.91 на тик) — сумма ряда.
+    const k = (1 - Math.pow(0.91, n)) / 0.09
+    const dhLand = Math.hypot(e.position.x + his.vx * k - me.x, e.position.z + his.vz * k - me.z)
+    if (his.air && dy > 1.5 && (dh < 5.5 || mace && dh < 24 && dhLand < 3.5) && (launched || mace || dropping)) {
       out = { kind: 'air', dy, dh, vy: his.vy, eta: n, mace, launched: !!launched, peak: his.peak }
     } else if (!his.air && mace && dy > 2.4 && dh < 3.6) {
       out = { kind: 'above', dy, dh, eta: 99, mace: true }

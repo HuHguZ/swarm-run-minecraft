@@ -123,7 +123,13 @@ const RESTING = 0.05
 // гравитация. Разница — полблока на двадцати тиках.
 const THROWN = new Set(['snowball', 'egg', 'ender_pearl', 'splash_potion', 'lingering_potion', 'potion', 'experience_bottle'])
 
-function closestApproach (bot, pos, vel, gravity, horizonTicks, thrown = false, fireball = false) {
+function flightBlock (bot, from, to) {
+  const v = new Vec3(to.x - from.x, to.y - from.y, to.z - from.z)
+  const n = v.norm()
+  return n > 1e-8 ? (require('./pick') as typeof import('./pick')).blockOnRay(bot, from, v.scaled(1 / n), n) : null
+}
+
+function closestApproach (bot, pos, vel, gravity, horizonTicks, thrown = false, fireball = false, moving = false) {
   const me = bot.entity.position
   const cx = me.x
   const cy = me.y + 0.9
@@ -131,7 +137,9 @@ function closestApproach (bot, pos, vel, gravity, horizonTicks, thrown = false, 
   let p = { x: pos.x, y: pos.y, z: pos.z }
   let v = { x: vel.x, y: vel.y, z: vel.z }
   let best: any = { dist: Infinity, ticks: 0 }
+  const mv = bot.entity.velocity || { x: 0, y: 0, z: 0 }
   for (let t = 1; t <= horizonTicks; t++) {
+    const prev = p
     if (fireball) {
       const speed = Math.hypot(v.x, v.y, v.z)
       const scale = speed > 0 ? (1 + .1 / speed) * FIREBALL_INERTIA : 0
@@ -143,6 +151,20 @@ function closestApproach (bot, pos, vel, gravity, horizonTicks, thrown = false, 
     } else {
       p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z }
       v = { x: v.x * 0.99, y: v.y * 0.99 - gravity, z: v.z * 0.99 }
+    }
+    if (moving) {
+      // Луч относительно движущегося тела ловит и быстрый пролёт между двумя тиками.
+      const delta = { x: p.x - prev.x, y: p.y - prev.y, z: p.z - prev.z }
+      const relative = { x: prev.x - me.x - mv.x * (t - 1), y: prev.y - me.y - mv.y * (t - 1), z: prev.z - me.z - mv.z * (t - 1) }
+      const radius = (bot.entity.width || .6) / 2 + .25
+      const u = (require('./pick') as typeof import('./pick')).rayBox(relative,
+        { x: delta.x - mv.x, y: delta.y - mv.y, z: delta.z - mv.z },
+        { x: -radius, y: -.25, z: -radius }, { x: radius, y: (bot.entity.height || 1.8) + .25, z: radius }, 1)
+      const wall = flightBlock(bot, prev, p)
+      if (u != null && (!wall || u * Math.hypot(delta.x, delta.y, delta.z) < wall.t)) return { dist: 0,
+        ticks: Math.max(1, t - 1 + u), at: { x: prev.x + delta.x * u, y: prev.y + delta.y * u, z: prev.z + delta.z * u }, vel: v }
+      if (wall) break
+      continue
     }
     // Тело — столб высотой 1.8, а не точка: стрела, пролетающая над головой на
     // уровне 1.7, попадает, и считать по центру значит уворачиваться поздно.
@@ -241,7 +263,7 @@ function smashes (bot, foes: string[], scope: string | null = null) {
     while (t < 45 && !(vy < 0 && p.y <= me.y + 1.8)) { p.x += vx; p.y += vy; p.z += vz; vy = (vy - 0.08) * 0.98; vx *= 0.91; vz *= 0.91; t++ }
     // 5, а не 4: за время падения я и сам могу шагнуть под него (mace-6: шёл отдать броню — и под удар).
     if (t >= 45 || Math.hypot(p.x - me.x, p.z - me.z) > 5) continue
-    out.push({ name: e.username, at: { x: p.x, y: p.y, z: p.z }, from: { x: e.position.x, y: e.position.y + 1.6, z: e.position.z }, ticks: t, dbg: `support unknown@${e.position.y.toFixed(2)} vy ${v.y.toFixed(2)}` })
+    out.push({ name: e.username, at: { x: p.x, y: p.y, z: p.z }, from: { x: e.position.x, y: e.position.y + 1.6, z: e.position.z }, vel: sample(e, now), ticks: t, dbg: `support unknown@${e.position.y.toFixed(2)} vy ${v.y.toFixed(2)}` })
   }
   return out
 }
@@ -283,7 +305,7 @@ function thrownLanding (r, age, floorY) {
 // Целится в меня из лука или арбалета (12.10: «уворачиваться заранее — как только я нацеливаюсь, это же видно»): лук
 // натянут (living_entity_flags 0x01 — «использует», рука — бит 0x02) или арбалет в руке, взгляд по горизонтали — на
 // меня в пределах 8°, ближе 64 бл. Видно глазами (поза и поворот головы), без прицела в пакетах.
-function aims (bot, foes: string[] | null, scope: string | null) {
+function aims (bot, foes: string[] | null, scope: string | null, flight = false) {
   const out = []
   const me = bot.entity.position
   let ix = 8
@@ -298,7 +320,9 @@ function aims (bot, foes: string[] | null, scope: string | null) {
     const it = typeof f === 'number' && (f & 0x02) ? eq[1] : eq[0]
     // Трезубец в замахе (рука активна, как натянутый лук) — тоже прицел (пользователь 14.10: «трезубцы — плохо уворачиваются,
     // только прыжки, а надо стрейфить постоянно»): раньше видели только летящий трезубец — поздно, рывок вместо джука.
-    const drawn = it && (((it.name === 'bow' || it.name === 'trident') && typeof f === 'number' && (f & 0x01)) || it.name === 'crossbow')
+    const loaded = it?.componentMap?.get('charged_projectiles')?.data
+    const drawn = it && (((it.name === 'bow' || it.name === 'trident') && typeof f === 'number' && (f & 0x01)) || it.name === 'crossbow' &&
+      (!flight || !!(f & 0x01) || (loaded?.projectiles || loaded?.items || []).length > 0))
     if (!drawn) continue
     // Взгляд mineflayer: (−sin yaw, …, −cos yaw); угол до меня по горизонтали.
     const want = Math.atan2(-(me.x - e.position.x), -(me.z - e.position.z))
@@ -307,45 +331,76 @@ function aims (bot, foes: string[] | null, scope: string | null) {
     // прицел в край тела выходил за допуск).
     if (dy > Math.max(8 * Math.PI / 180, Math.atan2(0.7, d) + 5 * Math.PI / 180)) continue
     const hx = me.x - e.position.x; const hz = me.z - e.position.z; const h = Math.hypot(hx, hz) || 1
-    out.push({ name: e.username, at: { x: e.position.x, y: e.position.y, z: e.position.z }, weapon: it.name, side: { x: -hz / h, z: hx / h } })
+    out.push({ id: e.id, name: e.username, at: { x: e.position.x, y: e.position.y, z: e.position.z },
+      from: { x: e.position.x, y: e.position.y + 1.62, z: e.position.z }, weapon: it.name, side: { x: -hz / h, z: hx / h } })
   }
   return out
 }
-// Пол уходит из-под ног (игра пользователя 22.10: «ломаю блоки под ними — в дырки улетают, ничего не делают, смотрят, как
-// скидываю на дно»): опора в 1.8 бл. от ног по горизонтали и на 1–3 ниже исчезла (стала воздухом) или трескается (чужие
-// трещины) — видно глазами, как игроку. Свою копку не считаем. События живут 0.8 с.
+// Видимые события рядом храним и для объяснения слышимой копки; опасность — только форма под своей рамкой ног.
+function floorSupport (bot, boxes) {
+  if (!bot.entity) return false
+  const { bodyBox }: typeof import('./navigation/geometry') = require('./navigation/geometry')
+  const body = bodyBox(bot, bot.entity.position), feet = bot.entity.position.y
+  return boxes.some(b => b.maxY <= feet + 1e-7 && feet - b.maxY <= 3 &&
+    Math.min(body.maxX, b.maxX) - Math.max(body.minX, b.minX) > 1e-7 && Math.min(body.maxZ, b.maxZ) - Math.max(body.minZ, b.minZ) > 1e-7)
+}
+
+// Свою активную копку не считаем, события живут прежние 0.8 с. Союзная копка собственной опоры — всё ещё угроза.
 function floorTracker (bot) {
   if (bot._ndFloor) return bot._ndFloor
+  const senses: typeof import('./perception/senses') = require('./perception/senses')
+  senses.installHearing(bot)
+  const { shapeBoxes }: typeof import('./navigation/geometry') = require('./navigation/geometry')
   const ev: any[] = []
   bot._ndFloor = ev
+  bot.on('diggingCompleted', () => { bot._ndFloorOwnDigAt = gameClock.now() })
   const near = (p) => {
     const me = bot.entity?.position
     return !!me && Math.abs(p.x + .5 - me.x) <= 1.8 && Math.abs(p.z + .5 - me.z) <= 1.8 && p.y < me.y && p.y >= Math.floor(me.y) - 3
   }
   const mine = (p) => !!bot.targetDigBlock?.position && bot.targetDigBlock.position.equals(p)
+  const seen = (block) => {
+    // Для уже исчезнувшей опоры проверяем прежний контур, не меняя мир тела.
+    const view = Object.create(bot)
+    view.blockAt = p => p.floored().equals(block.position) ? block : bot.blockAt(p)
+    return (require('./pick') as typeof import('./pick')).blockSeen(view, block.position)
+  }
+  const remember = (block, sound) => {
+    const me = bot.entity.position, at = block.position.clone(), dx = at.x + .5 - me.x, dz = at.z + .5 - me.z
+    ev.push({ at, t: gameClock.now(), boxes: shapeBoxes(block), sound, dir8: senses.dir8(dx, dz),
+      band: senses.band(Math.hypot(dx, at.y + .5 - me.y, dz)) })
+  }
   bot.on('blockUpdate', (oldB, newB) => {
-    try { if (oldB?.boundingBox === 'block' && newB && newB.boundingBox !== 'block' && near(newB.position) && !mine(newB.position)) ev.push({ at: newB.position.clone(), t: gameClock.now() }) } catch {}
+    try { if (oldB?.boundingBox === 'block' && newB && newB.boundingBox !== 'block' && near(newB.position) && !mine(newB.position) && seen(oldB)) remember(oldB, 'break') } catch {}
   })
   bot.on('blockBreakProgressObserved', (block, stage, breaker) => {
-    try { if (block?.position && breaker?.id !== bot.entity?.id && near(block.position)) ev.push({ at: block.position.clone(), t: gameClock.now() }) } catch {}
+    try { if (block?.position && breaker?.id !== bot.entity?.id && near(block.position) && !mine(block.position) && seen(block)) remember(block, 'hit') } catch {}
   })
   return ev
 }
-function floorDanger (bot, foes: string[] | null, scope: string | null) {
+function floorDanger (bot) {
   const F = floorTracker(bot)
   const now = gameClock.now()
   while (F.length && now - F[0].t > 800) F.shift()
-  if (!F.length || !bot.entity) return []
+  if (!bot.entity) return []
   const me = bot.entity.position
-  // Враг рядом (8 бл.) — иначе пол ломает свой или само (вода, гравий): не дёргаться.
-  let foe = null
-  for (const raw of Object.values(bot.entities) as any[]) {
-    if (!raw || raw === bot.entity || raw.type !== 'player' || (foes !== null && !foes.includes(raw.username)) || !raw.position || raw.position.distanceTo(me) > 8) continue
-    const e = visiblePlayer(bot, raw, scope); if (e && (!foe || e.position.distanceTo(me) < foe.position.distanceTo(me))) foe = e
+  const support = F.filter(e => floorSupport(bot, e.boxes))
+  if (!support.length) {
+    // Слышно лишь близкую копку, не личность копающего и не клетку под полом.
+    const senses: typeof import('./perception/senses') = require('./perception/senses')
+    // Видимая соседняя копка объясняет совпавший грубый звук, пока вся рамка стоит на видимой целой опоре.
+    // Без этого объяснения звук под непрозрачным полом остаётся неопределённой угрозой, без раскрытия клетки.
+    const { supportAt, bodyBox }: typeof import('./navigation/geometry') = require('./navigation/geometry')
+    const own = F.length ? supportAt(bot, me, .04) : null, body = bodyBox(bot, me)
+    const intact = own && own.overlap >= (body.maxX - body.minX) * (body.maxZ - body.minZ) - 1e-7 &&
+      (require('./pick') as typeof import('./pick')).blockSeen(bot, own.block.position)
+    const h = !bot.targetDigBlock && now - (bot._ndFloorOwnDigAt ?? -Infinity) > 800 && senses.heard(bot, { sinceMs: 800, match: /^block\.[a-z_]+\.(hit|break)$/ })
+      .find(h => h.band === 'рядом' && !(intact && F.some(e => e.sound === h.what && e.dir8 === h.dir8 && e.band === h.band)))
+    const at = h && senses.hearPoint(bot, h)
+    return at ? [{ name: 'копка рядом', at, from: at, ticks: 0, holes: 0, signal: 'sound' }] : []
   }
-  if (!foe) return []
-  const at = { x: F.reduce((s, e) => s + e.at.x + .5, 0) / F.length, y: Math.floor(me.y) - 1, z: F.reduce((s, e) => s + e.at.z + .5, 0) / F.length }
-  return [{ name: foe.username, at, from: { x: foe.position.x, y: foe.position.y, z: foe.position.z }, ticks: 0, holes: F.length }]
+  const at = { x: support.reduce((s, e) => s + e.at.x + .5, 0) / support.length, y: Math.floor(me.y) - 1, z: support.reduce((s, e) => s + e.at.z + .5, 0) / support.length }
+  return [{ name: 'видимый подкоп', at, from: at, ticks: 0, holes: support.length, signal: 'sight' }]
 }
 // Один расчёт на игровой тик (стенд 22.10: опрос состояния драйвера 4 раза в секунду считал опасности заново, хотя рассылка
 // уже посчитала их в этом тике, — 6 % процессора тела). Копия верхнего уровня: вызывающий может переназначить поле.
@@ -361,6 +416,91 @@ function dangers (bot, opts: { radius?: number, foes?: string[] | null } = {}) {
   dangerMemo.set(bot, { key, value })
   return { ...value }
 }
+// Лёгкий прогноз для тела: без сканирования лавы, пола, паутины и чужих прыжков.
+const projectileMemo = new WeakMap<object, { key: string, value: any }>()
+function projectileDangers (bot, { foes = null as string[] | null } = {}) {
+  if (!bot?.entity) return { potions: [], arrows: [], aims: [] }
+  foes = foes === null ? null : [...new Set(Array.isArray(foes) ? foes.filter(name => typeof name === 'string') : [])].sort()
+  const scope = foes === null ? null : JSON.stringify(foes)
+  const sight = playerSights.get(bot)
+  if (sight && sight.scope !== scope) { sight.vision?.close(); sight.vision = null; sight.scope = scope }
+  const tick = bot.ndClock?.ticks, key = `${tick}|${scope}`
+  const memo = projectileMemo.get(bot)
+  if (Number.isSafeInteger(tick) && memo?.key === key) return { ...memo.value }
+  const value = { ...projectileThreats(bot, foes, true), aims: aims(bot, foes, scope, true) }
+  if (Number.isSafeInteger(tick)) projectileMemo.set(bot, { key, value })
+  return { ...value }
+}
+
+function projectileThreats (bot, foes, moving = false) {
+  const me = bot.entity.position
+  const potions = []
+  const arrows = []
+  const T = thrownTracker(bot)
+  for (const [id, r] of T) {
+    const e = bot.entities[id]
+    const age = Math.round((gameClock.now() - r.t0) / 50)
+    if (!e) { T.delete(id); continue }
+    if (age > 60 && !moving) {
+      // Старый опрос не удаляет свежую траекторию, которую ведёт слой тела.
+      if (!r.visibleMotion) T.delete(id)
+      continue
+    }
+    // Бросил я сам (12.10: кидал себе зелье лечения и сам же от него отпрыгивал) или не враг — пропуск; бросивший неизвестен — угроза.
+    const owner = r.owner ? bot.entities[r.owner] : null
+    if ((r.owner && r.owner === bot.entity.id) || (owner && owner.type === 'player' && foes !== null && !foes.includes(owner.username))) {
+      if (age > 60) T.delete(id)
+      continue
+    }
+    const view = moving && projectileView(bot, e, gameClock.now())
+    if (moving && !view) { r.visibleMotion = false; if (age > 60) T.delete(id); continue }
+    const measured = view && sample(view, gameClock.now())
+    const stopped = measured && Math.hypot(measured.x, measured.y, measured.z) < RESTING
+    if (moving) r.visibleMotion = !!measured && !stopped
+    // Долгий полёт подтверждает свежая видимая скорость, старый вылет сам себя не продлевает.
+    if (age > 60 && (!measured || stopped)) { T.delete(id); continue }
+    if (stopped) continue
+    // Прямое попадание (стрела, трезубец, снежок, яйцо, заряд ветра, огненный шар; брызгающее зелье — тоже, если летит в
+    // тело): свой выстрел (вылет у меня) и застрявшее (дольше 25 тиков) — мимо. Где оно сейчас — своя физика от вылета
+    // (стрела: сдвиг, потом трение и гравитация; брошенное: наоборот; шары — инерция), дальше — ближайший подход за 30 тиков.
+    const direct = () => {
+      if (!moving && (age > 25 || Math.hypot(r.p.x - me.x, r.p.y - me.y - 1.5, r.p.z - me.z) < 2)) return null
+      const g = GRAVITY[r.name] ?? 0; const thrown = THROWN.has(r.name); const fire = FIREBALLS.has(r.name)
+      // Новый видимый пакет исправляет прогноз после остановки или отражения снаряда.
+      let p = { ...(measured ? view.position : r.p) }; let v = { ...(measured || r.v) }
+      for (let t = 0; t < (measured ? 0 : age); t++) {
+        const prev = p
+        if (fire) { const sp = Math.hypot(v.x, v.y, v.z); const k = sp > 0 ? (1 + 0.1 / sp) * FIREBALL_INERTIA : 0; v = { x: v.x * k, y: v.y * k, z: v.z * k }; p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z } }
+        else if (thrown) { v = { x: v.x * 0.99, y: (v.y - g) * 0.99, z: v.z * 0.99 }; p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z } }
+        else { p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z }; v = { x: v.x * 0.99, y: v.y * 0.99 - g, z: v.z * 0.99 } }
+        if (moving && flightBlock(bot, prev, p)) return null
+      }
+      const hit: any = closestApproach(bot, p, v, g, 30, thrown, fire, moving)
+      return hit.dist > 1.0 ? null : { hit, v, from: p }
+    }
+    if (moving || !SPLASH.test(r.name)) {
+      const dh = direct()
+      if (!dh && !SPLASH.test(r.name)) continue
+      if (dh) {
+        const { hit, v, from } = dh
+        // Шаг — поперёк полёта, в сторону от линии (прямо в центр — любая сторона).
+        const hv = Math.hypot(v.x, v.z) || 1
+        let sx = -v.z / hv; let sz = v.x / hv
+        if ((me.x - hit.at.x) * sx + (me.z - hit.at.z) * sz < 0) { sx = -sx; sz = -sz }
+        arrows.push({ id, name: r.name, ticks: hit.ticks, at: hit.at, from: moving ? from : r.p, side: { x: sx, z: sz }, vel: v,
+          blockable: !/(?:potion|wind_charge|dragon_fireball)$/.test(r.name) })
+      }
+      if (!SPLASH.test(r.name)) continue
+    }
+    const l = thrownLanding(r, age, me.y + 0.3)
+    if (!l || Math.hypot(l.at.x - me.x, l.at.z - me.z) > 4.5) continue
+    // Содержимое чужого зелья не видно: неизвестный бросок считаем угрозой.
+    const role = null
+    if (!/^(heal|regen|buff)$/.test(role || '')) potions.push({ id, at: l.at, from: r.p, ticks: l.ticks, name: r.name, role, blockable: false })
+  }
+  return { potions, arrows: arrows.sort((a, b) => a.ticks - b.ticks) }
+}
+
 function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) {
   if (!bot || !bot.entity) return { potions: [], holders: [], clouds: [], smashes: [], arrows: [], aims: [], lava: [], floor: [], blasts: [], web: [] }
   // An explicit empty team list differs from the legacy unfiltered observation.
@@ -369,49 +509,7 @@ function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) 
   const sight = playerSights.get(bot)
   if (sight && sight.scope !== scope) { sight.vision?.close(); sight.vision = null; sight.scope = scope }
   const me = bot.entity.position
-  const potions = []
-  const arrows = []
-  const T = thrownTracker(bot)
-  for (const [id, r] of T) {
-    const e = bot.entities[id]
-    const age = Math.round((gameClock.now() - r.t0) / 50)
-    if (!e || age > 60) { T.delete(id); continue }
-    // Бросил я сам (12.10: кидал себе зелье лечения и сам же от него отпрыгивал) или не враг — пропуск; бросивший неизвестен — угроза.
-    const owner = r.owner ? bot.entities[r.owner] : null
-    if (r.owner && r.owner === bot.entity.id) continue
-    if (owner && owner.type === 'player' && foes !== null && !foes.includes(owner.username)) continue
-    // Прямое попадание (стрела, трезубец, снежок, яйцо, заряд ветра, огненный шар; брызгающее зелье — тоже, если летит в
-    // тело): свой выстрел (вылет у меня) и застрявшее (дольше 25 тиков) — мимо. Где оно сейчас — своя физика от вылета
-    // (стрела: сдвиг, потом трение и гравитация; брошенное: наоборот; шары — инерция), дальше — ближайший подход за 30 тиков.
-    const direct = () => {
-      if (age > 25 || Math.hypot(r.p.x - me.x, r.p.y - me.y - 1.5, r.p.z - me.z) < 2) return null
-      const g = GRAVITY[r.name] ?? 0; const thrown = THROWN.has(r.name); const fire = FIREBALLS.has(r.name)
-      let p = { ...r.p }; let v = { ...r.v }
-      for (let t = 0; t < age; t++) {
-        if (fire) { const sp = Math.hypot(v.x, v.y, v.z); const k = sp > 0 ? (1 + 0.1 / sp) * FIREBALL_INERTIA : 0; v = { x: v.x * k, y: v.y * k, z: v.z * k }; p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z } }
-        else if (thrown) { v = { x: v.x * 0.99, y: (v.y - g) * 0.99, z: v.z * 0.99 }; p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z } }
-        else { p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z }; v = { x: v.x * 0.99, y: v.y * 0.99 - g, z: v.z * 0.99 } }
-      }
-      const hit: any = closestApproach(bot, p, v, g, 30, thrown, fire)
-      return hit.dist > 1.0 ? null : { hit, v }
-    }
-    if (!SPLASH.test(r.name)) {
-      const dh = direct()
-      if (!dh) continue
-      const { hit, v } = dh
-      // Шаг — поперёк полёта, в сторону от линии (прямо в центр — любая сторона).
-      const hv = Math.hypot(v.x, v.z) || 1
-      let sx = -v.z / hv; let sz = v.x / hv
-      if ((me.x - hit.at.x) * sx + (me.z - hit.at.z) * sz < 0) { sx = -sx; sz = -sz }
-      arrows.push({ name: r.name, ticks: hit.ticks, at: hit.at, from: r.p, side: { x: sx, z: sz } })
-      continue
-    }
-    const l = thrownLanding(r, age, me.y + 0.3)
-    if (!l || Math.hypot(l.at.x - me.x, l.at.z - me.z) > 4.5) continue
-    // A foreign potion's contents are not a visible tooltip; unknown is a throw threat.
-    const role = null
-    if (!/^(heal|regen|buff)$/.test(role || '')) potions.push({ at: l.at, from: r.p, ticks: l.ticks, name: e.name, role })
-  }
+  const { potions, arrows } = projectileThreats(bot, foes)
   const holders = []
   for (const raw of Object.values(bot.entities) as any[]) {
     if (!raw || raw === bot.entity || raw.type !== 'player' || (foes !== null && !foes.includes(raw.username)) || !raw.position || raw.position.distanceTo(me) > radius) continue
@@ -443,10 +541,10 @@ function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) 
     .map(c => ({ at: { x: c.position.x, y: c.position.y, z: c.position.z }, fuse: c.fuse, primed: c.primed, ...(c.id != null ? { id: c.id } : {}) }))
   // Паутина на теле (клетка ног или головы): в ней шаг вчетверо медленнее — ни уйти, ни догнать (стенд бота-противника 22.10:
   // паутина на боте — 10 с на месте под ударами).
-  const webs = [f0, f0.offset(0, 1, 0)].filter(c => bot.blockAt(c)?.name === 'cobweb')
+  const webs = (require('./hazards') as typeof import('./hazards')).webCells(bot)
   const web = webs.length ? [{ at: { x: webs[0].x, y: webs[0].y, z: webs[0].z }, cells: webs.length }] : []
-  return { potions, holders, clouds, smashes: smashes(bot, foes || [], scope), arrows, aims: aims(bot, foes, scope), lava: lava.slice(0, 1), floor: floorDanger(bot, foes, scope), blasts, web }
+  return { potions, holders, clouds, smashes: smashes(bot, foes || [], scope), arrows, aims: aims(bot, foes, scope), lava: lava.slice(0, 1), floor: floorDanger(bot), blasts, web }
 }
 
-module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers }
-export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, smashes }
+module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, smashes }
+export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, smashes }

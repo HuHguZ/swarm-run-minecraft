@@ -7,6 +7,7 @@ import type { SwarmMember, SharedEnemy } from './types'
 import type { PvpPlan } from './plan-frame'
 import type { PvpMemory } from './board'
 import * as damage from '../pvp/damage-model'
+import { REGEN_FAST } from '../pvp/hp-estimate'
 import { visibleForce, assessTeamFight } from './fight'
 import { distance, count } from './common'
 
@@ -15,7 +16,7 @@ const NEAR = 8 // враг ближе — не до лута (бой или от
 
 // Своя сила — той же шкалой, что видим у врага (visibleForce): лучшее оружие (лук и арбалет — со стрелами) и броня.
 export function memberForce(m: SwarmMember): number {
-  const ranged = (n: string) => n === 'trident' || /^(bow|crossbow)$/.test(n) && count(m.inventory, 'arrow') > 0
+  const ranged = (n: string) => n === 'trident' || /^(bow|crossbow)$/.test(n) && (m.attackArrows ?? count(m.inventory, 'arrow') + count(m.inventory, 'spectral_arrow')) > 0
   const weapons = [m.weapon, ...Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0 && (damage.isMeleeWeapon(n) || ranged(n)))].filter(Boolean) as string[]
   const armor = (Array.isArray(m.armor) ? m.armor : Object.values(m.armor || {})).filter(Boolean) as string[]
   return Math.max(...[null, ...weapons].map(weapon => visibleForce({ equipment: { weapon, armor } } as SharedEnemy)))
@@ -68,9 +69,34 @@ export function strongFew(state: PvpMemory, team: SwarmMember[], enemies: Shared
   return state.strongFew = futile
 }
 
-// Чем убить сильного, кроме ближнего боя (DeepSeek t7, стенд 21.10: оба убийства чемпиона — булава с падения и сброс в
-// пустоту; удар по незериту с Защитой IV — 0.5–1.3 хп, а Шипы III отвечают каждому): булава с зарядом ветра (взлёт и удар
-// с падения ~25 хп), зелья вреда (магия мимо брони, 4.3 хп за вред II), заряды ветра (сброс у края).
+// Сравниваем цену попадания с лечением, а не ждём смертей своих. Малой выборке меньше доверия; при окне в 10 тиков
+// даже полный рой наносит не больше двух обычных ударов/с. Если броня оставляет меньше восстанавливаемого за окно,
+// мечи не выигрывают гонку. Сильные попадания и устойчивое падение оценки возвращают обычную тактику.
+export function ineffectiveDamage(state: PvpMemory, team: SwarmMember[], enemies: SharedEnemy[]): void {
+  const evidence = state.dislodgeEvidence ??= new Map<string, number>()
+  for (const id of evidence.keys()) if (!enemies.some(e => e.id === id && e.pressure?.hits)) evidence.delete(id)
+  const futile = enemies.filter(e => {
+    const p = e.pressure
+    if (!p?.hits) return false
+    const confidence = p.hits / (p.hits + MELEE_CAP)
+    const progress = Math.max(0, p.damage - p.healing)
+    const healed = confidence * p.healing
+    const regenerated = p.hits * confidence * REGEN_FAST * damage.IFRAME_TICKS
+    const prior = evidence.get(e.id) ?? 0
+    if (healed > progress || regenerated > p.damageLow) { evidence.set(e.id, Math.max(prior, healed, regenerated)); return true }
+    if (prior > 0 && confidence * Math.max(0, p.damageLow - p.healing) <= prior) return true
+    evidence.delete(e.id)
+    return false
+  })[0]
+  const next = !!futile
+  if (next !== !!state.dislodge) {
+    const p = futile?.pressure
+    console.log(`[${new Date().toTimeString().slice(0, 8)}] 🫸 ${team[0]?.team ?? 'рой'}: ${next ? 'урон бесполезен — сброс/подкоп у края' : 'снова оцениваем обычный бой'}${p ? `; ${futile!.id}: попаданий ${p.hits}, урон≈${p.damageLow.toFixed(1)}..${p.damage.toFixed(1)}, лечение≈${p.healing.toFixed(1)}` : ''}`)
+  }
+  state.dislodge = next
+}
+
+// Чем убить сильного иначе: булава с падения, вред мимо брони, ветер и сброс.
 export function killMeans(m: SwarmMember): { smash: boolean; harm: number; wind: number; axe: boolean } {
   const wind = count(m.inventory, 'wind_charge')
   const harm = Object.entries(m.potions || {}).filter(([k]) => /^splash_(strong_)?harming$/.test(k)).reduce((s, [, n]) => s + (Number(n) || 0), 0)

@@ -5,6 +5,9 @@ import { blockName, keyDir, wantsJump } from '../moves'
 import * as read from '../read'
 import * as tools from '../tools'
 import * as totemMod from '../totem'
+import * as pick from '../pick'
+import { canSurvivePearl } from '../throw'
+import { pearlDamage } from '../pearl-hop'
 import { hasEffect, onFire, stepSafe } from './body'
 import { findItem } from './potions'
 import { HIT_REACH, TICK_MS, cooldownMs } from './rules'
@@ -56,65 +59,100 @@ export async function scoopTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
 }
 
-// Паутина на мне или между нами.
+// Паутина на мне: сначала защита, затем выход по цене времени и входящего урона.
 export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
-  const { bot, digWatch, heldName, holdItem, holdWeapon, maceNow, mc, pendingWater, ready, rest, routeInputs, st, tt, used } = ctx
-  const { cooldownLeft, hp, inSight, me, meInWeb, r, sight } = turn
-  const webCells = meInWeb ? [me.floored(), me.floored().offset(0, 1, 0)].filter(c => blockName(bot, c) === 'cobweb') : []
+  const { bot, clear, digWatch, escapePearl, guard, holdItem, holdWeapon, mc, pathTo, pendingWater, ready, rest, routeInputs, st, tt, used } = ctx
+  const webCells = hazards.webCells(bot)
+  turn.meInWeb = webCells.length > 0
   turn.webPlan = null
-  if (webCells.length) {
-    const f = me.floored()
-    const headWeb = webCells.some(c => c.y === f.y + 1)
-    const wCell = headWeb ? f.offset(0, 2, 0) : f.offset(0, 1, 0)
-    const wItem = findItem(bot, i => i.name === 'water_bucket')
-    const nether = /nether/.test(String((bot.game && bot.game.dimension) || ''))
-    const opts = []
-    if (wItem && !nether && /^(air|cave_air)$/.test(blockName(bot, wCell) || '')) {
-      opts.push({ how: 'water', item: wItem, cell: wCell, busyMs: 150, freeMs: 150 + (headWeb ? 460 : 300) })
-    }
-    const cutOne = tools.bestFor(bot, bot.blockAt(webCells[0])).ms
-    const cutAll = webCells.reduce((s, c) => s + tools.bestFor(bot, bot.blockAt(c)).ms, 0)
-    if (cutOne <= 2500) opts.push({ how: 'cut', busyMs: cutOne, freeMs: cutAll })
-    const inReach = r <= HIT_REACH + 0.5
-    const score = o => o.freeMs + (inReach ? o.busyMs : 0)
-    turn.webPlan = (onFire(bot) && opts.find(o => o.how === 'water')) || opts.sort((a, b) => score(a) - score(b) || (a.how === 'cut' ? -1 : 1))[0] || null
+  turn.webSafe = true
+  if (!webCells.length) { ctx.failedCutWeb = null; return }
+  if (ctx.pathing) { pathTo(false); ctx.pathing = false }
+  clear()
+  const hp = bot.health ?? 20
+  const foes = tt.threats()
+  const eta = e => Math.max(tt.eta(e), tt.state(e).swung?.left || 0)
+  const loss = ms => foes.reduce((n, e) => n + Math.ceil(Math.max(0, ms - eta(e)) / cooldownMs(e.equipment?.[0])) * totemMod.burstOf(bot, e), 0)
+  const eye = pick.eyeOf(bot)
+  const target = webCells.map(c => {
+    const point = c.offset(.5, .5, .5), ray = point.minus(eye), length = ray.norm()
+    const aim = length < 1e-6 || pick.blockOnRay(bot, eye, ray.scaled(1 / length), length + .01)?.pos.equals(c) ? point : pick.blockAim(bot, c, { range: 4.5, seeThrough: null })
+    return aim ? { cell: c, aim } : null
+  }).find(Boolean)
+  const cut = target ? tools.bestFor(bot, bot.blockAt(target.cell)) : { ms: Infinity, item: null }
+  const opts = []
+  if (Number.isFinite(cut.ms)) opts.push({ how: 'cut', busyMs: cut.ms, freeMs: webCells.reduce((n, c) => n + tools.bestFor(bot, bot.blockAt(c)).ms, 0) })
+  const water = findItem(bot, i => i.name === 'water_bucket')
+  // Строго вниз: у первого контура верхняя грань, в том числе при глазах внутри паутины.
+  const hit = water && !/nether/.test(String(bot.game?.dimension || '')) && pick.blockOnRay(bot, pick.eyeOf(bot), { x: 0, y: -1, z: 0 }, 4.5, /^(water|lava|bubble_column)$/)
+  const cell = hit?.pos?.offset(0, 1, 0)
+  if (cell && hit.block.name === 'cobweb' && cell.y > webCells[0].y && webCells.some(c => c.x === cell.x && c.z === cell.z) && /^(air|cave_air|void_air)$/.test(blockName(bot, cell) || '')) {
+    // Вода течёт раз в 5 тиков; цена включает спуск от источника до нижней паутины.
+    opts.push({ how: 'water', item: water, cell, busyMs: 2 * TICK_MS, freeMs: (2 + 5 * (cell.y - Math.min(...webCells.map(c => c.y)))) * TICK_MS })
   }
-  // Голова в паутине — прицел упирается в неё саму (VoxelShape.clip: глаза
-  const webSafe = turn.webSafe = !!turn.webPlan && (r > HIT_REACH || !inSight || cooldownLeft >= turn.webPlan.busyMs ||
-    hp > totemMod.burstOf(bot, ctx.entity) * (1 + Math.floor(Math.max(0, turn.webPlan.busyMs - tt.eta(ctx.entity)) / cooldownMs(ctx.entity.equipment?.[0]))))
-  if (meInWeb && ready('webFight')) {
-    if (!turn.webPlan) { rest('webFight', 3000); used('в паутине — снять нечем (ни меча, ни ножниц, ни воды)') } else if (!webSafe) { rest('webFight', 3000); used('в паутине — сперва удар, сниму в перезарядке') }
+  const inputs = [webCells.map(c => [c, bot.blockAt(c)?.stateId]), bot.entity.onGround, bot.entity.isInWater, routeInputs()].join('|')
+  const available = opts.filter(o => !(ctx.failedCutWeb?.inputs === inputs && ctx.failedCutWeb.how === o.how && gameClock.now() - ctx.failedCutWeb.at < o.busyMs))
+  const score = o => o.freeMs * (1 + loss(o.freeMs) / Math.max(1, hp))
+  turn.webPlan = available.sort((a, b) => score(a) - score(b))[0] || null
+  const plan = turn.webPlan
+  // За ход режется одна клетка: окно на 0.4 с годится и при двух слоях паутины.
+  turn.webSafe = !!plan && loss(plan.busyMs) < hp
+  const urgent = foes.some(e => eta(e) <= (plan?.busyMs || 0) + 5 * TICK_MS) || !!(ctx.prof.player && mc.threat())
+  // Щит прикрывает ожидание окна; при резке и броске его придётся опустить.
+  if (urgent && guard?.stats?.worn) { ctx.aim = 'target'; await guard.raise(true) }
+  const pearl = findItem(bot, i => i.name === 'ender_pearl')
+  if (pearl && canSurvivePearl(bot) && (!plan || loss(plan.freeMs) > pearlDamage(bot))) {
+    if (guard) await guard.raise(false)
+    const out = await escapePearl({ jump: false })
+    if (out?.thrown) { await holdWeapon(); return NEXT }
+    if (urgent && guard?.stats?.worn) await guard.raise(true)
   }
-  const cutWebInputs = turn.webPlan && [webCells.join('|'), turn.webPlan.how, turn.webPlan.cell, turn.webPlan.busyMs, !!webSafe, !!maceNow(), routeInputs()].join('|')
-  if (turn.webPlan && webSafe && !(ctx.prof.player && mc.threat()) && (!ctx.failedCutWeb || ctx.failedCutWeb.inputs !== cutWebInputs)) {
-    ctx.failedCutWeb = { inputs: cutWebInputs, why: 'web_action_unconfirmed' }
-    if (turn.webPlan.how === 'water') {
-      if (await holdItem(turn.webPlan.item)) {
-        ctx.aim = 'point'
-        ctx.aimPoint = { yaw: bot.entity.yaw, pitch: -Math.PI / 2 }
-        await bot.look(bot.entity.yaw, -Math.PI / 2, true).catch(() => {})
-        await ctx.sleep(TICK_MS)
-        try { bot.activateItem() } catch {}
-        await ctx.sleep(TICK_MS)
-        ctx.aim = 'target'
-        ctx.failedCutWeb = { inputs: cutWebInputs, why: 'water_or_web_receipt_pending' }
-        pendingWater.push({ cell: turn.webPlan.cell, at: gameClock.now() })
-        used(onFire(bot) ? 'вода на себя: потушился и смыл паутину' : `вода: смыл паутину (${webCells.length} кл.)`)
-      }
-      await holdWeapon()
-      return NEXT
-    }
-    ctx.aim = 'free'
-    const stop = await digWatch(bot.blockAt(webCells[0]), () => (ctx.prof.player && mc.threat()) ? 'булава летит' : null)
-    ctx.aim = 'target'
-    ctx.failedCutWeb = blockName(bot, webCells[0]) !== 'cobweb' ? null : { inputs: cutWebInputs, why: stop || 'web_not_removed' }
-    if (stop) used(`бросил резать паутину: ${stop}`)
-    else if (blockName(bot, webCells[0]) !== 'cobweb') { used(`разрезал паутину (${heldName()})`); st.cutFails = 0 } else if (++st.cutFails >= 2) {
-      st.cutFails = 0
-    }
-    await holdWeapon()
+  if (urgent && guard?.stats?.worn && guard.failure?.() !== 'shield_cooldown' && (!turn.webSafe || ctx.prof.player && mc.threat())) {
+    await ctx.sleep(TICK_MS)
     return NEXT
   }
+  if (!plan) { await ctx.sleep(TICK_MS); return NEXT }
+  if (guard) await guard.raise(false)
+  let why = null
+  ctx.aim = 'free'
+  try {
+    if (plan.how === 'water') {
+      if (await holdItem(plan.item)) {
+        await bot.look(bot.entity.yaw, -Math.PI / 2, true)
+        await ctx.sleep(TICK_MS)
+        bot.activateItem()
+        pendingWater.push({ cell: plan.cell, at: gameClock.now() })
+        const until = gameClock.now() + plan.freeMs + 2 * TICK_MS
+        while (!ctx.ctl.aborted && hazards.webCells(bot).length && gameClock.now() < until) {
+          // Ведро уже вылито: пока течёт вода, снова прикрыться к противнику.
+          ctx.aim = 'target'
+          if (urgent && guard?.stats?.worn) guard.raise(true)
+          await ctx.sleep(TICK_MS)
+        }
+      }
+    } else {
+      await bot.lookAt(target.aim, true)
+      const started = gameClock.now()
+      why = await digWatch(bot.blockAt(target.cell), () => ctx.ctl.aborted ? 'прервано' : ctx.prof.player && mc.threat() ? 'булава летит' :
+        guard?.stats?.worn && loss(Math.max(0, cut.ms - (gameClock.now() - started))) >= (bot.health ?? hp) ? 'нужен щит' : null, false)
+    }
+  } catch (error) { why = error.message } finally { ctx.aim = 'target'; await holdWeapon() }
+  const left = hazards.webCells(bot)
+  const removed = webCells.filter(c => { const b = bot.blockAt(c); return b && b.name !== 'cobweb' })
+  ctx.failedCutWeb = removed.length ? null : { inputs, how: plan.how, at: gameClock.now(), why: why || 'web_not_removed' }
+  if (removed.length) {
+    used(plan.how === 'water' ? removed.length === webCells.length && !left.length ? 'вода: смыл паутину' : `вода: снял ${removed.length} кл., осталось ${left.length}` : `разрезал паутину (${cut.item?.name || 'рука'})`)
+    st.cutFails = 0
+  }
+  else if (ready('webFight')) { rest('webFight', 3000); used(`паутина осталась: ${why || 'жду подтверждения'}`) }
+  turn.meInWeb = left.length > 0
+  return NEXT
+}
+
+// Паутина между нами: эта работа не задерживает спасение собственного тела.
+export async function webObstacleTurn (ctx: DuelCtx, turn: TurnFrame) {
+  const { bot, digWatch, holdWeapon, mc, routeInputs, used } = ctx
+  const { inSight, meInWeb, r, sight } = turn
   // Он в руке, но прицел упирается в паутину между нами или у его головы
   if (!meInWeb && r <= HIT_REACH && !inSight && sight && sight.blocked && sight.blocked.block &&
       sight.blocked.block.name === 'cobweb' && !(ctx.prof.player && mc.threat()) &&
@@ -204,8 +242,9 @@ export async function fireTurn (ctx: DuelCtx, turn: TurnFrame) {
 // Ямы: выбраться из своей, держать его в его.
 export async function pitTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, climbOut, holdWeapon, lavaIntoPit, placeUnder, ready, rest, used } = ctx
-  const { r } = turn
-  if (ctx.myPit && !ctx.theirPit && r > HIT_REACH) {
+  const { hp, r, safeMedical, safety } = turn
+  // Проигрывая размен, выбираемся и из общей ямы, а не ждём, пока враг отпустит.
+  if (ctx.myPit && ((!ctx.theirPit && r > HIT_REACH) || (hp <= safety?.threshold && !safeMedical))) {
     if (await climbOut(ctx.myPit)) return NEXT
   }
   if (ctx.theirPit && !ctx.myPit) {

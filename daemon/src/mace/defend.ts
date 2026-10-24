@@ -1,3 +1,4 @@
+import * as gameClock from '../game-clock'
 // Булава (mace.ts): защита от булавы сверху — щит к нему, шаг из-под него, не стоять под ним.
 // ---------------------------------------------------------------- защита
 
@@ -7,7 +8,7 @@
 // в сторону от точки, куда он сядет (его руль в воздухе — ~0.02 б/т²), спринтом.
 // Сидит сверху с булавой — не стоять под ним: отойти на 3.6+.
 export function defend (bot, t, { guard = null, entity: e = null, vel = null, set, keyDir, stepSafe, stats = null }: any = {}) {
-  const shield = !!(guard && guard.stats && guard.stats.worn)
+  const shield = guard?.stats?.worn && bot.inventory?.slots?.[45]?.name === 'shield' && (bot._ndShieldDisabledUntil || 0) <= gameClock.now()
   const setKeys = (k) => { for (const x of ['forward', 'back', 'left', 'right']) set(x, x === k); set('sprint', k === 'forward'); set('jump', false) }
   if (t.kind === 'above') {
     setKeys(stepSafe(keyDir(bot, 'back')) ? 'back' : null)
@@ -28,7 +29,7 @@ export function defend (bot, t, { guard = null, entity: e = null, vel = null, se
   // Шаг в сторону: куда дальше от точки, где он сядет.
   const me = bot.entity.position
   let land = e && e.position ? e.position : null
-  if (land && vel) { const v = vel() || { x: 0, z: 0 }; land = land.offset(v.x * Math.min(t.eta, 20), 0, v.z * Math.min(t.eta, 20)) }
+  if (land && vel) { const v = vel() || { x: 0, z: 0 }, k = (1 - .91 ** Math.min(t.eta, 40)) / .09; land = land.offset(v.x * k, 0, v.z * k) }
   let best = null
   for (const k of ['back', 'left', 'right', 'forward']) {
     const dir = keyDir(bot, k)

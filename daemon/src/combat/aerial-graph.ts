@@ -16,6 +16,7 @@ export interface AerialState {
   corridorClear: boolean
   equipment: { elytra: boolean; chestplate: boolean; rockets: number; pearls: number; mace: boolean; spear: boolean; ranged?: boolean }
   rangedReady?: boolean
+  maceDropReady: boolean
   maceReady: boolean
   spearReady: boolean
   fallDistance: number
@@ -53,11 +54,10 @@ export function evaluateAerial(state: AerialState): AerialDecision {
   if (safeLanding && state.corridorClear && state.health > 8) {
     const at = interceptPoint(self, target)
     const distance = Math.hypot(target.position.x - self.position.x, target.position.y - self.position.y, target.position.z - self.position.z)
-    const height = self.position.y - target.position.y
     if (self.flying && equipment.ranged && state.rangedReady && distance >= 8 && distance <= 48) candidates.push({ id: 'RangedVolley', cost: 3 + distance / 50, reason: 'clear airborne firing corridor', target: at })
     if (equipment.elytra && equipment.rockets > 0) candidates.push({ id: 'AerialIntercept', cost: 5 + distance / 20, reason: 'moving airborne target', target: at })
     if (self.flying && equipment.spear && state.spearReady && distance <= 6) candidates.push({ id: 'SpearStrike', cost: 2, reason: 'airborne spear window', target: at })
-    if (self.flying && equipment.mace && equipment.chestplate && state.maceReady && height > 2 && self.velocity.y < -0.45 && state.fallDistance > 1.5 && distance < 6) candidates.push({ id: 'DiveStrike', cost: 1, reason: 'charged descent above target', target: at })
+    if (self.flying && !target.flying && equipment.mace && equipment.chestplate && state.maceReady && state.maceDropReady) candidates.push({ id: 'DiveStrike', cost: 1, reason: 'charged descent above target', target: at })
     if (self.flying && equipment.pearls > 0 && state.health > state.pearlDamage + 8 && distance > 24) candidates.push({ id: 'PearlReposition', cost: 2 + state.pearlDamage / 2, reason: 'safe midflight reposition', target: safeLanding })
   }
   candidates.sort((a, b) => a.cost - b.cost || a.id.localeCompare(b.id))

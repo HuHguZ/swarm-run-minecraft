@@ -49,6 +49,7 @@ import pick = require('./pick')
 import * as read from './read'
 import * as assess from './assess'
 import { sleep } from './movement'
+import { visibleAllies, allyAt, allyOnSegment, allyWorld } from './combat/ally-safety'
 
 const TICK_MS = 50
 const ARROW_SPEED = Math.fround(3.15) // CrossbowItem.getShootingPower returns float.
@@ -96,6 +97,17 @@ function arrowKind (item) {
   return null
 }
 const base = (k) => String(k || '').replace(/^(long|strong)_/, '')
+function offensiveArrow(item, player = true) {
+  const kind = base(arrowKind(item))
+  return /^(arrow|spectral|slowness|weakness|poison)$/.test(kind) || player && kind === 'harming'
+}
+function offensiveLoaded(bot, item, player = true) {
+  const data = item?.componentMap?.get('charged_projectiles')?.data
+  return (data?.projectiles || data?.items || []).every(s => {
+    const name = s.name || bot.registry?.items?.[s.itemId ?? s.id]?.name
+    return name === 'firework_rocket' || offensiveArrow({ name, componentMap: new Map((s.components || []).map(c => [String(c.type).replace(/^minecraft:/, ''), c])) }, player)
+  })
+}
 
 function chargeTicks (qc) { return Math.max(0, Math.floor((1.25 - 0.25 * (qc || 0)) * 20)) }
 
@@ -111,7 +123,10 @@ function crossbows (bot) {
   }
   return out
 }
-function arrowCount (bot) { return bot.inventory.items().reduce((n, i) => n + (ARROW_RE.test(i.name) ? i.count : 0), 0) }
+function arrowCount (bot) {
+  const bag = bot.inventory.items(), off = bot.inventory.slots?.[OFF]
+  return [...bag, ...(off && !bag.some(i => i === off || i.slot === OFF) ? [off] : [])].reduce((n, i) => n + (offensiveArrow(i) ? i.count : 0), 0)
+}
 // Ракета для арбалета — с наибольшим числом звёзд; пустая (для элитр, 0 звёзд)
 // не ранит вовсе (FireworkRocketEntity.dealExplosionDamage) — не годится.
 function rocketsOf (bot) {
@@ -140,13 +155,14 @@ function containerOrder () {
   return out
 }
 function firstArrow (bot) {
-  const off = bot.inventory.slots[OFF]
+  const off = bot.inventory.slots?.[OFF]
   if (off && ARROW_RE.test(off.name)) return off
+  if (!bot.inventory.slots) return bot.inventory.items().find(i => ARROW_RE.test(i.name)) || null
   for (const s of containerOrder()) {
     const it = bot.inventory.slots[s]
     if (it && ARROW_RE.test(it.name)) return it
   }
-  return null
+  return bot.inventory.items().find(i => ARROW_RE.test(i.name)) || null
 }
 const sameKind = (a, b) => !!a && !!b && a.name === b.name && arrowKind(a) === arrowKind(b)
 
@@ -169,8 +185,8 @@ async function readyArrow (bot, want) {
 // обычная, редкие не тратить.
 function pickArrow (bot, ctx: any = {}) {
   const stacks = []
-  const off = bot.inventory.slots[OFF]
-  for (const it of [...bot.inventory.items(), ...(off ? [off] : [])]) if (ARROW_RE.test(it.name)) stacks.push(it)
+  const off = bot.inventory.slots?.[OFF]
+  for (const it of [...bot.inventory.items(), ...(off ? [off] : [])]) if (offensiveArrow(it, ctx.player !== false)) stacks.push(it)
   if (!stacks.length) return null
   const find = (test) => stacks.find(i => test(arrowKind(i)))
   const fs = ctx.fs || {}
@@ -254,9 +270,11 @@ function rayBlock (bot, from, yaw, pitch, len) {
 // Взрыв не по нам: точка взрыва (у него или у первой стены) дальше 5.4 от наших
 // ног — и так же для боковых ракет «Тройного выстрела» (±10°), которые уходят
 // мимо и могут встретить стену рядом с нами.
-function rocketSafe (bot, from, sol, multishot) {
+function rocketSafe (bot, from, sol, multishot, item = null) {
   const feet = bot.entity.position
-  const blast = (pt) => pt.distanceTo(feet) >= BLAST_R + 0.4
+  const allies = visibleAllies(bot)
+  const blast = (pt, tick = from.distanceTo(pt) / ROCKET_SPEED, padding = 0) => pt.distanceTo(feet) >= BLAST_R + 0.4 &&
+    allies.every(e => allyAt(bot, e, tick).distanceTo(pt) >= BLAST_R + padding)
   const wall = rayBlock(bot, from, sol.yaw, sol.pitch, sol.dist)
   const P = wall ? wall.at : sol.at
   if (!blast(P)) return { ok: false, why: wall ? 'стена рядом — взрыв по мне' : 'он слишком близко для фейерверка' }
@@ -264,6 +282,36 @@ function rocketSafe (bot, from, sol, multishot) {
     for (const s of [-1, 1]) {
       const w = rayBlock(bot, from, sol.yaw + s * MULTI_DEG * Math.PI / 180, sol.pitch, 12)
       if (w && !blast(w.at)) return { ok: false, why: 'боковая ракета упрётся в стену рядом' }
+    }
+  }
+  if (allies.length) {
+    // FireworkRocketEntity: life = 10*(1+flight) + nextInt(6) + nextInt(7).
+    const loaded = item?.componentMap?.get('charged_projectiles')?.data
+    const projectiles = loaded?.projectiles || loaded?.items || []
+    const flights = projectiles.map(s => s.components?.find(c => /fireworks$/.test(String(c.type)))?.data?.flightDuration ?? 1)
+    const durations = flights.length ? flights : [1]
+    const minimum = 10 * (1 + Math.min(...durations)), maximum = 10 * (1 + Math.max(...durations)) + 11
+    const bodies = (Object.values(bot.entities || {}) as any[]).filter(e => e !== bot.entity && e?.position &&
+      (e.username || e.type === 'mob') && e.isValid !== false && bot.players?.[e.username]?.gamemode !== 3 && pick.canHit(bot, e, { range: 64 }))
+    for (const side of multishot ? [0, -1, 1] : [0]) {
+      const yaw = sol.yaw + side * MULTI_DEG * Math.PI / 180
+      const direction = new Vec3(-Math.sin(yaw) * Math.cos(sol.pitch), Math.sin(sol.pitch), -Math.cos(yaw) * Math.cos(sol.pitch))
+      const rawWall = rayBlock(bot, from, yaw, sol.pitch, maximum * ROCKET_SPEED)
+      const wall = rawWall && allyWorld(bot).blockAt(rawWall.pos)?.boundingBox === 'block' ? rawWall : null
+      for (let tick = 0; tick < maximum; tick++) {
+        const a = from.plus(direction.scaled(tick * ROCKET_SPEED)), b = a.plus(direction.scaled(ROCKET_SPEED))
+        if (allyOnSegment(bot, allies, a, b, tick)) return { ok: false, why: 'союзник на траектории ракеты' }
+        if (allyOnSegment(bot, bodies, a, b, tick)) {
+          // Impact can be anywhere within this tick's segment.
+          if (!blast(a, tick, ROCKET_SPEED) || !blast(b, tick + 1, ROCKET_SPEED)) return { ok: false, why: 'союзник под взрывом ракеты' }
+          break
+        }
+        if (wall && wall.dist <= (tick + 1) * ROCKET_SPEED) {
+          if (!blast(wall.at)) return { ok: false, why: 'союзник под взрывом у стены' }
+          break
+        }
+        if (tick + 1 >= minimum && !blast(b, tick + 1)) return { ok: false, why: 'союзник под взрывом истёкшей ракеты' }
+      }
     }
   }
   return { ok: true, wall: !!wall }
@@ -365,7 +413,8 @@ async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = n
     }
   } else {
     if (!arrowCount(bot)) return { ok: false, why: 'стрел нет' }
-    if (arrow) await readyArrow(bot, arrow)
+    arrow ||= pickArrow(bot, { forCrossbow: true })?.item
+    if (!arrow || !offensiveArrow(arrow) || !(await readyArrow(bot, arrow))) return { ok: false, why: 'нет доступной боевой стрелы' }
   }
   const restore = async () => {
     if (!restoreOff) return
@@ -418,6 +467,7 @@ async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = n
 async function fire (bot, entity, item, { velFn = null, frac = null, onHit = null, point = null, shouldStop = null, traceAim = false }: any = {}) {
   const info = read.crossbowInfo(bot, item)
   if (!info || !info.loaded) return { fired: false, why: 'не заряжен' }
+  if (!offensiveLoaded(bot, item, !!entity?.username || entity?.type === 'player')) return { fired: false, why: 'стрелы усиления не для атаки врага' }
   let hb = hotbarOf(bot, item)
   if (hb < 0) hb = await toHotbar(bot, item)
   if (hb < 0) return { fired: false, why: 'арбалет не в хотбаре' }
@@ -444,7 +494,7 @@ async function fire (bot, entity, item, { velFn = null, frac = null, onHit = nul
         if (observation) target = bowMod.traceTarget(target, observation)
         if (rocket) {
           sol = rocketAim(from, target)
-          const safe = rocketSafe(bot, from, sol, info.multishot)
+          const safe = rocketSafe(bot, from, sol, info.multishot, item)
           if (!safe.ok) return resolve({ fired: false, why: safe.why })
         } else {
           sol = bowMod.aim(from, target, ARROW_SPEED, GRAVITY)
@@ -452,13 +502,27 @@ async function fire (bot, entity, item, { velFn = null, frac = null, onHit = nul
           if (!sol) return resolve({ fired: false, why: 'не долетит' })
           const wall = bowMod.blockedAt(bot, from, sol, { x: 0, y: 0, z: 0 }, ARROW_SPEED)
           if (wall) return resolve({ fired: false, blocked: true, why: `на линии блок ${wall.x},${wall.y},${wall.z}` })
+          if (info.multishot && [-1, 1].some(side => bowMod.blockedAt(bot, from,
+            { ...sol, yaw: sol.yaw + side * MULTI_DEG * Math.PI / 180 }, { x: 0, y: 0, z: 0 }, ARROW_SPEED)))
+            return resolve({ fired: false, blocked: true, why: 'боковая стрела опасна для своих' })
         }
         if (observation) observation.checkedAt = gameClock.serverNow()
       }
       bot.look(sol.yaw, sol.pitch, true).catch(() => {})
       afterPacket(bot, () => {
         if (shouldStop?.()) return resolve({ fired: false, why: 'выстрел отменён' })
+        const current = bot.inventory.slots?.[36 + hb] || item, currentInfo = read.crossbowInfo(bot, current)
+        if (!currentInfo?.loaded || !offensiveLoaded(bot, current, !!entity?.username || entity?.type === 'player') ||
+            ['ammo', 'multishot', 'piercing', 'stars'].some(k => currentInfo[k] !== info[k])) return resolve({ fired: false, why: 'заряженный снаряд сменился' })
         if (!point && !bowMod.hasObservedVelocity(entity)) return resolve({ fired: false, why: 'скорость цели ещё не наблюдалась' })
+        if (Math.abs(bot.entity.pitch - sol.pitch) > .05 || Math.abs(Math.atan2(Math.sin(bot.entity.yaw - sol.yaw), Math.cos(bot.entity.yaw - sol.yaw))) > .05)
+          return resolve({ fired: false, why: 'прицел сменился перед выстрелом' })
+        const actualFrom = pick.eyeOf(bot).offset(0, -(rocket ? ROCKET_DROP : ARROW_DROP), 0)
+        const actual = { ...sol, yaw: Number.isFinite(bot.entity.yaw) ? bot.entity.yaw : sol.yaw, pitch: Number.isFinite(bot.entity.pitch) ? bot.entity.pitch : sol.pitch }
+        const safe = rocket ? rocketSafe(bot, actualFrom, actual, info.multishot, current).ok :
+          (info.multishot ? [-1, 0, 1] : [0]).every(side => !bowMod.blockedAt(bot, actualFrom,
+            { ...actual, yaw: actual.yaw + side * MULTI_DEG * Math.PI / 180 }, { x: 0, y: 0, z: 0 }, ARROW_SPEED))
+        if (!safe) return resolve({ fired: false, blocked: true, why: 'союзник оказался под выстрелом' })
         if (observation) observation.releasedAt = gameClock.serverNow()
         const back = bot.quickBarSlot
         // Журнал выстрела (ND_DEBUG_XBOW=1): куда целились, где он был, какое
@@ -521,7 +585,7 @@ function plan (bot, ctx) {
   if (!list.length) return null
   const { entity, d, sees } = ctx
   const fs = ctx.fs || {}
-  const loaded = list.filter(x => x.info.loaded)
+  const loaded = list.filter(x => x.info.loaded && offensiveLoaded(bot, x.item, !!entity?.username || entity?.type === 'player'))
   const empty = list.filter(x => !x.info.loaded)
   // --- Выстрел. Мгновенный — поэтому в окна, которых лук не ловит.
   if (loaded.length && sees && d >= 2.5 && d <= 48) {
@@ -707,6 +771,7 @@ function guardCrossbow (bot) {
 export {
   shieldBypassPoint, guardCrossbow,
   plan, step, prepBow, load, fire, readyArrow, pickArrow, firstArrow, arrowKind, tippedPotion, crossbows, crossbowFirst,
+  offensiveArrow, offensiveLoaded, arrowCount,
   chargeTicks, rocketAim, rocketSafe, expectedDamage, harmDrawMs, bowPower, rocketStars, hotbarOf, toHotbar, afterPacket, rocketsOf,
   ARROW_SPEED, ROCKET_SPEED, BLAST_R
 }

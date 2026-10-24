@@ -79,7 +79,7 @@ async function consumeAir (bot, ctl, item, { maxMs = 2600, safe = () => true }: 
 // обратно. Его меч в воздухе не достаёт, стрела по цели 0.6×0.6 на 1–1.7 б/т —
 // редко. heal() — чем лечиться сейчас (или null), enough() — хватит ли.
 async function escape (bot, ctl, e, { heal, enough = () => (bot.health ?? 0) >= 16, stats = {}, used = () => {}, maxMs = 16000, allow = null, arena = null }: any = {}) {
-  const W = worldOf(bot)
+  const W = worldOf(bot, { observed: !!arena })
   const S = install(bot)
   const out: any = { ok: false, ate: [], hp0: r2(bot.health ?? 0), note: '' }
   const t0 = gameClock.now()

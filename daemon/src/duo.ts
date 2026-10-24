@@ -1,5 +1,7 @@
 'use strict'
 import * as gameClock from './game-clock'
+import { lookDead as entityLooksDead } from './pvp/body'
+import { isAlly } from './combat/ally-safety'
 // 1 против 2 (2026-09-26: пользователь с другом часто бьют одного бота вдвоём;
 // PVP-RESEARCH б.21, в.9). Что делает про-игрок против двоих:
 //  · держит обоих в передней полусфере: угол между ними из его точки больше
@@ -131,7 +133,7 @@ function duoState (bot, { target, attackers, dead, used, tt, observe, holdWeapon
   st.burst = burstStats
   Object.assign(ds, { focusStats, burstStats })
 
-  const lookDead = (e) => { const h = read.healthRaw(bot, e); return typeof h === 'number' && h <= 0 }
+  const lookDead = e => entityLooksDead(bot, e)
   // Враги этого боя: цель, кто бил последние 10 с, кто бил нас минуту назад (прошлый кусок).
   const foes = () => {
     if (!bot.entity) return []
@@ -147,7 +149,7 @@ function duoState (bot, { target, attackers, dead, used, tt, observe, holdWeapon
       if (e && e.position && !dead.has(e.id)) out.set(e.id, e)
     }
     const me = bot.entity.position
-    return [...out.values()].map(e => observe(e)).filter(e => e && e.isValid !== false && isPlayer(e) && e.id !== bot.entity.id &&
+    return [...out.values()].map(e => observe(e)).filter(e => e && e.isValid !== false && !dead.has(e.id) && !isAlly(bot, e) && isPlayer(e) && e.id !== bot.entity.id &&
       e.username !== bot.username && !lookDead(e) && e.position.distanceTo(me) < RADIUS)
   }
   Object.assign(ds, { lookDead, foes })
@@ -163,8 +165,8 @@ function duoListen (ds: DuoState) {
       if (victim === bot.entity) {
         st.hurt.push(gameClock.now())
         while (st.hurt.length > 8) st.hurt.shift()
-        if (source && isPlayer(source) && source.id !== bot.entity.id && source.username && source.username !== bot.username) mem.seen.set(source.username, gameClock.now())
-      } else if (source && source.id === bot.entity.id && isPlayer(victim)) {
+        if (source && isPlayer(source) && !isAlly(bot, source) && source.id !== bot.entity.id && source.username && source.username !== bot.username) mem.seen.set(source.username, gameClock.now())
+      } else if (source && source.id === bot.entity.id && isPlayer(victim) && !isAlly(bot, victim)) {
         const k = victim.username || String(victim.id)
         st.hitsOn[k] = (st.hitsOn[k] || 0) + 1
       }

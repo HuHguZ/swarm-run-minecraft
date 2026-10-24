@@ -98,7 +98,7 @@ export function installServices (ctx: DuelCtx) {
     }
   })
   ctl.onAbort.push(() => pearlResponse.close())
-  const bm = ctx.bm = boom.create(bot, { enemy: () => ctx.entity, used, crystals: !crystal.ON, telemetryHp })
+  const bm = ctx.bm = boom.create(bot, { enemy: () => ctx.entity, used, crystals: !crystal.ON, telemetryHp, foeHp: (e) => foeHpDecide(e) })
   ctl.onAbort.push(() => bm.close())
   // Хп соперника-игрока в решениях кристаллов — оценкой (правило 06.10); урон своих подрывов — в оценку (S7c).
   const cx = ctx.cx = crystal.create(bot, { enemy: () => ctx.entity, used, guard, telemetryHp, foeHp: (e) => foeHpDecide(e), noteAttack: (r, o) => ctx.calc.noteAttack(r, o) })

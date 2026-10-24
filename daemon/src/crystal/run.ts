@@ -218,8 +218,9 @@ async function runAnchor (S: CrystalState, deps: CrystalDeps, ctl, a, ctx, out, 
       const eye = bot.entity.position.offset(0, EYE, 0)
       const ff = faceFor(bot, a.cell, eye, pickBlockers(bot, eye))
       if (!ff || !losClear(bot, eye, ff.pt, { expectBlock: a.cell })) return false
+      await bot.lookAt(ff.pt, true)
       if (check && !check()) return false
-      try { await bot._genericPlace(ab(), ff.face, { forceLook: true, delta: ff.pt.minus(a.cell), swingArm: 'right' }) } catch { return false }
+      try { await bot._genericPlace(ab(), ff.face, { forceLook: 'ignore', delta: ff.pt.minus(a.cell), swingArm: 'right' }) } catch { return false }
       return true
     }
     // Заряд: светокамнем; ждать, пока блок покажет заряд (свойство charges).
@@ -250,10 +251,11 @@ async function runAnchor (S: CrystalState, deps: CrystalDeps, ctl, a, ctx, out, 
     const eye = bot.entity.position.offset(0, EYE, 0)
     const ff = b && b.name === 'respawn_anchor' ? faceFor(bot, a.cell, eye, pickBlockers(bot, eye)) : null
     if (!ff || !losClear(bot, eye, ff.pt, { expectBlock: a.cell })) { fail('его якорь: грань не видно'); out.wait = 80; return out }
+    await bot.lookAt(ff.pt, true)
     const fw = freshWorth(a.cell.offset(0.5, 0.5, 0.5), { power: ANCHOR_P, airCell: a.cell })
-    if (!(fw.t && fw.land >= fw.t.me * 1.2 + 1)) { out.note = ''; out.wait = 60; return out }
+    if (!(fw.t && !fw.t.allyRisk && fw.land >= fw.t.me * 1.2 + 1)) { out.note = ''; out.wait = 60; return out }
     S.anchorClick = { key: cellKey(a.cell), at: gameClock.now() }
-    try { await bot._genericPlace(b, ff.face, { forceLook: true, delta: ff.pt.minus(a.cell), swingArm: 'right' }) } catch { fail('его якорь: клик'); out.wait = 80; return out }
+    try { await bot._genericPlace(b, ff.face, { forceLook: 'ignore', delta: ff.pt.minus(a.cell), swingArm: 'right' }) } catch { fail('его якорь: клик'); out.wait = 80; return out }
     noteBlast(fw)
     st.anchorPops = (st.anchorPops || 0) + 1
     out.ok = true

@@ -74,6 +74,163 @@ function drawingSkeleton(a) {
   return e
 }
 
+for (const shot of ['draw', 'projectile']) test(`passive projectile body keeps goto through ${shot} without another tactical action`, async () => {
+  const a = actor()
+  const goal = { x: 10, y: 64, z: .5 }, path = [{ x: 1, y: 64, z: .5 }]
+  let activeGoal: any = goal
+  const actions: string[] = []
+  a.bot.pathfinder = { goal, path, setGoal: (value: any) => { activeGoal = value } }
+  a.session.current = { name: 'goto', ctl: a.ctl, params: { x: 10, y: 64, z: .5 } }
+  a.bot._ndProjectileEvasion = { pressure: true }
+  if (shot === 'draw') drawingSkeleton(a)
+  else {
+    a.bot.game.dimension = 'the_nether'
+    a.bot.entities[2].name = 'ghast'; a.bot.entities[2].position = new Vec3(24.5, 64, .5)
+    a.bot.entities[3] = { id: 3, name: 'fireball', position: new Vec3(7, 64.9, .5) }
+    observeProjectile(a)
+  }
+  const system = new a.tactics.TacticalSystem(a.session, { record: () => {}, execute: (action: any, ctl: any) => {
+    actions.push(action.id)
+    return new Promise(resolve => ctl.onAbort.push(() => resolve({ cancelled: true })))
+  } })
+  try {
+    system.attach(a.bot); system.update(true); await turn()
+    assert.ok(a.tactics.observeTactics(a.session).protectedEncounter)
+    assert.deepEqual(actions, [], 'Shield and its retreat alternatives must not take the body from goto')
+    assert.equal(activeGoal, goal); assert.equal(a.bot.pathfinder.path, path)
+    assert.equal(a.ctl.aborted, false)
+  } finally { system.detach(); a.close() }
+})
+
+for (const danger of ['low health', 'melee', 'lava']) test(`passive projectile body leaves ${danger} to native tactics`, async () => {
+  const a = actor()
+  a.bot._ndProjectileEvasion = { pressure: true }
+  a.session.current = { name: 'goto', ctl: a.ctl, params: {} }
+  drawingSkeleton(a)
+  if (danger === 'low health') a.bot.health = 6
+  if (danger === 'melee') a.bot.entities[4] = { id: 4, name: 'zombie', position: new Vec3(.5, 64, 2.5), height: 1.95, width: .6, equipment: [], metadata: [], isValid: true }
+  if (danger === 'lava') a.bot.entity.isInLava = true
+  const actions: string[] = []
+  const system = new a.tactics.TacticalSystem(a.session, { record: () => {}, execute: (action: any, ctl: any) => {
+    actions.push(action.id)
+    return new Promise(resolve => ctl.onAbort.push(() => resolve({ cancelled: true })))
+  } })
+  try {
+    system.attach(a.bot); system.update(true); await turn()
+    assert.equal(a.tactics.observeTactics(a.session).protectedEncounter, false)
+    assert.ok(actions.length > 0, 'the projectile layer must not take over the unrelated danger')
+  } finally { system.detach(); a.close() }
+})
+
+test('native tactics reuses the projectile body draw history instead of clearing its release receipt', () => {
+  const a = actor()
+  const point = { id: 2, point: new Vec3(.5, 65.6, -9.5), kind: 'unmeasured bow flight' }
+  let reads = 0
+  a.bot._ndProjectileEvasion = { pressure: true, get guard() { reads++; return point } }
+  try {
+    const observed = a.tactics.observeTactics(a.session)
+    assert.equal(observed.owGuard, point)
+    assert.equal(reads, 1)
+  } finally { a.close() }
+})
+
+test('пассивный слой не оставляет без решения свободного или уже отменённого бота', () => {
+  for (const idle of [true, false]) {
+    const a = actor()
+    a.bot._ndProjectileEvasion = { pressure: true }
+    drawingSkeleton(a)
+    a.session.current = idle ? null : { name: 'goto', ctl: { aborted: true }, params: {} }
+    try { assert.equal(a.tactics.observeTactics(a.session).protectedEncounter, false) } finally { a.close() }
+  }
+})
+
+test('swarm bow hold keeps one native shield through the draw and its last arrow, then cleans up', async () => {
+  const a = actor()
+  let pending: Promise<any>, done = false, drawing = true, arrow = false
+  const dangers = () => ({ aims: drawing ? [{ name: 'Foe', weapon: 'bow' }] : [], arrows: arrow ? [{ name: 'arrow' }] : [] })
+  const work = sourceModule('swarm-position-work', { './combat': a.combat, './threats': { dangers }, './swarm-work': { directThreat: () => null } })
+  a.bot.setControlState = () => {}; a.bot.look = async () => {}
+  try {
+    pending = work.swarmHold(a.session, a.ctl, { shield: true, requireShield: true, whileDraw: 'Foe', seconds: 20 }).then((r: any) => { done = true; return r })
+    await turn(); a.metadata(3); a.age(1001)
+    for (let tick = 2; tick < 35; tick++) { a.age(1000 + tick); a.c.advanceTicks(1); await turn() }
+    assert.equal(done, false, 'neither 300ms reactions nor the native ACK timeout finish the draw')
+    assert.equal(a.writes.length, 1, 'one raise, not a fresh use packet every reaction')
+    assert.equal(a.releases(), 0)
+    drawing = false; arrow = true
+    for (let tick = 0; tick < 12; tick++) { a.c.advanceTicks(1); await turn() }
+    assert.equal(done, false, 'the last arrow still needs the raised shield')
+    arrow = false
+    for (let tick = 0; tick < 12 && !done; tick++) { a.c.advanceTicks(1); await turn() }
+    assert.equal(done, true)
+    const result = await pending
+    assert.equal(result.ok, true); assert.equal(result.why, 'completed')
+    assert.ok(result.shield.blockingSeconds > 1)
+    assert.equal(a.releases(), 1)
+    assert.equal(a.ctl.onAbort.length, 0)
+  } finally { a.ctl.abort(); if (pending) await pending; a.close() }
+})
+
+test('swarm bow hold releases its native shield on cancellation or a new melee threat', async () => {
+  for (const why of ['cancelled', 'direct_threat']) {
+    const a = actor(); let threat = false, pending: Promise<any>
+    const work = sourceModule('swarm-position-work', { './combat': a.combat,
+      './threats': { dangers: () => ({ aims: [{ name: 'Foe', weapon: 'bow' }], arrows: [] }) },
+      './swarm-work': { directThreat: () => threat ? {} : null } })
+    a.bot.setControlState = () => {}; a.bot.look = async () => {}
+    try {
+      pending = work.swarmHold(a.session, a.ctl, { shield: true, requireShield: true, whileDraw: 'Foe', seconds: 20 })
+      await turn(); a.metadata(3); a.age(1001)
+      for (let tick = 2; tick < 12; tick++) { a.age(1000 + tick); a.c.advanceTicks(1); await turn() }
+      assert.equal(a.releases(), 0)
+      if (why === 'cancelled') a.ctl.abort()
+      else { threat = true; a.bot.emit('physicsTick') }
+      assert.equal((await pending).why, why)
+      assert.equal(a.releases(), 1); assert.equal(a.ctl.onAbort.length, 0)
+    } finally { a.ctl.abort(); if (pending) await pending; a.close() }
+  }
+})
+
+test('swarm bow hold returns to another defence immediately when its native shield becomes unavailable', async () => {
+  const a = actor(); let done = false, pending: Promise<any>
+  const work = sourceModule('swarm-position-work', { './combat': a.combat,
+    './threats': { dangers: () => ({ aims: [{ name: 'Foe', weapon: 'bow' }], arrows: [] }) },
+    './swarm-work': { directThreat: () => null } })
+  a.bot.setControlState = () => {}; a.bot.look = async () => {}
+  try {
+    pending = work.swarmHold(a.session, a.ctl, { shield: true, requireShield: true, whileDraw: 'Foe', seconds: 20 }).then((r: any) => { done = true; return r })
+    await turn(); a.metadata(3); a.age(1001)
+    for (let tick = 2; tick < 12; tick++) { a.age(1000 + tick); a.c.advanceTicks(1); await turn() }
+    a.bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:shield', cooldownTicks: 100 })
+    for (let tick = 0; tick < 8 && !done; tick++) { a.c.advanceTicks(1); await turn() }
+    assert.equal(done, true, 'no standing under arrows until the twenty-second watchdog')
+    assert.equal((await pending).why, 'shield_cooldown', 'the driver must not remember a cooldown as a failed route')
+    assert.equal(a.releases(), 1)
+  } finally { a.ctl.abort(); if (pending) await pending; a.close() }
+})
+
+test('swarm bow hold keeps its facing when the shooter disappears behind cover but his arrow remains', async () => {
+  const a = actor(); let drawing = true, arrow = false, pending: Promise<any>, done = false, spins = 0, looks = 0
+  const work = sourceModule('swarm-position-work', { './combat': a.combat,
+    './threats': { dangers: () => ({ aims: drawing ? [{ name: 'Foe', weapon: 'bow' }] : [], arrows: arrow ? [{ name: 'arrow' }] : [] }) },
+    './swarm-work': { directThreat: () => null } })
+  a.bot.entities[2] = { ...a.bot.entities[2], name: 'player', type: 'player', username: 'Foe' }
+  a.bot.setControlState = () => {}
+  a.bot.look = async () => { spins++ }
+  a.bot.lookAt = async p => { looks++; a.bot.entity.yaw = Math.atan2(-(p.x - a.bot.entity.position.x), -(p.z - a.bot.entity.position.z)) }
+  try {
+    pending = work.swarmHold(a.session, a.ctl, { shield: true, requireShield: true, whileDraw: 'Foe', enemies: ['Foe'], seconds: 20 }).then((r: any) => { done = true; return r })
+    await turn(); a.metadata(3); a.age(1001)
+    for (let tick = 2; tick < 12; tick++) { a.age(1000 + tick); a.c.advanceTicks(1); await turn() }
+    assert.ok(looks > 0, 'the shield first faced the visible shooter')
+    const yaw = a.bot.entity.yaw
+    a.bot.entities = {}; drawing = false; arrow = true
+    for (let tick = 0; tick < 12; tick++) { a.c.advanceTicks(1); await turn() }
+    assert.equal(done, false); assert.equal(spins, 0)
+    assert.equal(a.bot.entity.yaw, yaw, 'the last arrow meets the shield front, not a scanning turn')
+  } finally { a.ctl.abort(); if (pending) await pending; a.close() }
+})
+
 test('OW visible draw is a shield reason before the first arrow and expires on its actual release', () => {
   const a = actor()
   try {

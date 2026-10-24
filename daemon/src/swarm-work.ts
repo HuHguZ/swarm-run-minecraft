@@ -7,6 +7,7 @@ import * as tools from './tools'
 import * as safety from './combat-safety'
 import { seesPlayer, createLastSeen } from './pvp/last-seen'
 import { watchDigReceipt } from './environments/dig-receipt'
+import { supportAt } from './navigation/geometry'
 import { iterators } from 'prismarine-world'
 // Фабрика vec3 (parseFloat, null → 0,0,0), как прежний require('vec3'); тип — класс Vec3.
 const Vec3 = vec3 as unknown as typeof import('vec3').Vec3
@@ -68,10 +69,11 @@ function hitBound(bot, e) {
     const dm: typeof import('./pvp/damage-model') = require('./pvp/damage-model'), { enchantsOf }: typeof import('./enchant') = require('./enchant')
     const held = (require('./pvp/last-seen') as typeof import('./pvp/last-seen')).observePlayerGear(bot, e).equipment[0]
     const weapon = held?.name || null
-    const raw = dm.meleeRaw({ weapon, sharpness: held?.enchanted && /_(sword|axe|spear)$/.test(weapon || '') ? 5 : 0, crit: true, density: held?.enchanted && weapon === 'mace' ? 5 : 0 })
+    const raw = dm.meleeRaw({ weapon, sharpness: held?.enchanted && /_(sword|axe|spear)$/.test(weapon || '') ? 5 : 0, crit: true,
+      fall: weapon === 'mace' ? Math.max(0, e.position.y - bot.entity.position.y) : 0, density: held?.enchanted && weapon === 'mace' ? 5 : 0 })
     const armor = [5, 6, 7, 8].map(i => bot.inventory?.slots?.[i]).filter(Boolean)
       .map(it => ({ name: it.name, ench: Object.fromEntries(enchantsOf(bot, it).map(x => [x.name, x.level])) }))
-    const hit = dm.afterDefense(raw, 'melee', dm.defenseOf(armor))
+    const hit = dm.afterDefense(raw, 'melee', dm.defenseOf(armor), { breach: held?.enchanted && weapon === 'mace' ? 4 : 0 })
     return Number.isFinite(hit) ? hit : Infinity
   } catch { return Infinity }
 }
@@ -80,17 +82,22 @@ function hitBound(bot, e) {
 // contained — запертые (цель кокона за стенами): такой достаёт только сквозь щель и угрозой считается, лишь если его
 // удар дорог — больше четверти моего здоровья или оставит меньше 8 (правило цены: деревянный меч сквозь щель не повод
 // бросать кладку крыши — лаборатория 13.10, две клетки крыши так и не легли).
-function directThreat(bot, allies: string[] = [], remainingMs = 500, observe = e => e, { ranged = true, contained = [] }: { ranged?: boolean; contained?: string[] } = {}) {
+function directThreat(bot, allies: string[] = [], remainingMs = 500, observe = e => e, { ranged = true, contained = [], workMs }: { ranged?: boolean; contained?: string[]; workMs?: number } = {}) {
   const visible = (Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity &&
     (e.type === 'player' || e.username) && !allies.includes(e.username) && seesPlayer(bot, e)).map(observe).filter(Boolean)
   const health = bot.health ?? 20
+  let cost = 0
   const cheap = e => { if (!contained.includes(e.username)) return false; const hit = hitBound(bot, e); return hit < health * .25 && health - hit >= 8 }
   for (const e of visible) {
     if (cheap(e)) continue
-    if (pick.aim(bot, bot.entity, { eye: e.position.offset(0, pick.eyeHeight(bot, e), 0), range: 3 })?.point) return e
+    const inReach = !!pick.aim(bot, bot.entity, { eye: e.position.offset(0, pick.eyeHeight(bot, e), 0), range: 3 })?.point
     const delta = bot.entity.position.minus(e.position), distance = delta.norm()
     const v = e.velocity, closing = v && distance > 0 ? (v.x * delta.x + v.y * delta.y + v.z * delta.z) / distance * 20 : 0
-    if (closing > 0 && Math.max(0, distance - 3) / closing * 1000 <= remainingMs + 350) return e
+    if (inReach || closing > 0 && Math.max(0, distance - 3) / closing * 1000 <= remainingMs + 350) {
+      // Краткий подкоп окупает удар; длинный — нет, если сумма ударов за окна 10 тиков смертельна.
+      if (workMs !== undefined) { cost += hitBound(bot, e) * Math.max(1, Math.ceil(workMs / 500)); if (cost < health) continue }
+      return e
+    }
   }
   if (visible.length && ranged) {
     const aimed = (require('./threats') as typeof import('./threats')).dangers(bot, { foes: visible.map(e => e.username) }).aims || []
@@ -110,10 +117,10 @@ function alliedSupport(bot, at, allies) {
 
 async function swarmWork(session, ctl, params: any = {}) {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return { ok: false, done: false, aborted: false, why: 'invalid_work' }
-  const { kind, at, item, protected: protectedCells = [], allies = [], contained = [], timeoutSeconds = 5 } = params
+  const { kind, at, item, protected: protectedCells = [], allies = [], contained = [], timeoutSeconds = 5, undermine = false } = params
   const result = (why, more: any = {}) => ({ ok: false, done: false, aborted: false, kind, at: validCell(at) ? xyz(at) : null, why, ...more })
   if (!validCell(at)) return result('invalid_cell')
-  if (!['place', 'dig'].includes(kind) || !Number.isFinite(timeoutSeconds) || timeoutSeconds < .1 || timeoutSeconds > 15 ||
+  if (!['place', 'dig'].includes(kind) || typeof undermine !== 'boolean' || undermine && kind !== 'dig' || !Number.isFinite(timeoutSeconds) || timeoutSeconds < .1 || timeoutSeconds > 15 ||
     !Array.isArray(protectedCells) || protectedCells.length > 4096 || !protectedCells.every(validCell) ||
     !Array.isArray(allies) || allies.length > 128 || !allies.every(n => typeof n === 'string' && n.length <= 32) ||
     !Array.isArray(contained) || contained.length > 16 || !contained.every(n => typeof n === 'string' && n.length <= 32) ||
@@ -132,11 +139,11 @@ async function swarmWork(session, ctl, params: any = {}) {
   }
   if (kind === 'place' && before.boundingBox !== 'empty') return result('occupied_cell', { before: before.name })
 
-  const plan = kind === 'dig' ? tools.bestFor(bot, before) : null
-  const budget = timeoutSeconds * 1000
-  if (plan && (!Number.isFinite(plan.ms) || plan.ms > budget)) return result('work_exceeds_budget', { ms: plan.ms, before: before.name, tool: plan.item?.name || 'hand' })
+  let plan = kind === 'dig' ? tools.bestFor(bot, before) : null
+  const budget = timeoutSeconds * 1000, deadline = clock.now() + budget
   let why = '', foe = null, confirmedState = null, receipt = null
-  const sight = createLastSeen(bot), expectedEnd = clock.now() + (plan?.ms ?? 500)
+  const sight = createLastSeen(bot)
+  let expectedEnd = Math.min(deadline, clock.now() + (plan?.ms ?? 500)), tickWake: (() => void) | null = null
   let wake!: (value: any) => void
   const interrupted = new Promise(resolve => { wake = resolve })
   const local: any = { get aborted() { return !!ctl?.aborted || !!why }, onAbort: [] }
@@ -151,10 +158,10 @@ async function swarmWork(session, ctl, params: any = {}) {
   const cancel = () => stop('cancelled')
   const dead = () => stop('disconnected_or_dead')
   // Свой встал на копаемую клетку уже после начала — стоп (Codex 15.10: проверка была только до начала копки).
-  const check = () => { if (why || ctl?.aborted) return; if (kind === 'dig' && alliedSupport(bot, pos, allies)) { stop('allied_support'); return } foe = directThreat(bot, allies, Math.max(0, expectedEnd - clock.now()), sight.observe, { contained }); if (foe) stop('direct_threat') }
+  const check = () => { tickWake?.(); tickWake = null; if (why || ctl?.aborted) return; if (kind === 'dig' && alliedSupport(bot, pos, allies)) { stop('allied_support'); return } const remaining = Math.max(0, expectedEnd - clock.now()); foe = directThreat(bot, allies, remaining, sight.observe, { contained, ...(undermine ? { workMs: remaining } : {}) }); if (foe) stop('direct_threat') }
   let hp = bot.health
   // Рядом запертый (кокон) — мелкий тычок сквозь щель кладку не рвёт: только потеря больше четверти или ниже 8.
-  const health = () => { const lost = hp - bot.health; if (lost > 0 && (!contained.length || lost >= hp * .25 || bot.health < 8)) stop('taking_damage'); hp = bot.health }
+  const health = () => { const lost = hp - bot.health; if (lost > 0 && (undermine ? lost * Math.max(1, Math.ceil(Math.max(0, expectedEnd - clock.now()) / 500)) >= bot.health : !contained.length || lost >= hp * .25 || bot.health < 8)) stop('taking_damage'); hp = bot.health }
   const matches = p => p && p.x === pos.x && p.y === pos.y && p.z === pos.z
   const single = p => { if (matches(p?.location) && Number.isInteger(p.type)) confirmedState = p.type }
   const multi = p => {
@@ -194,14 +201,25 @@ async function swarmWork(session, ctl, params: any = {}) {
       if (!face || !bot.canDigBlock(before)) return result('occluded_or_out_of_reach')
       if (plan.item) await bot.equip(plan.item, 'hand')
       if (local.aborted) return result(why || 'cancelled', { aborted: true })
+      plan = tools.bestFor(bot, before)
+      // A falling body can retain the native airborne dig penalty until the next collision frame.
+      while (!local.aborted && plan.ms > deadline - clock.now() && !bot.entity.onGround && bot.entity.velocity?.y <= 0 &&
+        !bot.entity.isInWater && !bot.entity.isInLava && supportAt(bot, bot.entity.position, 1.05)) {
+        await Promise.race([new Promise<void>(resolve => { tickWake = resolve }), interrupted])
+        plan = tools.bestFor(bot, before)
+      }
+      if (local.aborted) return result(why || 'cancelled', { aborted: true })
       face = build.FACES.find(f => pick.faceAim(bot, pos, f))
       if (!face) return result('occluded_or_out_of_reach')
       await bot.lookAt(pick.faceAim(bot, pos, face), true)
       if (local.aborted) return result(why || 'cancelled', { aborted: true })
+      plan = tools.bestFor(bot, before)
+      if (!Number.isFinite(plan.ms) || plan.ms > deadline - clock.now()) return result('work_exceeds_budget', { ms: plan.ms, before: before.name, tool: plan.item?.name || 'hand' })
       receipt = watchDigReceipt(bot, pos, () => local.aborted)
       // Native dig('ignore') preserves the aimed point but also skips its own face assignment.
       bot.targetDigFace = face.x ? (face.x > 0 ? BlockFaces.EAST : BlockFaces.WEST) :
         face.y ? (face.y > 0 ? BlockFaces.TOP : BlockFaces.BOTTOM) : face.z > 0 ? BlockFaces.SOUTH : BlockFaces.NORTH
+      expectedEnd = clock.now() + plan.ms
       await bot.dig(before, 'ignore')
       if (local.aborted) return result(why || 'cancelled', { aborted: true })
       const accepted = await receipt.settle(Math.min(3000, budget))
@@ -219,6 +237,7 @@ async function swarmWork(session, ctl, params: any = {}) {
     stop(why || 'work_failed')
     return result(why, { aborted: why !== 'timeout' && why !== 'work_failed', error: error.message, before: before.name, after: bot.blockAt(pos)?.name })
   } finally {
+    tickWake = null
     clock.clearTimeout(timer)
     if (receipt && local.aborted) await receipt.settle(0)
     receipt?.close(); sight.close()

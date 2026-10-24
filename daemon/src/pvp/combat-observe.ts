@@ -18,7 +18,7 @@
 // exactHpTelemetryOnly.
 import * as read from '../read'
 import * as dm from './damage-model'
-import { createHpEstimate } from './hp-estimate'
+import { createHpEstimate, FOOD } from './hp-estimate'
 import * as gameClock from '../game-clock'
 
 const lazy = (path) => { let m = null; return () => m || (m = require(path)) }
@@ -93,6 +93,8 @@ const OUR_WINDOW_PROJECTILE = 60
 // Память знания своего бота. Scope задаёт раунд; entity id различает жизни одного UUID.
 // Сохраняем estimator целиком: snapshot не содержит оставшееся время эффектов.
 const hpMemories = new WeakMap<object, any>()
+// Только идентичность квитанции: игровые часы могут замереть, а старый RPC прийти после перезапуска тела.
+let nextHealingEvent = gameClock.wall.now()
 const foeKey = e => e?.uuid ? `uuid:${e.uuid}` : e?.username ? `name:${e.username.toLowerCase()}` : null
 function memoryFor (bot, roundScope) {
   if (typeof roundScope !== 'string' || !roundScope) return null
@@ -123,7 +125,9 @@ function memoryFor (bot, roundScope) {
 function ageMemory (entry) {
   if (!entry || entry.at == null) return // активный tracker уже стареет на physicsTick
   const at = Math.max(entry.at, entry.now())
+  const before = entry.hp.snapshot().mean
   entry.hp.tick((at - entry.at) / 50, { visible: false })
+  entry.healed += Math.max(0, entry.hp.snapshot().mean - before)
   entry.at = at // общий cursor для status и следующего Engage
 }
 // Только чтение существующего знания: не создаёт/переключает scope и не подписывается на события.
@@ -135,6 +139,18 @@ function foeHpUpper (bot, entity) {
   if (!entry) return null
   ageMemory(entry)
   return entry.hp.snapshot().hi
+}
+
+// История только собственных damage_event; повторные статусы возвращают тот же набор, а не новые попадания.
+function foeHitProof (bot, entity) {
+  const memory = hpMemories.get(bot), key = foeKey(entity)
+  const entry = memory && key && (memory.targets.get(key) || [...memory.targets.values()].find(e => e.username === entity?.username?.toLowerCase()))
+  if (!entry) return null
+  ageMemory(entry)
+  const at = entry.now()
+  entry.hits ||= []
+  while (entry.hits.length && at - entry.hits[0].at > 8000) entry.hits.shift()
+  return { healed: entry.healed, ...(entry.lastHealing ? { healing: { event: entry.lastHealing.event, ago: Math.max(0, at - entry.lastHealing.at), absorption: entry.lastHealing.absorption } } : {}), hits: entry.hits.map(h => ({ ago: Math.max(0, at - h.at), damage: h.damage, lowDamage: h.lowDamage, minDamage: h.minDamage, healed: h.healed })) }
 }
 
 function readFoeEstimate (bot, { roundScope, target }: any = {}) {
@@ -158,7 +174,17 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
   if (entry?.entityId !== entity.id) entry = null
   ageMemory(entry)
   const hp = entry?.hp || createHpEstimate()
-  if (memory && key) { entry = { hp, entityId: entity.id, username: entity.username?.toLowerCase(), at: null, now, stop: null }; memory.targets.set(key, entry) }
+  const hits = entry?.hits || []
+  if (memory && key) { entry = { hp, hits, healed: entry?.healed || 0, lastHealing: entry?.lastHealing || null, entityId: entity.id, username: entity.username?.toLowerCase(), at: null, now, stop: null }; memory.targets.set(key, entry) }
+  // Отдельно от потерь HP: чужие попадания тоже уменьшают оценку, но не должны вычитаться из видимого лечения.
+  const healing = (action) => {
+    const before = hp.snapshot().mean
+    action()
+    if (entry) entry.healed += Math.max(0, hp.snapshot().mean - before)
+  }
+  const noteHealing = (absorption = 0) => {
+    if (entry) { const at = now(); entry.lastHealing = { at, event: ++nextHealingEvent, absorption: Math.max(absorption, entry.lastHealing?.at === at ? entry.lastHealing.absorption : 0) } }
+  }
   const T: any = {
     entity, hp, honestHp: player && honest, tick: 0,
     iframe: null, pending: [], using: null, prev: null, vel: { x: 0, y: 0, z: 0 },
@@ -167,12 +193,17 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
   const near = (p, d) => entity.position && p && Math.hypot(p.x - entity.position.x, p.y - entity.position.y, p.z - entity.position.z) <= d
 
   // Только еда и зелья (ревью Codex: опущенный щит/лук после ≥ 30 тиков тоже «кончил использовать» — шёл в «съел»).
-  const consumed = (u) => {
-    if (/potion$/.test(u.name)) { const n = potions().potionOf(u.item); if (n) hp.drink(n); else if (T.honestHp) hp.heal(0, 20) } else if (bot.registry?.foodsByName?.[u.name]) {
+  const consumed = (u) => healing(() => {
+    if (/potion$/.test(u.name)) {
+      const n = potions().potionOf(u.item)
+      if (n) { if (hp.drink(n)) noteHealing() }
+      else if (T.honestHp) { hp.heal(0, 20); noteHealing() }
+    } else if (bot.registry?.foodsByName?.[u.name]) {
       hp.eat(u.name)
+      if (FOOD[u.name]) noteHealing(dm.absorptionOfAmp(FOOD[u.name].absorbAmp))
       if (/^(enchanted_)?golden_apple$/.test(u.name)) T.seenApples++
     }
-  }
+  })
   const onTick = () => {
     T.tick++
     const pos = entity.position
@@ -190,7 +221,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
     if (!T.honestHp) {
       const h = read.healthRaw(bot, entity)
       if (h != null) hp.exact(h, read.absorptionOf(bot, entity))
-    } else hp.tick(1, { visible: seen })
+    } else healing(() => hp.tick(1, { visible: seen }))
     // Наш удар без damage_event: в его окне неуязвимости пакета нет — может, прошло превышение.
     T.pending = T.pending.filter(p => {
       if (T.tick <= p.until) return true
@@ -220,7 +251,8 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
   // Разброс урона моего попадания: ближний — заряд 0.9…1 без крита и с критом; лук/арбалет — стрела.
   const guessRange = (type = 'player_attack') => {
     try {
-      const def = dm.defenseOf([2, 3, 4, 5].map(i => itemObs(bot, T.honestHp ? (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem((entity.equipment || [])[i]) : (entity.equipment || [])[i])))
+      const armor = [2, 3, 4, 5].map(i => itemObs(bot, T.honestHp ? (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem((entity.equipment || [])[i]) : (entity.equipment || [])[i]))
+      const def = dm.defenseOf(armor)
       // Не обычный удар рукой: таран/разгон копья (spear, до ~30 до брони), булава с падения (mace_smash, до ~45),
       // ракета/взрыв, трезубец — широкий разброс по своему типу (броня и чары — его, видимые).
       const wide = (rawMax, kind) => { const hi = dm.afterDefense(rawMax, kind, def); return { min: Math.min(1, hi), max: hi, mean: hi / 2, raw: rawMax } }
@@ -242,7 +274,9 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
       const lo = dm.afterDefense(dm.meleeRaw({ weapon: w, sharpness: sharp, charge: 0.6 }), 'melee', def)
       const hiRaw = dm.meleeRaw({ weapon: w, sharpness: sharp, charge: 1, crit: true })
       const hi = dm.afterDefense(hiRaw, 'melee', def)
-      return { min: Math.max(0.5, lo), max: Math.max(hi, lo + 0.5), mean: (lo + hi) / 2, raw: hiRaw }
+      // Блеск не раскрывает чары: для цены атаки держим нижний край 0..Защита IV, оценку HP не подменяем.
+      const prot = Math.min(20, armor.filter(it => it?.enchanted).length * 4)
+      return { min: Math.max(0.5, lo), max: Math.max(hi, lo + 0.5), mean: (lo + hi) / 2, lowMean: (lo + hi) / 2 * (1 - prot / 25), raw: hiRaw }
     } catch { return { min: 0.5, max: 12, mean: 4, raw: 12 } }
   }
   const onDamage = (pk) => {
@@ -255,7 +289,15 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
       // противника слепли: «оценка 0–20, точно 15» в трассах).
       const r = p ? p.range : guessRange(gamedata().damageTypeName(pk.sourceTypeId) || '')
       T.iframe = { raw: r.raw ?? r.max, at: T.tick }
-      if (T.honestHp) hp.hit(r)
+      if (T.honestHp) {
+        const damage = r.mean ?? (r.min + r.max) / 2
+        const glint = [2, 3, 4, 5].some(i => (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem((entity.equipment || [])[i])?.enchanted)
+        // Для верхнего HP нужен минимум, а не среднее pressure: скрытые чары допускают native EPF до cap20.
+        const minDamage = glint ? dm.afterDefense(r.min ?? 0, 'melee', { prot: 20 }) : r.min ?? 0
+        hits.push({ at: now(), damage, lowDamage: r.lowMean ?? damage, minDamage, healed: entry?.healed || 0 })
+        while (hits.length && now() - hits[0].at > 8000) hits.shift()
+        hp.hit({ ...r, min: minDamage })
+      }
       return
     }
     if (!T.honestHp || !visible()) return
@@ -274,7 +316,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
     if (!p || p.entityId !== entity.id || p.entityStatus !== dm.TOTEM.status) return
     if (T.honestHp && !visible()) return
     T.pops++
-    if (T.honestHp) hp.totem()
+    if (T.honestHp) healing(() => { hp.totem(); noteHealing(dm.TOTEM.absorption) })
   }
   // Брошенное зелье лопнуло рядом с ним: лечение/регенерация — верхняя граница.
   const onSpawn = (e) => { if (e && /^(splash|lingering)_potion$/.test(e.name || '')) T.splashes.set(e.id, e) }
@@ -287,8 +329,8 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
       const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.version)
       const item = raw ? Item.fromNotch(raw) : null
       const n = potions().potionOf(T.honestHp ? (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem(item) : item)
-      if (n) hp.splash(n)
-      else if (T.honestHp) hp.heal(0, 20)
+      if (n) healing(() => { if (hp.splash(n)) noteHealing() })
+      else if (T.honestHp) healing(() => { hp.heal(0, 20); noteHealing() })
     } catch {}
   }
   bot.on('physicsTick', onTick)
@@ -397,4 +439,4 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
   }
 }
 
-export { observe, trackFoe, readFoeEstimate, foeHpUpper, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }
+export { observe, trackFoe, readFoeEstimate, foeHpUpper, foeHitProof, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }

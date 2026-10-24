@@ -1,5 +1,7 @@
 // Рой (swarm.ts): типы доски — свои, враги, общее зрение, факты, задачи с арендой, чертежи.
 export type SwarmPosition = { x: number; y: number; z: number }
+export type DigStand = SwarmPosition & { requiresClear?: SwarmPosition[]; support?: SwarmPosition }
+export type DigSite = SwarmPosition & { feetY?: number; stands?: DigStand[]; blocks?: string[]; handMs?: number; tier?: number; drop?: number; dug?: number; undermine?: boolean }
 export type SwarmRole = 'fighter' | 'healer' | 'ranged' | 'flank' | 'miner-builder'
 export type SwarmKind = 'fight' | 'goto' | 'heal' | 'build' | 'mine' | 'scout' | 'recover' | 'transfer' | 'flee' | 'loot'
 export type Doctrine = 'ring' | 'line' | 'buffalo' | 'fountain' | 'weak-center' | 'cocoon' | 'wave' | 'hunt' | 'false-weakness' | 'false-retreat'
@@ -14,6 +16,8 @@ export interface SwarmMember {
   role: SwarmRole
   canHeal?: boolean
   inventory?: Record<string, number>
+  /** Own usable ammunition; beneficial tipped arrows remain separate inventory items. */
+  attackArrows?: number
   /** Зелья по виду (splash_strong_harming…): в inventory они одним именем splash_potion. */
   potions?: Record<string, number>
   reserve?: Record<string, number>
@@ -22,8 +26,10 @@ export interface SwarmMember {
   /** Предмет в левой руке (щит, тотем): в рюкзаке его нет. */
   offHand?: string
   weapon?: string
-  ench?: { sharpness?: number; protection?: number; power?: number }
+  ench?: { sharpness?: number; protection?: number; power?: number; knockback?: number }
 }
+// Подтверждённые этим телом попадания за 8 с; лечение — своя модель, ago — возраст в игровых мс.
+export type HitProof = { healed: number; healing?: { event: number; ago: number; absorption: number }; hits: { ago: number; damage: number; lowDamage: number; minDamage?: number; healed: number }[] }
 export interface EnemyObservation {
   id: string
   visible: boolean
@@ -34,11 +40,13 @@ export interface EnemyObservation {
   // Верх оценки его хп (с поглощением) по нашим подтверждённым попаданиям и видимому лечению — не метаданные (AGENTS.md):
   // своё имя, а не hp/health, — сырое хп доска не читает никогда (тесты честности).
   hpEstimate?: number
+  hitProof?: HitProof
 }
 export interface SharedEnemy extends Omit<EnemyObservation, 'visible'> {
   seenAt: number
   source: string
   sources: string[]
+  pressure?: { hits: number; damage: number; damageLow: number; healing: number }
 }
 export interface SwarmFact {
   id: string

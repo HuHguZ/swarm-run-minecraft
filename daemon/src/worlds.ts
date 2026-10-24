@@ -99,6 +99,13 @@ function refuseOtherWorld (bot, rec, what) {
 function wrapPlaceBlock (bot) {
   if (bot._ndPlaceWrapped || typeof bot._genericPlace !== 'function') return
   bot._ndPlaceWrapped = true
+  const genericPlace = bot._genericPlace
+  // Один рубеж для builder/pathfinder, столба и прямой установки заслона в прыжке.
+  bot._genericPlace = async function (ref, face, ...args) {
+    const trapped = (require('./build') as typeof import('./build')).alliedExitBlocked(bot, ref.position.plus(face))
+    if (trapped) throw new Error(`перекрою последний выход своему ${trapped}`)
+    return genericPlace.call(this, ref, face, ...args)
+  }
   // Рамка блока: лестница — пластина 3/16 у грани опоры (LadderBlock), её ставят и в клетку, где стоит своя голова
   // (лестница вверх изнутри, 15.10: «своя рамка в клетке» на каждой ступени); прочее — целая клетка.
   const inMe = (dest, face) => {

@@ -33,3 +33,34 @@ export function shoveValue(foe: Pick<SharedEnemy, 'hpEstimate' | 'equipment'>, e
   if (!Number.isFinite(drop)) return 1
   return Math.min(1, Math.max(0, Math.ceil(drop - 3)) / hp)
 }
+
+// shortcut: плоский каменный пол и неизвестные клавиши цели; коллизии и безопасное место проверяет тело, план обновляется
+// по видимой скорости. Числа — LivingEntity.knockback/travelInAir, Player.attack, ArmorMaterials из jar 1.21.11.
+export function shoveHits(foe: Pick<SharedEnemy, 'velocity' | 'equipment'>, edge: Edge | null | undefined, { sprint = true, kb = 0 }: { sprint?: boolean; kb?: number } = {}): number {
+  const norm = edge && Math.hypot(edge.x, edge.z), at = edge?.at ?? 0
+  if (!norm || !Number.isFinite(norm) || !Number.isFinite(at)) return Infinity
+  const goal = Math.max(0, at) + .3 // За край должен выйти весь хитбокс шириной .6.
+  const resistance = Math.min(1, (foe.equipment?.armor || []).filter(n => /^netherite_(helmet|chestplate|leggings|boots)$/.test(n)).length * .1)
+  const k = 1 - resistance, extra = .5 * (Number(sprint) + Math.max(0, kb))
+  let v = ((foe.velocity?.x || 0) * edge!.x + (foe.velocity?.z || 0) * edge!.z) / norm
+  let vy = foe.velocity?.y || 0, x = 0, y = 0, ground = vy <= 0 && vy >= -.08, hits = 0, tail = 0
+  if (!Number.isFinite(v) || !Number.isFinite(vy) || !Number.isFinite(extra)) return Infinity
+  for (let tick = 0; tick < 200; tick++) {
+    if (tick === 180) tail = x
+    if (tick % damage.IFRAME_TICKS === 0) {
+      hits++
+      v = v / 2 + .4 * k
+      if (ground) vy = Math.min(.4, vy / 2 + .4 * k)
+      if (extra > 0) { v = v / 2 + extra * k; if (ground) vy = Math.min(.4, vy / 2 + extra * k) }
+    }
+    if (Math.abs(v) < .003) v = 0
+    if (Math.abs(vy) < .003) vy = 0
+    const drag = .91 * (ground ? .6 : 1)
+    x += v; y += vy
+    if (y < 0) { y = 0; vy = 0; ground = true } else ground = false
+    v *= drag; vy = (vy - .08) * .98
+    if (x >= goal) return hits
+  }
+  // После 10 с продолжаем ценой последних двух окон, а не запрещаем далёкий край ради ограничения вычислений.
+  return x > tail ? hits + Math.ceil((goal - x) * 2 / (x - tail)) : Infinity
+}

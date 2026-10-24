@@ -31,11 +31,17 @@ export function perchFor(S: PvpPlan, m: SwarmMember): SwarmPosition | null {
   const { enemies, options, perched } = S
   const worn = (Array.isArray(m.armor) ? m.armor : Object.values(m.armor || {})).includes('elytra')
   if (!options.perches?.length || !(worn || count(m.inventory, 'elytra') > 0) || count(m.inventory, 'firework_rocket') < 3) return null
+  const rejected = S.board.facts().filter(f => f.source === m.id && f.id.startsWith('perch-failed:'))
   let best = -1, bestScore = -Infinity
   for (const [i, p] of options.perches.entries()) {
+    // Отбежал от взлёта — гребень не исчез: отказ тела виден и плану, отдельно для каждого бота.
+    if (rejected.some(f => distance(f.position, p) < 1)) continue
     const near = Math.min(...enemies.map(e => distance(p, e.position)))
     if (near < 12) continue
-    const score = Math.min(near, 28) + (p.y - m.position.y) * .3 - distance(p, m.position) * .15 - 8 * (perched.get(i) || 0)
+    // Лучник достаёт до 32 бл. (threatReach): насест ближе — мишень на посадке (игра пользователя 24.10: «сел рядом со мной —
+    // пока садится, я его из лука зафармил»). Не запрет — цена: дальних нет — лучше ближний, чем никакого.
+    const shot = Math.max(0, ...enemies.filter(e => S.archer(e)).map(e => 32 - distance(p, e.position)))
+    const score = Math.min(near, 32) - shot + (p.y - m.position.y) * .3 - distance(p, m.position) * .15 - 8 * (perched.get(i) || 0)
     if (score > bestScore) { bestScore = score; best = i }
   }
   if (best < 0) return null
@@ -56,7 +62,8 @@ export function rallyFor(S: PvpPlan, m: SwarmMember, foe: SharedEnemy): SwarmPos
   // Свои за врагом — не убежище: путь к ним идёт мимо него (как с укрытиями, поле s14).
   if (Math.hypot(c.x - m.position.x, c.z - m.position.z) > 3 && (c.x - m.position.x) * (m.position.x - foe.position.x) + (c.z - m.position.z) * (m.position.z - foe.position.z) < 0) return null
   const d = Math.hypot(c.x - foe.position.x, c.z - foe.position.z) || 1
-  return { x: c.x + (c.x - foe.position.x) / d * 3, y: m.position.y, z: c.z + (c.z - foe.position.z) / d * 3 }
+  // Высота своего из выбранной пачки: средняя между ярусами может оказаться в воздухе.
+  return { x: c.x + (c.x - foe.position.x) / d * 3, y: pack[0].position.y, z: c.z + (c.z - foe.position.z) / d * 3 }
 }
 // Слабый — нечем драться: improvementOf > 4 или брони меньше 8 очков (меньше железных шлема и нагрудника). С одним
 // каменным топором improvementOf ровно 4 (8 − 9 → 0, броня 0 → 4), и такой бот голосовал за штурм и шёл на людей

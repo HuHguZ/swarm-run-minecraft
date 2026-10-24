@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { verticalLift } from '../src/navigation/geometry'
 import { riptideImpulse, planRiptide, planRiptideTo, runRiptide } from '../src/navigation/riptide'
-import { IDLE } from '../src/navigation/parkour'
+import { IDLE, simulatePlan } from '../src/navigation/parkour'
 const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
 const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
 const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
@@ -42,6 +42,106 @@ function model(terrain: (p: Vec3) => [string, Record<string, unknown>?]) {
   }
   return bot
 }
+
+function spinAlly(bot: any, position: Vec3, velocity = new Vec3(0, 0, 0)) {
+  const metadata: any[] = []
+  Object.defineProperty(metadata, 9, { get() { throw new Error('allied HP metadata must not authorize a spin hit') } })
+  const ally = { id: 8, username: 'Ally', type: 'player', position, velocity, onGround: true,
+    width: .6, height: 1.8, metadata, _ndVisible: true }
+  bot.username = 'Self'; bot._ndSwarmAllies = ['Ally']; bot.entities = { 8: ally }
+  return ally
+}
+
+function spinReceipt(bot: any) {
+  const index = registry.entitiesByName.player.metadataKeys.indexOf('living_entity_flags')
+  bot.deactivateItem = () => {
+    bot.released = true
+    bot._client.emit('entity_metadata', { entityId: bot.entity.id, metadata: [{ key: index, value: 4 }] })
+  }
+}
+
+test('Riptide release refuses the first native swept body contact with an ally', async () => {
+  const bot = model(p => p.y < 1 ? ['stone'] : ['air'])
+  spinAlly(bot, new Vec3(3.5, 1, .5)); spinReceipt(bot)
+  const result = await runRiptide(bot, { aborted: false }, { name: 'trident' }, 3, -Math.PI / 2, 0, () => true, async release => release())
+  assert.equal(result.ok, false)
+  assert.equal(bot.released, undefined)
+  assert.equal(bot.entity.velocity.x, 0)
+  assert.equal(bot._client.listenerCount('entity_metadata'), 0)
+})
+
+test('Riptide release includes its actual SELF lift before horizontal spin movement', async () => {
+  const bot = model(p => p.y < 1 ? ['stone'] : ['air'])
+  spinAlly(bot, new Vec3(.5, 3.1, .5)); spinReceipt(bot)
+  const result = await runRiptide(bot, { aborted: false }, { name: 'trident' }, 3, -Math.PI / 2, 0, () => true, async release => release())
+  assert.equal(result.ok, false)
+  assert.equal(bot.released, undefined)
+})
+
+test('Riptide release forecasts an allied crossing late in its twenty attack ticks', async () => {
+  const bot = model(p => p.y < 1 ? ['stone'] : ['air'])
+  const flight = planRiptide(bot, 3, -Math.PI / 2, 0)!
+  const initial = new native.PlayerState(bot, IDLE)
+  initial.pos.y += verticalLift(bot, initial.pos, 1.1999999284744263)!
+  initial.vel = initial.vel.plus(riptideImpulse(3, -Math.PI / 2, 0)!)
+  initial.onGround = false
+  const frames: Vec3[] = []
+  simulatePlan(bot, Array.from({ length: 20 }, (_, i) => flight.steps[i] || { yaw: -Math.PI / 2, control: IDLE }), state => frames.push(state.pos.clone()), initial)
+  const late = frames[17]
+  spinAlly(bot, new Vec3(late.x, 1, late.z + 9), new Vec3(0, 0, -.5)); spinReceipt(bot)
+  const result = await runRiptide(bot, { aborted: false }, { name: 'trident' }, 3, -Math.PI / 2, 0, () => true, async release => release())
+  assert.equal(result.ok, false)
+  assert.equal(bot.released, undefined)
+})
+
+test('Riptide native diagonal union box also hits a corner outside the centreline capsule', async () => {
+  const bot = model(p => p.y < 1 ? ['stone'] : ['air']), yaw = -3 * Math.PI / 4
+  const first = planRiptide(bot, 3, yaw, 0)!.states[0].pos
+  spinAlly(bot, new Vec3(.5, 1, first.z)); spinReceipt(bot)
+  const result = await runRiptide(bot, { aborted: false }, { name: 'trident' }, 3, yaw, 0, () => true, async release => release())
+  assert.equal(result.ok, false)
+  assert.equal(bot.released, undefined)
+})
+
+test('Riptide rechecks a late ally in the release callback and still permits a clear nearby route', async () => {
+  const blocked = model(p => p.y < 1 ? ['stone'] : ['air']); spinReceipt(blocked)
+  const denied = await runRiptide(blocked, { aborted: false }, { name: 'trident' }, 3, -Math.PI / 2, 0, () => true,
+    async release => { spinAlly(blocked, new Vec3(3.5, 1, .5)); release() })
+  assert.equal(denied.ok, false)
+  assert.equal(blocked.released, undefined)
+  const clear = model(p => p.y < 1 ? ['stone'] : ['air'])
+  spinAlly(clear, new Vec3(.5, 1, 2)); spinReceipt(clear)
+  const allowed = await runRiptide(clear, { aborted: false }, { name: 'trident' }, 3, -Math.PI / 2, 0, () => true, async release => release())
+  assert.equal(allowed.ok, true, JSON.stringify(allowed))
+  assert.equal(clear.released, true)
+})
+
+test('Riptide delayed receipt also bounds the real no-impulse client coast at the origin', async () => {
+  const bot = model(p => p.y < 1 ? ['stone'] : ['air'])
+  spinAlly(bot, new Vec3(.5, 1, 2.5), new Vec3(0, 0, -.6))
+  const index = registry.entitiesByName.player.metadataKeys.indexOf('living_entity_flags')
+  let pending = false, elapsed = 0
+  bot.deactivateItem = () => { bot.released = true; pending = true }
+  const advance = bot.waitForTicks
+  bot.waitForTicks = async (ticks: number) => {
+    for (let tick = 0; tick < ticks; tick++) {
+      if (pending && ++elapsed === 5) bot._client.emit('entity_metadata', { entityId: bot.entity.id, metadata: [{ key: index, value: 4 }] })
+      await advance(1)
+    }
+  }
+  const result = await runRiptide(bot, { aborted: false }, { name: 'trident' }, 3, -Math.PI / 2, 0, () => true, async release => release())
+  assert.equal(result.ok, false)
+  assert.equal(bot.released, undefined)
+})
+
+test('Riptide release cannot send an unchecked actual look direction', async () => {
+  const bot = model(p => p.y < 1 ? ['stone'] : ['air'])
+  spinAlly(bot, new Vec3(-3, 1, .5)); spinReceipt(bot)
+  const result = await runRiptide(bot, { aborted: false }, { name: 'trident' }, 3, -Math.PI / 2, 0, () => true,
+    async release => { bot.entity.yaw = Math.PI / 2; release() })
+  assert.equal(result.ok, false)
+  assert.equal(bot.released, undefined)
+})
 
 test('riptide impulse and ground lift use vanilla strength and whole-body state collision', () => {
   for (const [level, strength] of [[1, 1.5], [2, 2.25], [3, 3]]) assert.ok(Math.abs(riptideImpulse(level, -.7, .4)!.norm() - strength) < 2e-6)

@@ -208,10 +208,10 @@ const throwPearl = async (target, options: any = {}) => {
     return { ...r, teleported: arrived() }
   }
 
-const escapePearl = async () => {
+const escapePearl = async ({ jump = 'auto' }: any = {}) => {
     const from = ctx.entity.position.clone()
     ctx.aim = 'free'
-    const r = await throwPearl(null, { jump: 'auto',
+    const r = await throwPearl(null, { jump,
       pick: ctx.throwMod.escapePick(ctx.bot, tp => Math.min(32, Math.hypot(tp.x - from.x, tp.z - from.z)), { maxDrop: 4 }) })
     ctx.aim = 'target'
     if (!r?.thrown) { await ctx.holdWeapon(); return null }

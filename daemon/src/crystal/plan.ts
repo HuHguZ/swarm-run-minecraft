@@ -86,7 +86,7 @@ function planDefend (S: CrystalState, deps: CrystalDeps, p: PlanView, danger, th
       if (center.distanceTo(hisEye) <= PLACE_R + 0.5) threats.push(th)
       const hisLand = landed(t, hisW, dHim)
       const worstMe = Math.max(t.me, t.meMax ?? t.me)
-      if (charges > 0 && worstMe < myEff - 3 && hisLand >= t.me * 1.2 + 1 && now - S.lastAnchor > 600) {
+      if (charges > 0 && !t.allyRisk && worstMe < myEff - 3 && hisLand >= t.me * 1.2 + 1 && now - S.lastAnchor > 600) {
         const ff = faceFor(bot, a.pos, eye, pickBlockers(bot, eye))
         if (ff) return { kind: 'anchorPop', cell: a.pos, t, note: `его якорь у нас — подорвал сам, ему больнее (${r1(hisLand)} против ${r1(t.me)})` }
       }
@@ -105,8 +105,8 @@ function planDefend (S: CrystalState, deps: CrystalDeps, p: PlanView, danger, th
     const hisLand = landed(t, hisW, dHim)
     // Своё окно: сырой удар мне не больше того, что только что пришёл, — мне 0.
     const worstMe = Math.max(t.me, t.meMax ?? t.me)
-    if (aim && free && hisLand >= 1.5 && worstMe < myEff - 3) return { kind: 'defuse', c, t, aim, why: 'free', note: `его кристалл — в своё окно неуязвимости (ему ${r1(hisLand)}, мне 0)` }
-    if (aim && worstMe < myEff - 3 && hisLand >= t.me * 1.2 + 1) return { kind: 'defuse', c, t, aim, why: 'trade', note: `сбил кристалл у нас — ему больнее (${r1(hisLand)} против ${r1(t.me)})` }
+    if (aim && !t.allyRisk && free && hisLand >= 1.5 && worstMe < myEff - 3) return { kind: 'defuse', c, t, aim, why: 'free', note: `его кристалл — в своё окно неуязвимости (ему ${r1(hisLand)}, мне 0)` }
+    if (aim && !t.allyRisk && worstMe < myEff - 3 && hisLand >= t.me * 1.2 + 1) return { kind: 'defuse', c, t, aim, why: 'trade', note: `сбил кристалл у нас — ему больнее (${r1(hisLand)} против ${r1(t.me)})` }
     const hisReach = boxDist(hisEye, crystalBox(c.position)) <= HIT_R + 0.4 || hisBow
     const lethal = t.me >= myEff - 1
     // S7c: защита ценой — щит лицом к кристаллу, укрытие (клетка, где лучей к телу нет), блок между —
@@ -149,6 +149,7 @@ function planOffense (S: CrystalState, deps: CrystalDeps, p: PlanView) {
     return s
   }
   const consider = (o) => {
+    if (o.t?.allyRisk) return
     const at0 = o.c?.position || (o.c && Number.isFinite(o.c.x) ? o.c : null)
     if (at0 && /^(hit|shoot|place|place-hit|place-shoot)$/.test(o.kind)) o.score += crowd(at0)
     if (edgy && o.c && (o.land ?? 0) >= 1.5 && o.kind !== 'obby') {

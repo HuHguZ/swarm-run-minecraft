@@ -4,11 +4,23 @@ import type { SwarmMember, SwarmTask, SharedEnemy, SwarmFact, Doctrine, ClaimedT
 import type { SwarmTeamFight } from './fight'
 import type { Retreat } from './retreat'
 import { validPosition, position, cellKey, copy, doctrines, kinds, threats, roles } from './common'
+import { createHpEstimate, FOOD, POTION, MAX_HP } from '../pvp/hp-estimate'
+import { absorptionOfAmp, TOTEM } from '../pvp/damage-model'
+
+const regenAmp = Math.max(...Object.values(FOOD).map(f => f.regenAmp), ...Object.values(POTION).map(p => 'regenAmp' in p ? p.regenAmp : 0))
+const absorptionMax = Math.max(TOTEM.absorption, ...Object.values(FOOD).map(f => absorptionOfAmp(f.absorbAmp)))
+const upperModel = (upper: number, absorption = 0) => {
+  const hp = createHpEstimate({ hp: Math.min(MAX_HP, upper), absorption: Math.max(absorption, upper - MAX_HP) })
+  // Не знаем остаток его эффектов/насыщения: верх стареет по самой быстрой обычной регенерации из данных игры.
+  hp.regen(regenAmp, Infinity)
+  return hp
+}
 
 export class SwarmBoard {
   private members = new Map<string, SwarmMember>()
   private work = new Map<string, SwarmTask>()
   private sightings = new Map<string, Map<string, Omit<SharedEnemy, 'sources'>>>()
+  private hpHealing = new Map<string, { at: number; absorption: number; events: Map<string, number> }>()
   private marks = new Map<string, SwarmFact>()
   private learned: Partial<Record<Doctrine, { successes: number; failures: number }>> = {}
   // Кто был в команде за раунд: исход приёма засчитывается и погибшему (его уже нет среди живых — ревью 13.10).
@@ -70,6 +82,12 @@ export class SwarmBoard {
     return copy(task)
   }
   tasks(): SwarmTask[] { this.prune(); return [...this.work.values()].map(copy) }
+  dislodging(target: string, method: string): boolean {
+    this.prune()
+    for (const t of this.work.values()) if (t.status !== 'done' && t.data?.target === target &&
+      (method === 'shove' ? t.data.shove : `dig:${t.data.dig}` === method)) return true
+    return false
+  }
   cancel(id: string): boolean { return this.work.delete(id) }
   releaseOwner(owner: string): void {
     for (const task of this.work.values()) if (task.claim && (task.claim.owner === owner || task.participants?.includes(owner))) { delete task.claim; task.status = 'pending' }
@@ -122,19 +140,64 @@ export class SwarmBoard {
     }
     if (input.threat && threats.includes(input.threat)) seen.threat = input.threat
     if (Number.isFinite(input.hpEstimate) && input.hpEstimate! > 0 && input.hpEstimate! <= 40) seen.hpEstimate = input.hpEstimate
+    const proof = input.hitProof
+    if (proof && Number.isFinite(proof.healed) && proof.healed >= 0 && Array.isArray(proof.hits) && proof.hits.length <= 128 &&
+      (!proof.healing || Number.isFinite(proof.healing.event) && Number.isFinite(proof.healing.ago) && proof.healing.ago >= 0 && Number.isFinite(proof.healing.absorption) && proof.healing.absorption >= 0 && proof.healing.absorption <= absorptionMax) &&
+      proof.hits.every(h => Number.isFinite(h.ago) && h.ago >= 0 && h.ago <= 8000 && Number.isFinite(h.damage) && h.damage >= 0 && h.damage <= 1000 && Number.isFinite(h.lowDamage) && h.lowDamage >= 0 && h.lowDamage <= h.damage && (h.minDamage === undefined || Number.isFinite(h.minDamage) && h.minDamage >= 0 && h.minDamage <= h.damage) && Number.isFinite(h.healed) && h.healed >= 0 && h.healed <= proof.healed)) seen.hitProof = copy(proof)
     const sources = this.sightings.get(input.id) ?? new Map()
     if ((sources.get(source)?.seenAt ?? -Infinity) > seenAt) return false
     sources.set(source, seen); this.sightings.set(input.id, sources)
+    if (seen.hitProof?.healing) {
+      const heal = seen.hitProof.healing, previous = this.hpHealing.get(input.id)
+      const events = previous?.events ?? new Map<string, number>()
+      // seenAt — начало RPC, ago — возраст в конце RPC. Барьер по приёму не принимает старый удар за новый при разном RTT.
+      if (events.get(source) !== heal.event) {
+        events.set(source, heal.event)
+        this.hpHealing.set(input.id, { at: now, absorption: Math.max(previous?.absorption ?? 0, heal.absorption), events })
+      }
+    }
     return true
   }
   enemies(): SharedEnemy[] {
     this.prune()
-    // Хп — наименьший верх среди источников: каждый знает только свои попадания, и любой верх — честная граница.
+    const now = this.now()
     return [...this.sightings.values()].map(sources => {
-      const list = [...sources.values()], hps = list.map(o => o.hpEstimate).filter((n): n is number => Number.isFinite(n))
+      const list = [...sources.values()]
       const fresh = copy(list.sort((a, b) => b.seenAt - a.seenAt)[0])
-      if (hps.length) fresh.hpEstimate = Math.min(...hps); else delete fresh.hpEstimate
-      return { ...fresh, sources: [...sources.keys()].sort() }
+      const heal = this.hpHealing.get(fresh.id)
+      if (heal) {
+        // Зритель мог пропустить лечение и снова прислать старые 3 с новым seenAt. Его модель уже не верх.
+        // Возвращаемся к консервативному потолку; новые собственные damage_event после лечения снова его снижают.
+        const hp = upperModel(MAX_HP, heal.absorption)
+        let cursor = Math.max(heal.at, now - 8000)
+        const hits = list.flatMap(o => (o.hitProof?.hits || []).map(h => ({ at: o.seenAt - h.ago, min: h.minDamage })))
+          .filter(h => h.min !== undefined && h.at > heal.at && h.at >= cursor && h.at <= now).sort((a, b) => a.at - b.at)
+        for (const hit of hits) {
+          hp.tick((hit.at - cursor) / 50, { visible: false })
+          hp.hit({ min: hit.min!, max: hit.min! })
+          cursor = hit.at
+        }
+        hp.tick((now - cursor) / 50, { visible: false })
+        // В jar еда и Regeneration лечат до 1 дискретно; фазы обоих таймеров нам неизвестны.
+        if (now > heal.at) hp.heal(0, 2)
+        fresh.hpEstimate = hp.snapshot().hi
+      } else {
+        const hps = list.filter(o => Number.isFinite(o.hpEstimate)).map(o => {
+          const hp = upperModel(o.hpEstimate!)
+          hp.tick((now - o.seenAt) / 50, { visible: false })
+          if (now > o.seenAt) hp.heal(0, 2)
+          return hp.snapshot().hi
+        })
+        if (hps.length) fresh.hpEstimate = Math.min(...hps); else delete fresh.hpEstimate
+      }
+      // У каждого тела — только свои удары. Лечение наблюдают все: берём максимум, не умножаем реген на размер роя.
+      const proofs = list.filter(o => o.hitProof).map(o => {
+        const hits = o.hitProof!.hits.filter(h => h.ago + this.now() - o.seenAt <= 8000)
+        const damage = hits.reduce((s, h) => s + h.damage, 0)
+        return { hits: hits.length, damage, damageLow: hits.reduce((s, h) => s + h.lowDamage, 0), healing: hits.length ? Math.max(0, o.hitProof!.healed - hits[0].healed) : 0 }
+      })
+      const pressure = { hits: proofs.reduce((s, p) => s + p.hits, 0), damage: proofs.reduce((s, p) => s + p.damage, 0), damageLow: proofs.reduce((s, p) => s + p.damageLow, 0), healing: Math.max(0, ...proofs.map(p => p.healing)) }
+      return { ...fresh, pressure, sources: [...sources.keys()].sort() }
     }).sort((a, b) => a.id.localeCompare(b.id))
   }
   recordFact(source: string, seenAt: number, fact: Pick<SwarmFact, 'id' | 'kind' | 'position' | 'threat'>, ttlMs = 3000): boolean {
@@ -154,7 +217,7 @@ export class SwarmBoard {
   tacticStats(): Partial<Record<Doctrine, { successes: number; failures: number }>> { return copy(this.learned) }
   doctrineState(): { doctrine: Doctrine; since: number } | null { return this.current ? { ...this.current } : null }
   setDoctrine(doctrine: Doctrine): void { if (this.current?.doctrine !== doctrine) this.current = { doctrine, since: this.now() } }
-  resetRound(): void { this.work.clear(); this.sightings.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null; this.assault = null; this.assaultEnded = null; fledAt.delete(this); pvpMemory.delete(this) }
+  resetRound(): void { this.work.clear(); this.sightings.clear(); this.hpHealing.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null; this.assault = null; this.assaultEnded = null; fledAt.delete(this); pvpMemory.delete(this) }
 }
 
 export function liveMembers(board: SwarmBoard, members: SwarmMember[]) { return members.filter(m => m.team === board.team && m.health > 0) }
@@ -173,6 +236,12 @@ export type PvpMemory = {
   retreats: Map<string, Retreat>
   // Сильное меньшинство (race.ts strongFew): последняя оценка, пока врагов не видно.
   strongFew?: boolean
+  // Урон подтверждённых ударов не окупает лечение: у смертельного края — подкоп и цепь толчков.
+  dislodge?: boolean
+  // Лечение, перевесившее подтверждённый урон: выход требует перекрыть его чистым уроном, а не пересечь ноль окна.
+  dislodgeEvidence?: Map<string, number>
+  // Бюджет попытки — по оставшейся работе; неудача временно повышает её цену, новый раунд очищает память.
+  dislodgeWork?: Map<string, { at: number; active: boolean; failed: boolean; work: number; alternative: number; deadline: number; penalty: number; penaltyAt: number; dug?: number; progressAt?: number }>
   // Всё оружие, что видели у врага за раунд (в руке бывает лук, а меч — в хотбаре): человек помнит, чем его били.
   arsenal: Map<string, Set<string>>
   // Эпизод схватки (doctrine.ts): с первого контакта до пропажи врагов из виду — обманки выключены.

@@ -173,6 +173,7 @@ function stateSummary (bot, extra: any = {}) {
     defense: defenseOf(wornNow),
     offHand: readOffHand(bot),
     inventory: items,
+    attackArrows: (require('./ranged') as typeof import('./ranged')).arrowCount(bot),
     // Зелья в рюкзаке — по действию, а не «potion×3»: кампании нужно знать,
     // сколько огнестойкости (бартер бастиона → блейзы), а вода из бартера — тоже
     // «potion». Поле есть, только если зелья есть.

@@ -247,7 +247,7 @@ function landingSpot (bot, W, { near, away = null, floorY = null, radius = 20, m
 
 // Посадка: планирование к точке пола, касание с v.y > −0.5 (высота падения ≤ 1
 // — без урона), не в пустоту и не у самого края. Ракеты — нет.
-async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = null, arena = null }: any = {}) {
+async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = null, arena = null, maxFallDamage = 0 }: any = {}) {
   ctl = flightControl(bot, ctl)
   if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
   const W = worldOf(bot, { observed: !!arena })
@@ -277,7 +277,7 @@ async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = 
   }
   const r: any = await fly(bot, ctl, {
     phase: 'посадка',
-    goal: () => ({ kind: 'land', at: spot, away, edge }),
+    goal: () => ({ kind: 'land', at: spot, away, edge, maxFallDamage }),
     maxMs,
     noRocket: () => true,
     arena,

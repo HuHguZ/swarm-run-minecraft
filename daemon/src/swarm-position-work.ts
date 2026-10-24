@@ -57,7 +57,7 @@ function pillarCheck(bot, { height = 1, item, reserve = 1, arena }: any = {}, wo
 
 // healthFloor — урон не обрывает работу, пока здоровье не ниже порога (стойка щитом под обстрелом);
 // ranged — прицел лучника считать угрозой (для стойки со щитом — нет).
-function guard(bot, ctl, p, budget, { healthFloor = Infinity, ranged = true }: { healthFloor?: number; ranged?: boolean } = {}) {
+function guard(bot, ctl, p, budget, { healthFloor = Infinity, ranged = true, threat = true }: { healthFloor?: number; ranged?: boolean; threat?: boolean } = {}) {
   const sight = createLastSeen(bot), start = clock.now(), end = start + budget
   let why = '', active = true, hp = bot.health, wake
   const interrupted = new Promise(resolve => { wake = resolve })
@@ -79,7 +79,7 @@ function guard(bot, ctl, p, budget, { healthFloor = Infinity, ranged = true }: {
       edges.simOf(bot)(state, edges.worldOf(bot))
       if (!inside(state.pos, p.arena)) { stop('arena_step'); return }
     }
-    if (directThreat(bot, p.allies || [], Math.min(750, end - clock.now()), sight.observe, { ranged })) stop('direct_threat')
+    if (threat && directThreat(bot, p.allies || [], Math.min(750, end - clock.now()), sight.observe, { ranged })) stop('direct_threat')
   }
   const health = () => { if (bot.health < hp && (healthFloor === Infinity || bot.health < healthFloor)) stop('taking_damage'); hp = bot.health }
   ctl?.onAbort?.push(cancel)
@@ -106,32 +106,53 @@ function guard(bot, ctl, p, budget, { healthFloor = Infinity, ranged = true }: {
 // нами с булавой, сядет в 5 бл. от нас), и кончается, когда угрозы нет 3 проверки подряд (он сел или ушёл). Не по часам:
 // по первой оценке посадки щит опускался между его прыжками на заряде ветра, и подъём за 1–2 т до удара уже не держал
 // (игра пользователя 22.10: «пока видит, что опасность есть, — прикрывается щитом»). seconds — только предохранитель (до 20).
+// whileDraw: держать щит к видимому прицелу и последней стреле; короткая пауза между ними не опускает его на 5 тиков.
 async function swarmHold(session, ctl, p: any = {}) {
   const bot = session.bot, seconds = p.seconds ?? p.timeoutSeconds ?? 3
-  if (!bot?.entity || !Number.isFinite(seconds) || seconds <= 0 || seconds > (p.whileSmash ? 20 : 5) || !inside(bot.entity.position, p.arena) ||
+  if (!bot?.entity || !Number.isFinite(seconds) || seconds <= 0 || seconds > (p.whileSmash || p.whileDraw ? 20 : 5) || !inside(bot.entity.position, p.arena) ||
       p.allies && (!Array.isArray(p.allies) || p.allies.length > 128 || p.allies.some(n => typeof n !== 'string')) ||
       p.enemies && (!Array.isArray(p.enemies) || p.enemies.length > 128 || p.enemies.some(n => !['string', 'number'].includes(typeof n))) ||
+      p.webSmash !== undefined && (typeof p.webSmash !== 'string' || !p.webSmash || p.webSmash.length > 100 || p.whileSmash !== p.webSmash || p.allies?.includes(p.webSmash)) ||
+      p.whileDraw !== undefined && (typeof p.whileDraw !== 'string' || !p.whileDraw || p.whileDraw.length > 100 || p.shield !== true || p.whileSmash || p.allies?.includes(p.whileDraw)) ||
       p.face !== undefined && !finite(p.face) || p.healthFloor !== undefined && !Number.isFinite(p.healthFloor)) return { ok: false, why: 'invalid_hold' }
   const shieldMode = p.shield === true
-  const g = guard(bot, ctl, p, seconds * 1000 + 50, shieldMode ? { healthFloor: p.healthFloor ?? 6, ranged: false } : {})
-  let seen = 0, shield = null, raisedTicks = 0
+  // Щит к булаве (whileSmash) не рвёт «прямая угроза»: падающий с булавой и есть она, щит — ответ на неё. Стойка снималась за
+  // тики до удара, драйвер поднимал её снова (5 т без блока) — «☂ щит к нему» по 3–4 раза в секунду и смерть (игра
+  // пользователя 23.10, 5 «smashed» за 20 с).
+  const g = guard(bot, ctl, p, seconds * 1000 + 50, shieldMode || p.webSmash ? { healthFloor: p.healthFloor ?? 6, ranged: false, threat: !p.whileSmash } : {})
+  let seen = 0, shield = null, raisedTicks = 0, web = null
   try {
     g.check()
+    // До подъёма щита — одна проверенная попытка; поднятый щит ради паутины не опускаем.
+    if (p.webSmash && g.active) {
+      // Из рюкзака: ещё 250 мс после надевания (shieldWear), затем 5 тиков подъёма и тик на пакет.
+      const shieldTicks = shieldMode ? (bot.inventory?.slots?.[45]?.name === 'shield' ? 6 : 11 + Math.ceil((bot.player?.ping || 0) / 50)) : Infinity
+      web = await (require('./mace/web') as typeof import('./mace/web')).webSmash(bot, p.webSmash, { ctl: g.local, shieldTicks })
+        .catch(error => ({ placed: false, why: error.message }))
+      if (!shieldMode) return g.out({ web })
+    }
     if (shieldMode && g.active) {
       shield = (require('./combat') as typeof import('./combat')).makeShield(session, g.local, { shield: 'always' })
-      if (!(await shield.wear())) { const why = shield.report()?.why; shield.close(); shield = null; if (p.requireShield) { g.stop('no_shield'); return g.out({ shieldWhy: why }) } }
+      if (!(await shield.wear())) { const why = shield.report()?.why; shield.close(); shield = null; if (p.requireShield || p.whileDraw) { g.stop('no_shield'); return g.out({ shieldWhy: why }) } }
     }
     if (g.active) { bot.clearControlStates(); bot.setControlState('sneak', !shieldMode && p.sneak !== false) }
     const face = p.face ? new Vec3(p.face.x, p.face.y, p.face.z) : null
     let calm = 0
-    const smashGone = () => {
+    const threatGone = () => {
+      if (p.whileDraw) {
+        const d = (require('./threats') as typeof import('./threats')).dangers(bot, { foes: [p.whileDraw] })
+        calm = d.aims.some(a => a.name === p.whileDraw) || d.arrows.length ? 0 : calm + 1
+        return calm >= 3
+      }
       if (!p.whileSmash) return false
       const threats: typeof import('./threats') = require('./threats')
       calm = threats.smashes(bot, [String(p.whileSmash)]).length ? 0 : calm + 1
-      return calm >= 3
+      // Секунда затишья, не 0.3 с: между прыжками на заряде ветра он на миг не «падает» на нас, стойка снималась, и следующий
+      // удар приходил в открытого (игра пользователя 23.10: «☂ щит к нему» каждые 2 с, в ударе — без дела, хп 18 → 0).
+      return calm >= 10
     }
     const watch = async () => {
-      while (g.active && clock.now() - g.start < seconds * 1000 && !smashGone()) {
+      while (g.active && clock.now() - g.start < seconds * 1000 && !threatGone()) {
         const me = bot.entity.position
         const outward = face ? face.minus(me) : null
         const visible = (Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity &&
@@ -143,13 +164,19 @@ async function swarmHold(session, ctl, p: any = {}) {
           .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
         if (enemy) { seen++; await bot.lookAt(enemy.position.offset(0, pick.eyeHeight(bot, enemy), 0), true) }
         else if (face) await bot.lookAt(face, true)
-        else await bot.look(bot.entity.yaw + Math.PI / 8, bot.entity.pitch || 0, true)
-        if (shield && g.active) { await shield.raise(true); if (shield.blocking()) raisedTicks += 2 }
+        // Стрелок скрылся, но стрела ещё летит: держать прежний фронт щита, не крутиться в поиске цели.
+        else if (!p.whileDraw) await bot.look(bot.entity.yaw + Math.PI / 8, bot.entity.pitch || 0, true)
+        if (shield && g.active) {
+          await shield.raise(true)
+          const failure = p.whileDraw && shield.failure()
+          if (failure) { g.stop(failure); break }
+          if (shield.blocking()) raisedTicks += 2
+        }
         if (g.active) await clock.sleep(100)
       }
     }
     await Promise.race([watch(), g.interrupted])
-    return g.out({ heldSeconds: Math.min(seconds, (clock.now() - g.start) / 1000), seen,
+    return g.out({ heldSeconds: Math.min(seconds, (clock.now() - g.start) / 1000), seen, ...(p.webSmash ? { web } : {}),
       ...(shieldMode ? { shield: shield ? { blockingSeconds: raisedTicks / 20, ...shield.nativeUse() } : null } : {}) })
   } catch (error) { g.stop('hold_failed'); return g.out({ error: error.message, seen }) }
   finally { shield?.close(); g.close() }

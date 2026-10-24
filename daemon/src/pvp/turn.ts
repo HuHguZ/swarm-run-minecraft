@@ -55,7 +55,7 @@ export interface DuelCtx {
   unblockPath: any; digWatch: any; punishable: any; eatHeld: any; consumeItem: any; drink: any; escapePearl: any;
   releaseFightItems: any; strategicRequest: any; finish: any; crowd: any; throwWhy: any; targetHurtBy: any; strikeSlotAt: any; strikeSlot: any; planText: any; planVerdict: any; replanAt: any;
   retarget: any; maceChain: any; seesNow: any; buffUp: any; splashFirst: any; spearChargeFar: any; sleep: any;
-  glideChase: any;
+  glideChase: any; arenaExitCheck?: { inputs: string; at: number } | null;
 }
 
 export interface TurnFrame {

@@ -52,8 +52,9 @@ const ROD_MAX = 11
 // нет, и человек удочкой бота не сдёргивал. Один раз на бота, всегда.
 function installRodPull (bot) {
   if (bot._ndRodPull) return bot._ndRodPull
-  const R = { owners: new Map(), pulled: 0, last: null, mine: null }
+  const R = { owners: new Map(), pulled: 0, last: null, mine: null, targets: new Map(), hurtAt: -Infinity }
   bot._ndRodPull = R
+  bot.on('entityHurt', e => { if (e?.id === bot.entity?.id) R.hurtAt = gameClock.now() })
   const typeId = bot.registry.entitiesByName.fishing_bobber ? bot.registry.entitiesByName.fishing_bobber.id : -1
   try {
     bot._client.on('spawn_entity', (p) => {
@@ -82,6 +83,12 @@ function installRodPull (bot) {
     })
   } catch {}
   return R
+}
+
+// Априори графа — 0.4; опыт одной цели сохраняется между короткими заходами боя.
+function rodChance (bot, e) {
+  const r = bot._ndRodPull?.targets?.get(e.uuid || e.username || e.id)
+  return ((r?.hits || 0) + 2) / ((r?.casts || 0) + 5)
 }
 
 // Мой поплавок и кого он держит.
@@ -146,16 +153,21 @@ function rodPlan (bot, e, { d, dy, sees, busy = {}, theyUp = false, vel = null, 
 
 // Заброс и подсечка. Прицел — по поплавку (своё движение не прибавляется),
 // с упреждением его хода; поймали — сразу «использовать» ещё раз (рывок).
-async function rodPull (bot, ctl, e, { velFn = () => ({ x: 0, y: 0, z: 0 }), maxMs = 1600 }: any = {}) {
-  installRodPull(bot)
+async function rodPull (bot, ctl, e, { velFn = () => ({ x: 0, y: 0, z: 0 }), maxMs = 1600, threatFn = () => false }: any = {}): Promise<any> {
+  const R = installRodPull(bot)
+  let casted = false
+  const unsafe = () => ctl.aborted || e.isValid === false || gameClock.now() - R.hurtAt < 10 * TICK_MS || threatFn()
+  const interrupted = () => ({ ok: false, hooked: false, casted, interrupted: true, why: 'угроза или прервано' })
+  if (unsafe()) return interrupted()
   const rod = findItem(bot, i => i.name === 'fishing_rod')
   if (!rod) return { ok: false, why: 'удочки нет' }
   try { await bot.equip(rod, 'hand') } catch (err) { return { ok: false, why: err.message } }
+  if (unsafe()) return interrupted()
   if (!bot.heldItem || bot.heldItem.name !== 'fishing_rod') return { ok: false, why: 'не взял удочку' }
-  const R = bot._ndRodPull
   R.mine = null
   const hp0 = hpOf(bot, e)
   const cast: any = await onTickThen(bot, () => {
+    if (unsafe()) return null
     const eye = bot.entity.position.offset(0, EYE, 0)
     const v = velFn() || { x: 0, z: 0 }
     let ticks = 6
@@ -169,15 +181,23 @@ async function rodPull (bot, ctl, e, { velFn = () => ({ x: 0, y: 0, z: 0 }), max
       ticks = s.ticks
     }
     return sol
-  }, () => bot.activateItem())
-  if (!cast) return { ok: false, why: 'не долетит' }
+  }, () => { if (!unsafe()) { bot.activateItem(); casted = true } })
+  if (!cast || !casted) return unsafe() ? interrupted() : { ok: false, why: 'не долетит' }
+  // Прерванный в полёте заброс тоже стоит времени; шанс считаем по всем реальным попыткам этой цели.
+  const key = e.uuid || e.username || e.id
+  const result = R.targets.get(key) || { casts: 0, hits: 0 }
+  result.casts++
+  R.targets.set(key, result)
+  if (R.targets.size > 64) R.targets.delete(R.targets.keys().next().value)
   const t0 = gameClock.now()
   let hooked = false
-  while (!ctl.aborted && gameClock.now() - t0 < Math.min(maxMs, cast.ticks * 50 + 700)) {
+  while (!unsafe() && gameClock.now() - t0 < Math.min(maxMs, cast.ticks * 50 + 700)) {
     const h = myHook(bot)
     if (h && h.hooked === e.id) { hooked = true; break }
     await sleep(TICK_MS)
   }
+  if (unsafe()) return interrupted()
+  if (hooked) result.hits++
   // Подсечка (или смотать пустой): второе «использовать» с удочкой в руке.
   // ND_DEBUG_ROD=1 (сцена try-utility): сразу за пакетом подсечки — /data его
   // Motion: сервер разбирает пакеты по порядку в одном тике, и ответ — скорость,
@@ -188,11 +208,11 @@ async function rodPull (bot, ctl, e, { velFn = () => ({ x: 0, y: 0, z: 0 }), max
   if (dbg) bot.on('messagestr', onMsg)
   try { bot.activateItem() } catch {}
   if (dbg) { try { bot.chat(`/data get entity ${e.username} Motion`) } catch {} }
-  await sleep(dbg ? 400 : 120)
+  if (dbg) await sleep(400)
   if (dbg) bot.removeListener('messagestr', onMsg)
   const me = bot.entity.position
   const expect = hooked ? `${((me.x - e.position.x) * 0.1).toFixed(2)}, ${((me.y - e.position.y - 1.44) * 0.1).toFixed(2)}, ${((me.z - e.position.z) * 0.1).toFixed(2)}` : null
-  return { ok: hooked, hooked, ticks: cast.ticks, pitchDeg: Math.round(cast.pitch * 1800 / Math.PI) / 10, hp0, probe, expect }
+  return { ok: hooked, hooked, casted, ticks: cast.ticks, pitchDeg: Math.round(cast.pitch * 1800 / Math.PI) / 10, hp0, probe, expect }
 }
 
-export { rodFlight, rodPitch, ROD_MAX, installRodPull, myHook, hookedBy, rodPlan, rodPull }
+export { rodFlight, rodPitch, ROD_MAX, installRodPull, rodChance, myHook, hookedBy, rodPlan, rodPull }

@@ -12,6 +12,7 @@ import { findItem, potionOf, potionRole } from './potions'
 import { FAR, HIT_REACH, TICK_MS } from './rules'
 import { strikeWait } from './strike-order'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+import { archerCover, steerArcherCover } from './archer-cover'
 
 // Диагностика связки: одна запись причины в игровую секунду, повтор hint её не сбрасывает.
 function traceLanceWeb (bot: any, stage: string, data: any) {
@@ -92,10 +93,19 @@ export async function flyerTurn (ctx: DuelCtx, turn: TurnFrame) {
 export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, clear, guard, holdWeapon, leadFn, pathTo, pvpSkills, ready, rest, routeInputs, set, spearChargeFar, strafeStep, used } = ctx
   const { aimedCb, arrowItem, bowItem, bowShield, cbShield, d, hp, meInWeb, noMelee, r, seesBody, theyBow, theyUp } = turn
-  if (d > FAR && !(noMelee && bowItem && arrowItem)) {
+  if ((d > FAR || theyBow && d > 4) && !(noMelee && bowItem && arrowItem)) {
     if (guard) await guard.raise(!!(cbShield || bowShield))
     if (ctx.perch) { clear(); await ctx.sleep(TICK_MS); return NEXT }
-    if (!theyUp && !ctx.perch && !ctx.fort && !meInWeb && (await spearChargeFar(r, d))) return NEXT
+    // Под натянутым луком сначала рвём линию огня, потом разгоняем оружие.
+    if (theyBow && seesBody && !meInWeb) {
+      const eye = ctx.entity.position.offset(0, pick.eyeHeight(bot, ctx.entity), 0)
+      const cover = archerCover(bot, eye, { arena: ctx.AR, advance: true })
+      if (ctx.pathing) { pathTo(false); ctx.pathing = false }
+      clear()
+      if (cover && steerArcherCover(bot, cover)) {
+        await ctx.sleep(TICK_MS); return NEXT
+      }
+    }
     const shooter = theyBow || ctx.prof.ranged
     const pearl = findItem(bot, i => i.name === 'ender_pearl')
     if (ctx.prof.player && theyBow && pearl && pvpSkills.itemReady(pearl) && pearl.count >= 2 && d > 14 && d < 40 && hp > 13) {
@@ -111,6 +121,18 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
         return NEXT
       }
     }
+    if (theyBow && seesBody && !meInWeb) {
+      strafeStep()
+      const preferred = ctx.dodgeKey && ctx.dodgeLine ? ctx.dodgeKey : ctx.strafeKey
+      const side = [preferred, preferred === 'left' ? 'right' : 'left'].find(key => stepSafe(bot, keyDir(bot, key)))
+      if (side) {
+        set(side, true)
+        const forward = stepSafe(bot, keyDir(bot, 'forward'))
+        set('forward', forward); set('sprint', forward && (bot.food ?? 20) > 6)
+        await ctx.sleep(TICK_MS); return NEXT
+      }
+    }
+    if (!theyUp && !ctx.perch && !ctx.fort && !meInWeb && (await spearChargeFar(r, d))) return NEXT
     const f = keyDir(bot, 'forward')
     if (aimedCb && seesBody && d < 40) {
       if (ctx.pathing) { pathTo(false); ctx.pathing = false }

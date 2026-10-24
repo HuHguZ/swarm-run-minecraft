@@ -7,6 +7,8 @@ const gearMemory = new WeakMap<object, Map<number, any>>()
 export function swarmSightings(bot: any, allies: string[] = []) {
   if (!bot?.entity) return []
   const excluded = new Set(Array.isArray(allies) ? allies : [])
+  // Только имена команды из её же опроса: позиции для стройки всё равно нужны видимые сейчас.
+  bot._ndSwarmAllies = [...excluded]
   const before = previous.get(bot) || new Map()
   const current = new Map<number, any>()
   const sightings = []
@@ -24,8 +26,11 @@ export function swarmSightings(bot: any, allies: string[] = []) {
     const gear = projection.equipment
     const equipment = { weapon: gear[0]?.name || null, armor: gear.slice(2, 6).map(it => it?.name).filter(Boolean), ...(projection.unknownArmorSlots ? { unknownArmorSlots: projection.unknownArmorSlots } : {}), ...(gear.some(it => it?.enchanted) ? { enchanted: true } : {}) }
     const threat = /bow|crossbow/.test(equipment.weapon || '') ? 'bow' : /^(end_crystal|respawn_anchor)$/.test(equipment.weapon || '') ? 'blast' : e.elytraFlying || equipment.weapon === 'mace' && velocity.y < -.2 ? 'aerial' : 'melee'
-    const hp = (require('./pvp/combat-observe') as typeof import('./pvp/combat-observe')).foeHpUpper(bot, e)
-    sightings.push({ id: e.username, position, velocity, equipment, threat, visible: true, seenAt: now, ...(Number.isFinite(hp) && hp < 20 ? { hpEstimate: hp } : {}) })
+    const observer: typeof import('./pvp/combat-observe') = require('./pvp/combat-observe')
+    const hp = observer.foeHpUpper(bot, e), hitProof = observer.foeHitProof(bot, e)
+    // В воздухе высоко над опорой (подлетел: заряд, булава, удар) — рою позиции для бокового броска ветром (driver wind.ts).
+    const airborne = !e.onGround && (require('./combat/wind-out') as typeof import('./combat/wind-out')).heightAbove(bot, e.position) >= 2.5
+    sightings.push({ id: e.username, position, velocity, equipment, threat, visible: true, seenAt: now, ...(airborne ? { airborne: true } : {}), ...(Number.isFinite(hp) ? { hpEstimate: hp } : {}), ...(hitProof && (hitProof.hits.length || hitProof.healing) ? { hitProof } : {}) })
     current.set(e.id, { position, now })
   }
   previous.set(bot, current)

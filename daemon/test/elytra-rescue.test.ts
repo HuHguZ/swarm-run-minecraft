@@ -25,7 +25,13 @@ function fixture(p: any = {}) {
     startGlide: () => { calls.push('glide'); bot.entity.elytraFlying = true; return true },
     toHotbar: async () => { calls.push('hotbar') },
     rollout: () => ({ kind: p.kind ?? null, fd: p.predFd ?? 0, p: { y: p.endY ?? 124 } }),
-    headroom: () => 5, landingSpot: () => (++probes > (p.missingProbes ?? 0) ? pad : null),
+    headroom: () => p.headroom ?? 5, landingSpot: () => (++probes > (p.missingProbes ?? 0) ? pad : null),
+    escape: async (_b, ctl, e, o) => {
+      calls.push({ escape: e.username, arena: o.arena })
+      if (p.escapeDeath) bot.health = 0
+      if (p.escapeAbort) ctl.aborted = true
+      return { ok: true, note: 'уход', hp1: bot.health }
+    },
     fly: async (_b, ctl, o) => {
       flights.push(o)
       for (let n = 0; n < 20; n++) o.goal()
@@ -53,14 +59,18 @@ function fixture(p: any = {}) {
       return { ok: true }
     }
   }
-  const session: any = { bot, require: () => bot, runIntent: async (name, work, options) => {
+  bot.players = { HuHguZ: { entity: { username: 'HuHguZ', position: new Vec3(69, 120, 0) } } }
+  const session: any = { bot, _ndFoes: p.foes || [], require: () => bot, runIntent: async (name, work, options) => {
     calls.push({ name, params: options.params })
     return p.run ? { status: 'done', detail: await work({ aborted: false }) } : { status: 'done' }
   } }
   const file = path.join(__dirname, '../src/rpc/aerial.js'), native = createRequire(file)
   const mod = { exports: {} as any }
   vm.runInNewContext(readFileSync(file, 'utf8'), { module: mod, exports: mod.exports,
-    require: name => name === '../elytra' ? sky : native(name), console: { log () {} } })
+    require: name => name === '../elytra' ? sky : name === '../pvp/last-seen' ? { createLastSeen: () => ({
+      observe: e => e && p.visible ? { ...e, position: e.position.clone(), _ndVisible: true } : null,
+      visible: e => !!e?._ndVisible, close: () => calls.push('sight-close')
+    }) } : native(name), console: { log () {} } })
   return { bot, calls, flights, methods: mod.exports.aerialMethods({ session }), probes: () => probes }
 }
 
@@ -132,5 +142,24 @@ test('rescue: unsafe contact, death and supersession keep distinct reasons and f
     assert.equal(guards[guard], false, JSON.stringify(p))
     if (guard === 'minY') assert.equal(d.before.minFloorY, 114)
     if (guard === 'support') assert.equal(d.touchdown, true)
+  }
+})
+
+test('rescue: lethal pit and void escape the visible foe; hidden players and blocked ascent keep glide rescue', async () => {
+  for (const [p, escaping] of [[{}, true], [{ noFloor: true }, true], [{ escapeDeath: true }, true], [{ escapeAbort: true }, true],
+    [{ visible: false }, false], [{ foes: [] }, false], [{ rockets: 0 }, false], [{ headroom: 3 }, false]] as Array<[any, boolean]>) {
+    const f = fixture({ run: true, hp: 1.2, rockets: 47, foes: ['HuHguZ'], visible: true, ...p })
+    const r = await f.methods.fly_to({ at: { x: 0, y: 120, z: 0 }, killY: 113, rescue: true,
+      arena: { x: 0, z: 0, r: 80 } })
+    const escape = f.calls.find(c => c.escape)
+    assert.equal(!!escape, escaping, JSON.stringify(p))
+    if (escape) {
+      assert.equal(r.detail.ok, !p.escapeDeath && !p.escapeAbort)
+      assert.equal(r.detail.why, p.escapeDeath ? 'death' : p.escapeAbort ? 'flight_superseded' : null)
+      assert.equal(escape.escape, 'HuHguZ')
+      assert.equal(escape.arena.y, 120)
+      assert.equal(f.calls.includes('land'), false, 'не садиться в ближайшую яму')
+      assert.equal(f.calls.includes('sight-close'), true)
+    }
   }
 })

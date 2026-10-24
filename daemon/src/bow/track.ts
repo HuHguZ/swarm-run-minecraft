@@ -57,7 +57,8 @@ const fallIntervals = Array.from({ length: 10 }, (_, i) => {
   return { ticks, drag, sum, loss: .08 * d * (ticks - sum) / (1 - d) }
 })
 function observedFallTicks(previous, current) {
-  if (!(previous < 0 && current < 0)) return null
+  // The same native gravity/drag inverse applies while rising and across the apex.
+  if (!Number.isFinite(previous) || !Number.isFinite(current)) return null
   let count = null
   for (const first of fallIntervals) {
     const end = (previous + first.loss) / first.sum * first.drag - .08 * Math.fround(.98) * first.sum

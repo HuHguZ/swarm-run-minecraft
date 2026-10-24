@@ -51,6 +51,7 @@ export function lungeJab (bot, yaw: number) {
       bot.removeListener('physicsTick', onT)
       bot.look(yaw, 0, true).catch(() => {})
       spear.afterPacket(bot, () => {
+        if (!spear.teamSafe(bot)) return resolve(false)
         try {
           bot._client.write('block_dig', { status: 7, location: { x: 0, y: 0, z: 0 }, face: 0, sequence: 0 })
           bot.swingArm('right')

@@ -31,6 +31,7 @@ import * as gameClock from './game-clock'
 
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import { sleep } from './movement'
+import { allyOnSpearRay } from './combat/ally-safety'
 
 const TICK_MS = 50
 const EYE = 1.62
@@ -55,6 +56,7 @@ const DMG_REL = 4.6 // бл/с — урон при разгоне
 function isSpear (name) { return !!SPEARS[name] }
 // Лучшее копьё: по урону укола, при равенстве — по множителю разгона.
 function spearOf (bot) {
+  install(bot)
   let best = null
   for (const it of bot.inventory.items()) {
     const s = SPEARS[it.name]
@@ -107,7 +109,9 @@ function jabReach (bot, e, fwd = 0) {
   const body = { ...e, height: (require('./pick') as typeof import('./pick')).hitboxOf(bot, e).h }
   const hit = rayBox(eye, dir, body)
   if (!hit) return { ok: false, why: 'мимо луча' }
-  const maxT = MAX_R + Math.max(0, fwd)
+  const v = bot.entity.velocity || { x: 0, y: 0, z: 0 }
+  const maxT = MAX_R + Math.max(0, fwd, dir.x * v.x + dir.y * v.y + dir.z * v.z)
+  if (allyOnSpearRay(bot, eye, new Vec3(dir.x, dir.y, dir.z), MIN_R, maxT)) return { ok: false, why: 'союзник на луче копья' }
   // Начало отрезка (2.0) должно быть внутри самой рамки или до неё: запас 0.125
   // сервер добавляет только лучу, входящему снаружи (ProjectileUtil.
   // getManyEntityHitResult: contains(start) или clip) — замер: с 1.4 бл. мимо.
@@ -140,7 +144,25 @@ function install (bot) {
   if (bot._ndSpear) return bot._ndSpear
   const S = { lastJab: 0, jabs: 0, hits: 0 }
   bot._ndSpear = S
+  const guard = () => {
+    if (!bot.entity || bot.health <= 0 || !isSpear(bot.heldItem?.name)) return
+    const use = bot._ndUse?.cur
+    // Mineflayer clears usingHeldItem on any entity_status, even a foreign
+    // hurt/death. Our own held-use receipt survives until our actual use ends.
+    if (use ? use.hand !== 0 || use.name !== bot.heldItem.name : !bot.usingHeldItem) return
+    if (!teamSafe(bot)) bot.deactivateItem()
+  }
+  Object.defineProperty(guard, '_ndLatePacketAim', { value: true })
+  bot.on?.('physicTick', guard)
+  bot.once?.('end', () => bot.removeListener('physicTick', guard))
   return S
+}
+function teamSafe(bot, yaw = bot.entity?.yaw, pitch = bot.entity?.pitch) {
+  if (!(bot._ndSwarmAllies?.length || bot.teamMap?.[bot.username || bot.entity?.username]?.team)) return true
+  if (!bot.entity || !Number.isFinite(yaw) || !Number.isFinite(pitch)) return false
+  const pick: typeof import('./pick') = require('./pick'), eye = pick.eyeOf(bot), dir = dirOf(yaw, pitch)
+  const v = bot.entity.velocity || { x: 0, y: 0, z: 0 }
+  return !allyOnSpearRay(bot, eye, new Vec3(dir.x, dir.y, dir.z), MIN_R, MAX_R + Math.max(0, dir.x * v.x + dir.y * v.y + dir.z * v.z))
 }
 function readyIn (bot, name) {
   const S = install(bot)
@@ -168,7 +190,7 @@ function jab (bot, e, { abortIf = null }: any = {}) {
       if (!jr.ok) return resolve({ ok: false, why: jr.why })
       bot.look(jr.aim.yaw, jr.aim.pitch, true).catch(() => {})
       afterPacket(bot, () => {
-        if (abortIf?.() || e.isValid === false || !jabReach(bot, e).ok) return resolve({ ok: false, why: 'цель ушла' })
+        if (abortIf?.() || e.isValid === false || !teamSafe(bot) || !jabReach(bot, e).ok) return resolve({ ok: false, why: 'цель ушла или союзник на луче' })
         try {
           bot._client.write('block_dig', { status: 7, location: { x: 0, y: 0, z: 0 }, face: 0, sequence: 0 })
           bot.swingArm('right')
@@ -194,6 +216,7 @@ function jab (bot, e, { abortIf = null }: any = {}) {
 // упущено: проскочили (ближе 2 без попадания) или он уходит быстрее, чем
 // догоняем (отн. скорость < 4.6 четыре тика подряд).
 async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, vel = null }: any = {}) {
+  install(bot)
   const held = bot.heldItem
   if (!held || !isSpear(held.name)) return { ok: false, why: 'копья нет в руке' }
   const spec = SPEARS[held.name]
@@ -208,6 +231,7 @@ async function charge (bot, ctl, e, { maxMs = 2200, onHit = null, safe = null, v
   try {
     while (gameClock.now() - t0 < maxMs && !(ctl && ctl.aborted) && e.isValid !== false) {
       const a = aimAt(bot, e)
+      if (!teamSafe(bot, a.yaw, Math.abs(a.pitch) > 0.2 ? a.pitch : 0)) { why = 'союзник на луче копья'; break }
       await bot.look(a.yaw, Math.abs(a.pitch) > 0.2 ? a.pitch : 0, true).catch(() => {})
       const f = safe ? safe('forward') : true
       bot.setControlState('forward', f)
@@ -252,4 +276,4 @@ function chargeWindow (name, r, towardMe) {
   return { at: Math.round(at * 10) / 10, ticks }
 }
 
-export { SPEARS, isSpear, spearOf, chargeTicks, jabReach, jab, charge, chargeWindow, readyIn, install, rayBox, afterPacket, KB_SPEED, DMG_REL, MIN_R, MAX_R }
+export { SPEARS, isSpear, spearOf, chargeTicks, jabReach, jab, charge, chargeWindow, readyIn, install, teamSafe, rayBox, afterPacket, KB_SPEED, DMG_REL, MIN_R, MAX_R }

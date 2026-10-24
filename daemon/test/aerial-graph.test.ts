@@ -6,10 +6,11 @@ import { createAerialCombat } from '../src/combat/aerial-executor'
 const actor = (id: number, x: number, y: number) => ({ id, position: { x, y, z: 0 }, velocity: { x: 0.1, y: -0.6, z: 0 }, flying: true, grounded: false, alive: true })
 const state = (): AerialState => ({ self: actor(1, 0, 80), target: actor(2, 2, 77), health: 20, interrupted: false,
   safeLanding: { x: 0, y: 64, z: 0 }, corridorClear: true, equipment: { elytra: true, chestplate: true, rockets: 8, pearls: 4, mace: true, spear: true },
-  maceReady: true, spearReady: true, fallDistance: 4, pearlDamage: 5 })
+  maceDropReady: true, maceReady: true, spearReady: true, fallDistance: 4, pearlDamage: 5 })
 
 test('airborne graph attacks a moving airborne opponent with a confirmed landing', () => {
   const s = state()
+  s.target!.flying = false
   assert.equal(evaluateAerial(s).node, 'DiveStrike')
   s.equipment.mace = false
   assert.equal(evaluateAerial(s).node, 'SpearStrike')

@@ -28,6 +28,11 @@ function attachClients (wss, { session, gameClock, methods, log, state }: { sess
       } catch {}
     }
     let sourceClock
+    let descentBot
+    // Квитанция приходит и при отменённом намерении: спрыгивание не должно потеряться вместе с ответом flee/fight.
+    const pushDescent = descent => {
+      if (state.dangerWatch && ws.readyState === 1) ws.send(JSON.stringify({ type: 'danger', descent }))
+    }
     let lastPublished = 0
     // Followers have no independent prediction loop. Publish every five game
     // ticks so short game sleeps don't wait 250 wall ms at an accelerated rate.
@@ -36,6 +41,9 @@ function attachClients (wss, { session, gameClock, methods, log, state }: { sess
       if (sourceClock.frozen || ticks - lastPublished >= 5) { lastPublished = ticks; sendClock() }
     }
     const bindClock = clock => {
+      descentBot?.off?.('nd_flee_drop', pushDescent)
+      descentBot = clock ? session.bot : null
+      descentBot?.on?.('nd_flee_drop', pushDescent)
       sourceClock?.off('tick', onTick)
       sourceClock?.off('state', sendClock)
       sourceClock = clock

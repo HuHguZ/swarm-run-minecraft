@@ -1,10 +1,18 @@
 // Рой (swarm.ts): план боя (planPvp) — сектора окружения и работа на команду: добыча блоков, прикрытие раненых,
 // ямы-ловушки, лестницы, кемперы.
 import { aimingAt } from '../pvp/crowd'
-import type { SwarmPosition, SwarmMember, SharedEnemy } from './types'
+import type { SwarmPosition, SwarmMember, SharedEnemy, DigSite } from './types'
 import type { PvpPlan } from './plan-frame'
 import { distance, cellKey, count } from './common'
 import { shoveValue, SHOVE, type Edge } from './shove'
+import { MELEE_CAP } from './race'
+import { attackSeconds, digSeconds, dislodgeSeconds } from './dislodge'
+import { memberFight } from './fight'
+
+const under = (q: SwarmPosition, s: SwarmPosition) => s.y === Math.floor(q.y - .01) && q.x + .3 > s.x && q.x - .3 < s.x + 1 && q.z + .3 > s.z && q.z - .3 < s.z + 1
+// Origin/key and blocks stay unchanged while confirmed upper layers disappear.
+export const digCells = (s: DigSite): SwarmPosition[] => (s.blocks || [0, 1]).map((_, k) => ({ x: s.x, y: s.y - k, z: s.z })).slice(s.dug || 0)
+const underDig = (q: SwarmPosition, s: DigSite) => digCells(s).some(c => under(q, c))
 
 export function pvpSectors(S: PvpPlan): void {
   const { team, options } = S
@@ -18,7 +26,7 @@ export function pvpSectors(S: PvpPlan): void {
   const SECTORS = 8
   const sectorsTaken = new Map<string, number[]>()
   const edges = new Map<string, Edge | null>()
-  const edgeAt = (foe: SharedEnemy) => { if (!edges.has(foe.id)) edges.set(foe.id, options.edgeOf?.(foe.position) ?? null); return edges.get(foe.id)! }
+  const edgeAt = (foe: SharedEnemy) => { if (!edges.has(foe.id)) edges.set(foe.id, options.edgeOf?.(foe.position, foe) ?? null); return edges.get(foe.id)! }
   // Смертельный обрыв (shove.ts) тянет бьющих на другую сторону сильнее: втрое против прежнего веса «просто край».
   const shoveOf = (foe: SharedEnemy) => shoveValue(foe, edgeAt(foe))
   function sectorOf(m: SwarmMember, foe: SharedEnemy): number {
@@ -37,7 +45,12 @@ export function pvpSectors(S: PvpPlan): void {
     own.push(best)
     return best
   }
-  const ringAt = (foe: SharedEnemy, k: number, r: number): SwarmPosition => ({ x: foe.position.x + Math.cos(k * 2 * Math.PI / SECTORS) * r, y: foe.position.y, z: foe.position.z + Math.sin(k * 2 * Math.PI / SECTORS) * r })
+  const ringAt = (foe: SharedEnemy, k: number, r: number, occupied: SwarmPosition[] = []): SwarmPosition => {
+    const at = (j: number, radius: number) => ({ x: foe.position.x + Math.cos(j * 2 * Math.PI / SECTORS) * radius, y: foe.position.y, z: foe.position.z + Math.sin(j * 2 * Math.PI / SECTORS) * radius })
+    const clear = (q: SwarmPosition) => !occupied.some(s => distance(q, s) < .6) && !(S.digAvoid || []).some(s => under(q, s)) && ![...(S.diggers?.values() || [])].some(d => (d.site as any).stands?.some(s => distance(q, s) < .8))
+    for (const radius of [r, r + 1, r + 2]) for (const turn of [0, 1, -1, 2, -2, 3, -3, 4]) { const q = at(k + turn, radius); if (clear(q)) return q }
+    return at(k, r + 6)
+  }
   Object.assign(S, { meanStrength, sectorOf, ringAt, shoveOf, edgeAt })
 }
 
@@ -74,8 +87,9 @@ export function coverHurt(S: PvpPlan): void {
 }
 
 // Грубый отбор; видимую грань и опору своих проверяет swarm_work.
-export function canDigTrap(p: SwarmPosition, s: any): boolean {
-  return Math.abs(p.y - (s.feetY ?? s.y + 1)) <= .6 &&
+export function canDigTrap(p: SwarmPosition, s: DigSite): boolean {
+  const levels = s.stands ? s.stands.filter(q => !q.requiresClear?.length).map(q => q.y) : [s.feetY ?? s.y + 1]
+  return levels.some(y => Math.abs(p.y - y) <= .6) &&
     (p.x + .3 <= s.x || p.x - .3 >= s.x + 1 || p.z + .3 <= s.z || p.z - .3 >= s.z + 1) &&
     Math.hypot(s.x + .5 - p.x, s.y - p.y - 1.62, s.z + .5 - p.z) <= 4.5
 }
@@ -94,7 +108,15 @@ export function pvpDiggers(S: PvpPlan): void {
   const held = (key: string) => new Map(board.tasks().filter(t => t.assignedTo && t.data?.[key] !== undefined && t.position).map(t => [t.assignedTo!, t.position!]))
   // Цели — свежие, быстрые первыми; по 1–2 копателя на цель (несколько целей), ямы впереди его хода, разнос 3 бл. (Codex 15.10:
   // все копатели доставались первой цели — 4/0/0 вместо 1/1/2).
-  const diggers = new Map<string, { site: SwarmPosition; foe: SharedEnemy }>()
+  const diggers = new Map<string, { site: DigSite; foe: SharedEnemy }>()
+  const vacate = new Map<string, SwarmPosition>()
+  // Снятый верх больше не опора, но оставшийся нижний слой остаётся кандидатом на копку.
+  const clearedTop = [...(S.state.dislodgeWork || [])].filter(([key, work]) => (work.dug || 0) > 0 && key.includes(':dig:')).flatMap(([key, work]) => {
+    const [x, y, z] = key.slice(key.lastIndexOf(':') + 1).split(',').map(Number)
+    return Array.from({ length: work.dug! }, (_, k) => ({ x, y: y - k, z }))
+  })
+  const cleared = new Set(clearedTop.map(cellKey))
+  const taken: DigSite[] = []
   // Рой на рой — ямы под тем, на кого навалились (наших у него вдвое больше, чем его своих): групповой сброс одного
   // (пользователь 21.10: «включая поломку блоков под ногами врага»); против человека (натиск) — под любым.
   const ganged = (e: SharedEnemy) => team.filter(m => distance(m.position, e.position) <= 12).length >= 2 * Math.max(1, enemies.filter(o => distance(o.position, e.position) <= 12).length)
@@ -102,12 +124,10 @@ export function pvpDiggers(S: PvpPlan): void {
     const speed = (e: SharedEnemy) => Math.hypot(e.velocity?.x || 0, e.velocity?.z || 0)
     const goals = enemies.filter(e => board.now() - e.seenAt < 5000 && (aggressive || ganged(e))).sort((a, b) => speed(b) - speed(a) || b.seenAt - a.seenAt || a.id.localeCompare(b.id))
     const pickTier = (m: SwarmMember) => Math.max(0, ...Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0).map(n => n === 'netherite_pickaxe' ? 3 : n === 'diamond_pickaxe' ? 2 : /_pickaxe$/.test(n) ? 1 : 0))
-    // Кирки у многих (пользователь 15.10: «выдай всем незеритовые кирки — больше ям») — до четырёх копателей. Против сильного
-    // одиночки подкоп — главное (пользователь 22.10): до шести, в упор его всё равно бьют только двое (MELEE_CAP).
-    const limit = S.state.strongFew ? 6 : Math.min(4, 2 + Math.floor(team.filter(m => pickTier(m) > 0).length / 10))
+    // Смертельный пол разбирают все свободные кирки, которым это выгодно; обычные ловушки — 4–6 копателей.
     // Кто уже копает — остаётся у своей ямы и цели (иначе «смена фазы — обрываю дело» каждые полсекунды).
     const was = new Map(board.tasks().filter(t => t.assignedTo && t.data?.dig && t.position).map(t => [t.assignedTo!, t]))
-    const taken: SwarmPosition[] = []
+    const stands: SwarmPosition[] = []
     const jobs = goals.map(foe => {
       const v = foe.velocity
       const ahead = (s: SwarmPosition) => (s.x + .5 - foe.position.x) * (v?.x || 0) + (s.z + .5 - foe.position.z) * (v?.z || 0)
@@ -115,22 +135,110 @@ export function pvpDiggers(S: PvpPlan): void {
       // без обсидиана (алмазной киркой 9.4 с на блок: стенд 22.10, 29 из 35 подкопов бросили — он подходил, direct_threat).
       const deadly = (s: any) => Number(shoveValue(foe, { x: 0, z: 0, drop: s.drop ?? 7 }) >= SHOVE)
       const slow = (s: any) => Number(!!s.tier)
-      return { foe, sites: options.digSites!(foe.position).sort((a, b) => deadly(b) - deadly(a) || slow(a) - slow(b) || ahead(b) - ahead(a) || distance(a, foe.position) - distance(b, foe.position)) }
+      const sites = options.digSites!(foe.position).map(s => {
+        let dug = 0
+        while (dug < (s.blocks?.length ?? 2) && cleared.has(cellKey({ x: s.x, y: s.y - dug, z: s.z }))) dug++
+        const stands = s.stands?.filter(q => (q.requiresClear || []).every(c => cleared.has(cellKey(c))) && (!q.support || !cleared.has(cellKey(q.support))))
+          .map(q => ({ x: q.x, y: q.y, z: q.z }))
+        return { ...s, dug, ...(stands ? { stands } : {}) }
+      }).filter(s => digCells(s).length).sort((a, b) => deadly(b) - deadly(a) || slow(a) - slow(b) || ahead(b) - ahead(a) || distance(a, foe.position) - distance(b, foe.position))
+      // Выгодный подкоп не ждёт попаданий: его цену и бюджет сравнивает fits ниже.
+      const undermine = sites.some(s => deadly(s))
+      // Двое в упор прикрывают копку; остальные кирки вскрывают смертельный пол, даже когда цель рядом.
+      const guards = new Set(undermine ? team.filter(m => !plan.has(m.id) && distance(m.position, foe.position) <= 3.5).sort((a, b) => Number(was.has(a.id)) - Number(was.has(b.id)) || distance(a.position, foe.position) - distance(b.position, foe.position) || b.strength - a.strength || a.id.localeCompare(b.id)).slice(0, MELEE_CAP).map(m => m.id) : [])
+      return { foe, sites, deadly, undermine, guards }
     })
-    for (let round = 0; round < (jobs.length > 1 ? 2 : limit); round++) for (const { foe, sites } of jobs) {
-      if (diggers.size >= limit) break
-      // Как в исполнителе: в контакте — бой; яму копаем с текущего места.
-      const pool = team.filter(m => !plan.has(m.id) && !diggers.has(m.id) && (was.has(m.id) || !weak(m)) && enemies.every(e => distance(e.position, m.position) > 3.5))
+    const demolition = jobs.some(j => j.undermine)
+    const safeFloor: SwarmPosition[] = [...new Map(jobs.flatMap(j => j.sites.flatMap(s => (s as any).stands || [])).map(q => [cellKey(q), q] as const)).values()]
+    const floorOrder = new Map<string, SwarmPosition[]>()
+    const floorsFor = (a: SwarmMember) => {
+      if (!floorOrder.has(a.id)) floorOrder.set(a.id, [...safeFloor].sort((q, r) => distance(a.position, q) - distance(a.position, r)))
+      return floorOrder.get(a.id)!
+    }
+    const reserved = new Map<string, { site: DigSite; stand: SwarmPosition }>()
+    // Резервируем прежние рабочие пары до новой раздачи: движущийся сосед ещё не дошёл до своей стойки.
+    for (const m of team) {
+      const old = was.get(m.id), job = jobs.find(j => j.undermine && j.foe.id === old?.data?.target)
+      const site = job?.sites.find(s => cellKey(s) === cellKey(old!.position!))
+      const stand = old?.data?.stands?.find(q => (site as any)?.stands?.some(t => cellKey(q) === cellKey(t)) && canDigTrap(q, site!) && !clearedTop.some(s => under(q, s)))
+      if (site && stand && !plan.has(m.id) && !job!.guards.has(m.id) && pickTier(m) >= ((site as any).tier || 0)) reserved.set(m.id, { site, stand })
+    }
+    const freeStand = (q: SwarmPosition, id: string) => !clearedTop.some(s => under(q, s)) && !taken.some(t => underDig(q, t)) && !stands.some(t => distance(q, t) < .6) &&
+      ![...reserved].some(([who, r]) => underDig(q, r.site) || who !== id && distance(q, r.stand) < .6) && ![...vacate].some(([who, t]) => who !== id && distance(q, t) < .6)
+    const picks = team.filter(m => pickTier(m) > 0).length
+    const normalLimit = S.state.strongFew ? 6 : Math.min(4, 2 + Math.floor(picks / 10))
+    const passes = [{ jobs, limit: demolition ? picks : normalLimit, demolition }]
+    // Непригодный смертельный пол не отменяет обычные ямы; сначала распределяем всю полезную смертельную работу.
+    if (demolition) passes.push({ jobs: jobs.filter(j => j.undermine).map(j => ({ ...j, undermine: false, sites: j.sites.filter(s => !j.deadly(s)) })), limit: normalLimit, demolition: false })
+    for (const pass of passes) for (let round = 0; round < (!pass.demolition && pass.jobs.length > 1 ? 2 : pass.limit); round++) for (const { foe, sites, deadly, undermine, guards } of pass.jobs) {
+      if (diggers.size >= pass.limit) break
+      // Обычную яму копаем с места вне контакта; смертельную при сбросе — и с подходом на проверенную стойку.
+      const pool = team.filter(m => !plan.has(m.id) && !diggers.has(m.id) && (undermine ? pickTier(m) > 0 && !guards.has(m.id) : (was.has(m.id) || !weak(m)) && enemies.every(e => distance(e.position, m.position) > 3.5)))
         .sort((a, b) => Number(was.get(b.id)?.data?.target === foe.id) - Number(was.get(a.id)?.data?.target === foe.id) || pickTier(b) - pickTier(a) || distance(a.position, foe.position) - distance(b.position, foe.position))
       for (const m of pool) {
         // Без кирки — руками (песчаник 0.8: 4 с на блок, яма в два — 8 с): кирки первыми, но яма не ждёт кирку. Обсидиан
         // фундамента — только алмазной и лучше (tier 2; железной — 40 с, swarm_work откажет).
-        const under = (q: SwarmPosition, s: any) => Math.abs(q.y - (s.feetY ?? s.y + 1)) <= .6 && !(q.x + .3 <= s.x || q.x - .3 >= s.x + 1 || q.z + .3 <= s.z || q.z - .3 >= s.z + 1)
-        const fits = (s: any) => !taken.some(q => Math.abs(q.y - s.y) < 2 && Math.hypot(q.x - s.x, q.z - s.z) < 3) && canDigTrap(m.position, s) && !team.some(a => a.id !== m.id && under(a.position, s)) && pickTier(m) >= (s.tier || 0) && (pickTier(m) > 0 || !(s.handMs > 12000))
+        const oldStand = reserved.get(m.id)?.stand, standPrices = new Map<string, number>()
+        const retain = (q: SwarmPosition, s: DigSite) => !!oldStand && cellKey(q) === cellKey(oldStand) && !S.state.dislodgeWork?.get(`${foe.id}:dig:${cellKey(s)}`)?.failed
+        const threats = enemies.map(e => ({ foe: e, survival: memberFight(m, e).survival }))
+        const standPrice = (q: SwarmPosition, s: DigSite) => {
+          const key = cellKey(s) + ':' + cellKey(q)
+          if (!standPrices.has(key)) {
+            const work = digSeconds(m, s, s.dug || 0)
+            const risk = threats.reduce((cost, t) => {
+              const e = t.foe, dx = q.x - e.position.x, dz = q.z - e.position.z
+              const gap = Math.hypot(Math.max(0, Math.abs(dx) - .3), Math.max(0, q.y - e.position.y - 1.62, e.position.y + 1.62 - q.y - 1.8), Math.max(0, Math.abs(dz) - .3))
+              const closing = (dx * (e.velocity?.x || 0) + dz * (e.velocity?.z || 0)) * 20 / Math.max(.1, Math.hypot(dx, dz))
+              const reach = /_spear$/.test(e.equipment?.weapon || '') ? 4.5 + Math.max(0, closing / 20) : 3
+              const arrival = /^(bow|crossbow)$/.test(e.equipment?.weapon || '') ? gap / 60 : gap <= reach ? 0 : closing > 0 ? (gap - reach) / closing : Infinity
+              return cost + Math.max(0, work - arrival) / Math.max(.05, t.survival)
+            }, 0)
+            standPrices.set(key, distance(q, m.position) / 5.6 + work * risk)
+          }
+          return standPrices.get(key)!
+        }
+        const standOrders = new Map<DigSite, SwarmPosition[]>()
+        const safeStand = (s: DigSite) => {
+          if (!standOrders.has(s)) standOrders.set(s, (s.stands || []).filter(q => canDigTrap(q, s)).sort((a, b) =>
+            Number(retain(b, s)) - Number(retain(a, s)) || standPrice(a, s) - standPrice(b, s) || distance(a, m.position) - distance(b, m.position)))
+          // Резервы и освобождение опор меняются при раздаче: кэшируем только неизменный порядок.
+          return standOrders.get(s)!.find(q => freeStand(q, m.id))
+        }
+        const attack = attackSeconds(m, foe)
+        const affordable = (s: any) => {
+          const stand = undermine ? safeStand(s) : m.position
+          const moving = evacuation(s)
+          if (!moving) return false
+          const done = Math.max(s.dug || 0, S.state.dislodgeWork?.get(`${foe.id}:dig:${cellKey(s)}`)?.dug || 0)
+          // Подход копателя и освобождение опоры идут одновременно, затем начинается копка.
+          const walk = Math.max(stand ? distance(m.position, stand) / 5.6 : 0, ...[...moving].map(([id, q]) => distance(team.find(a => a.id === id)!.position, q) / 5.6))
+          const work = digSeconds(m, s, done) + walk
+          return dislodgeSeconds(S, foe, `dig:${cellKey(s)}`, work, attack) < attack
+        }
+        const evacuation = (s: any) => {
+          const moves = new Map<string, SwarmPosition>(), worker = safeStand(s)
+          for (const a of team.filter(a => a.id !== m.id && !diggers.has(a.id) && underDig(a.position, s))) {
+            if (!undermine || plan.has(a.id)) return null
+            const q = floorsFor(a).find(q => freeStand(q, a.id) && !underDig(q, s) && (!worker || distance(q, worker) >= .6) &&
+              ![...moves.values()].some(t => distance(q, t) < .6) && (!guards.has(a.id) || distance(q, foe.position) <= 3.5))
+            if (!q) return null
+            moves.set(a.id, q)
+          }
+          return moves
+        }
+        const fits = (s: any) => (!undermine || deadly(s)) && !taken.some(q => Math.abs(q.y - s.y) < 2 && Math.hypot(q.x - s.x, q.z - s.z) < (undermine ? 1 : 3)) &&
+          ![...reserved].some(([id, r]) => id !== m.id && (cellKey(r.site) === cellKey(s) || underDig(r.stand, s))) &&
+          (undermine ? !!safeStand(s) : canDigTrap(m.position, s)) && !stands.some(q => underDig(q, s)) && ![...vacate.values()].some(q => underDig(q, s)) &&
+          pickTier(m) >= (s.tier || 0) && (pickTier(m) > 0 || !(s.handMs > 12000)) && (undermine ? affordable(s) : evacuation(s) !== null)
         const old = was.get(m.id)
         const s = sites.find(s => old?.data?.target === foe.id && cellKey(s) === cellKey(old.position!) && fits(s)) || sites.find(fits)
+        reserved.delete(m.id)
         if (!s) continue
-        taken.push(s); diggers.set(m.id, { site: s, foe })
+        vacate.delete(m.id)
+        for (const [id, q] of evacuation(s)!) vacate.set(id, q)
+        const stand = undermine && safeStand(s)
+        if (stand) stands.push(stand)
+        taken.push(s); diggers.set(m.id, { site: undermine ? { ...s, undermine: true, ...(stand ? { stands: [stand] } : {}) } : s, foe })
         break
       }
     }
@@ -147,7 +255,7 @@ export function pvpDiggers(S: PvpPlan): void {
       console.log(`[${new Date().toTimeString().slice(0, 8)}] 🕳 ${team[0].team}: подкоп у ${foe.id} (${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}) мест ${sites.length}, смертельных ${sites.filter(s => shoveValue(foe, { x: 0, z: 0, drop: (s as any).drop ?? 7 }) >= SHOVE).length}; свои: ${Object.entries(why).map(([k, n]) => `${k} ${n}`).join(', ')}`)
     }
   }
-  Object.assign(S, { held, diggers })
+  Object.assign(S, { held, diggers, digAvoid: [...new Map([...clearedTop, ...taken.flatMap(digCells)].map(q => [cellKey(q), q] as const)).values()], digVacate: vacate })
 }
 
 export function pvpLadders(S: PvpPlan): void {

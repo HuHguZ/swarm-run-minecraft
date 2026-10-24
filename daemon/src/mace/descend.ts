@@ -4,7 +4,7 @@ import * as gameClock from '../game-clock'
 import { Vec3 } from './world'
 import * as pick from '../pick'
 import { REACH, SMASH_MIN, SWAP, KEYS, yawTo } from './consts'
-import { findItem, healthOf, slamHit, afterPacket, windReady, fireWind } from './hands'
+import { findItem, healthOf, slamHit, afterPacket, windReady, fireWind, selfWindAim } from './hands'
 import { reachFrom, floorTop, landing, NO_KEYS, AIR_KEYS, fallCost } from './world'
 
 // Спуск на цель: рулить в воздухе к точке, где он будет, и ударить булавой в
@@ -12,16 +12,17 @@ import { reachFrom, floorTop, landing, NO_KEYS, AIR_KEYS, fallCost } from './wor
 // бонус растёт с высотой. Своей скоростью по вертикали и сносом по
 // горизонтали считаем, где окажемся; клавиши — относительно взгляда на него.
 // Без спринта: спринт снимает крит.
-export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e), chain = null }: any = {}) {
+export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e), chain = null, initialHit = null }: any = {}) {
   return new Promise<any>(resolve => {
     const t0 = gameClock.now()
     let peak = bot.entity.position.y
     let fallPeak = peak, endAt = t0 + maxMs, rebounding = false, choiceAt = 0, relocation = null
-    const hits = []
+    const hits = initialHit ? [initialHit] : []
     const burst = chain && (require('../read') as typeof import('../read')).enchLevel(bot, findItem(bot, 'mace'), 'wind_burst') > 0
-    let hit = null
+    let hit = initialHit
     let done = false
     let lastYaw = bot.entity.yaw
+    let lastPos = bot.entity.position.clone()
     let mlgFired = false
     const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
     // Сторож ведра (edges.installFallGuard) видит спуск и бросает воду только в
@@ -65,6 +66,7 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
         if (ctl.aborted || !bot.entity || (bot.health ?? 0) <= 0) return finish('прервали')
         const b = bot.entity
         const p = b.position
+        const moved = p.minus(lastPos); lastPos = p.clone()
         if (p.y > peak) peak = p.y
         fallPeak = Math.max(fallPeak, p.y)
         // The landing packet may precede Wind Burst by several server ticks.
@@ -181,8 +183,9 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
         const hurtFall = w && gameClock.now() < w.until ? (w.impactY - top) : (peak - top)
         if (windMlg && !mlgFired && v.y < -0.35 && hurtFall > 3.6 && h > 1.0 && h < 3.2 && !findItem(bot, 'water_bucket') && windReady(bot)) {
           mlgFired = true
-          fireWind(bot, () => ({ yaw: bot.entity.yaw, pitch: -Math.PI / 2 }), { swap: true }).then((r : any) => {
+          fireWind(bot, () => !ctl.aborted && selfWindAim(bot, { moved }), { swap: true, immediate: true }).then((r : any) => {
             if (r.fired) { bot._ndWind = { impactY: bot.entity.position.y, until: gameClock.now() + 2000 }; if (stats) stats.mlg++ }
+            else mlgFired = false
           })
         }
       } catch (err) { finish('ошибка: ' + err.message) }

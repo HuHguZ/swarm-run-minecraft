@@ -1,11 +1,10 @@
 import * as flee from '../flee'
 import * as gameClock from '../game-clock'
-import { keyDir, wantsJump } from '../moves'
+import { keyDir } from '../moves'
 import * as pick from '../pick'
 import * as throwMod from '../throw'
 import * as ct from './crowd-threat'
 import { crowdSpot } from './crowd-spot'
-import { lungeFlee } from './lunge'
 import { lookDead, noteWindThrowers, reachFrom, stepSafe } from './body'
 import { potionOf } from './potions'
 import { EYE, HIT_REACH, TICK_MS } from './rules'
@@ -224,30 +223,23 @@ export async function crowdTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
 }
 
-// Уход из клещей: бег (спринт, прыжки) туда, где опасность от всех меньше (flee.pickDirection: дальше от ближних,
-// мимо них не пробегать, без обрыва, лавы и тупика, внутри поля арены). Направление — раз в 300 мс с памятью прошлого
-// (не дёргаться между равными); упёрся (клавиша нажата, тело стоит 300 мс) — новое. Некуда — коробка, если можно.
+// Уход из клещей — тем же навыком, что у роя: он сравнивает бег, спуск и прокоп, прежде чем признать тупик.
 async function breakOut (ctx: DuelCtx, cr: CrowdState, turn: TurnFrame, d: ct.CrowdDecision) {
-  const { bot, set } = ctx
-  const { now, me } = turn
+  const { now } = turn
   const st = cr.st
-  const stuck = cr.runFrom && now - cr.runAt >= 300 && me.distanceTo(cr.runFrom) < 0.25
-  if (stuck) { st.stuck++; cr.prevYaw = null; cr.plan = null }
-  if (!cr.plan || now - cr.planAt >= 300) {
-    const hs = cr.frame.foes.map(f => ({
-      e: { position: new Vec3(f.p.x, f.p.y, f.p.z), height: 1.8 }, d: me.distanceTo(f.p),
-      doc: f.held && /^(bow|crossbow|trident)$/.test(f.held) ? { radius: 4, weight: 4, range: 30 } : { radius: 8, weight: f.held === 'mace' ? 9 : 7 }
-    }))
-    if (!cr.plan) st.breaks++
-    // К своим: точка сбора арены (opts.relocateTo — «дом» команды у swarm-driver) тянет бег к себе (flee.goalPull).
-    const home = ctx.opts.relocateTo
-    cr.plan = flee.pickDirection(bot, hs, cr.prevYaw, home && Number.isFinite(home.x) && Number.isFinite(home.z) ? [home] : [], ctx.AR)
-    cr.planAt = now
-    if (cr.plan) cr.prevYaw = cr.plan.yaw
-  }
-  if (!cr.plan) {
+  const home = ctx.opts.relocateTo
+  if (ctx.pathing) { ctx.pathTo(false); ctx.pathing = false }
+  ctx.clear(); ctx.aim = 'free'; cr.freeAim = true
+  if (ctx.guard) await ctx.guard.raise(false)
+  st.breaks++
+  note(ctx, cr, 'break', d.why + ' — ищу выход')
+  const out = await flee.smartFlee(ctx.session, ctx.ctl, { timeoutMs: Math.max(0, Math.min(3000, ctx.deadline - now)),
+    foes: cr.frame.foes.map(f => f.id), arena: ctx.AR,
+    goals: home && Number.isFinite(home.x) && Number.isFinite(home.z) ? [home] : [] })
+  if (out.cornered && !ctx.ctl.aborted) {
+    ctx.aim = 'target'; cr.freeAim = false
+    await ctx.holdWeapon()
     st.trapped++
-    // Бежать некуда (стены, обрыв, лава со всех сторон) — закрыться, если успею; иначе — бой на месте.
     if (now >= cr.boxAt && ctx.fortPossible()) {
       cr.boxAt = now + 3000
       note(ctx, cr, 'box', 'бежать некуда — коробка')
@@ -256,23 +248,6 @@ async function breakOut (ctx: DuelCtx, cr: CrowdState, turn: TurnFrame, d: ct.Cr
     note(ctx, cr, 'trapped', 'бежать некуда — бьюсь на месте')
     return
   }
-  note(ctx, cr, 'break', `${d.why} — ухожу (${cr.plan.run} бл.)`)
-  if (ctx.pathing) { ctx.pathTo(false); ctx.pathing = false }
-  if (ctx.guard) await ctx.guard.raise(false)
-  ctx.aim = 'free'
-  await bot.look(cr.plan.yaw, 0, true).catch(() => {})
-  // Копьё с «Выпадом» — укол по ходу отхода (pvp/lunge): ближний в 8 бл., сытости хватает, по ходу свободно.
-  const near = Math.min(...cr.frame.foes.map(f => Math.hypot(f.p.x - me.x, f.p.z - me.z)))
-  const lj = await lungeFlee(bot, cr.plan.yaw, { chaseD: near, take: false, clear: n => flee.runLength(bot, { x: -Math.sin(cr.plan.yaw), z: -Math.cos(cr.plan.yaw) }, n, 3, ctx.AR).len >= n })
-  if (lj === 'jab') st.lunges = (st.lunges || 0) + 1
-  const fwd = keyDir(bot, 'forward')
-  const go = stepSafe(bot, fwd)
-  set('back', false); set('left', false); set('right', false)
-  set('forward', go)
-  set('sprint', go && (bot.food ?? 20) > 6)
-  set('jump', go && wantsJump(bot, fwd))
-  if (!cr.runFrom || now - cr.runAt >= 300) { cr.runFrom = me.clone(); cr.runAt = now }
-  await ctx.sleep(TICK_MS)
   return NEXT
 }
 

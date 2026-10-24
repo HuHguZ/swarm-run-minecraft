@@ -6,7 +6,8 @@ import { stepSafe as stepSafeRaw } from '../moves'
 import * as gameClock from '../game-clock'
 import * as assess from '../assess'
 import * as read from '../read'
-import { FOES } from './rules'
+import { rayBox } from '../pick'
+import { FOES, isPlayer } from './rules'
 
 function hasEffect (bot, name) {
   return require('../fightkit').hasEffect(bot, name)
@@ -60,9 +61,27 @@ function edgeBurns (bot, dir, reach = 0.9) {
   }
   return false
 }
-function stepSafe (bot, dir) {
+function stepSafe (bot, dir, { reach = .9 }: any = {}) {
   const swim = (bot._ndSwimUntil || 0) > gameClock.now()
-  return stepSafeRaw(bot, dir, { water: swim || onFire(bot) || !!(bot.entity && bot.entity.isInWater) }) && !edgeBurns(bot, dir)
+  return stepSafeRaw(bot, dir, { reach, water: swim || onFire(bot) || !!(bot.entity && bot.entity.isInWater) }) && !edgeBurns(bot, dir, reach)
+}
+
+// Будущая яма ещё выглядит безопасным полом: проверяем весь проход рамки тела.
+function digStepSafe (ctx, dir, reach = .9) {
+  const bot = ctx.bot
+  if (ctx.floorEscape || ctx.behindDrop || bot.entity.isInWeb || bot.entity.isInWater || bot.entity.isInLava || onFire(bot) || ctx.dodgeKey && ctx.dodgeLine) return true
+  const avoid = ctx.opts?.digAvoid ?? ctx.session?.current?.params?.digAvoid
+  if (!Array.isArray(avoid)) return true
+  const me = bot.entity.position, half = (bot.entity.width || .6) / 2
+  const motion = { x: dir.x * reach, y: 0, z: dir.z * reach }, end = me.offset(motion.x, 0, motion.z)
+  return !avoid.some(p => {
+    if (!p || ![p.x, p.y, p.z].every(Number.isFinite) || p.feetY !== undefined && !Number.isFinite(p.feetY)) return false
+    const feetY = p.feetY ?? p.y + 1
+    const lo = { x: p.x - half + 1e-7, y: feetY - 1e-7, z: p.z - half + 1e-7 }
+    const hi = { x: p.x + 1 + half - 1e-7, y: feetY + (bot.entity.height || 1.8), z: p.z + 1 + half - 1e-7 }
+    const inside = q => q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y && q.z >= lo.z && q.z <= hi.z
+    return rayBox(me, motion, lo, hi, 1) != null && (!inside(me) || inside(end))
+  })
 }
 function makeTracker (entity) {
   return require('../bow').trackTarget(entity)
@@ -89,6 +108,8 @@ function healthOf (bot, e) {
 }
 
 function lookDead (bot, e) {
+  // Player deaths are confirmed by entityDead; their health metadata is private.
+  if (isPlayer(e) || e?.name === 'player') return false
   try {
     const keys = bot.registry.entitiesByName[e.name].metadataKeys
     const i = keys ? keys.indexOf('health') : -1
@@ -115,4 +136,4 @@ function noteWindThrowers (bot, foes, now) {
   return by
 }
 
-export { hasEffect, clamp, reachFrom, livingFlags, usingItem, onFire, stepSafe, edgeBurns, noteWindThrowers, makeTracker, yawTo, nextFoe, healthOf, lookDead, creeperSwelling }
+export { hasEffect, clamp, reachFrom, livingFlags, usingItem, onFire, stepSafe, digStepSafe, edgeBurns, noteWindThrowers, makeTracker, yawTo, nextFoe, healthOf, lookDead, creeperSwelling }

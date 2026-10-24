@@ -4,7 +4,7 @@ import * as gameClock from '../game-clock'
 import * as edges from '../edges'
 import * as pick from '../pick'
 import { MACE_BASE, SWAP, KEYS, LAUNCH_BACK, yawTo, smashDamage } from './consts'
-import { densityOf, findItem, shieldAtUs, nextTick, install, offWind, windCount, windReady, ensureHotbar, fireWind, healthOf } from './hands'
+import { densityOf, findItem, shieldAtUs, nextTick, install, offWind, windCount, windReady, ensureHotbar, fireWind, selfWindAim, healthOf } from './hands'
 import { burnNear, webOnBody, headroom, landingSoon } from './world'
 import { descend } from './descend'
 
@@ -70,7 +70,7 @@ function diagText (dg) {
   const bits = [dg.boom ? `всплеск пришёл, vy до него ${dg.boomVy}` : 'всплеска не было']
   if (dg.kicks) bits.push(`скорость от сервера ×${dg.kicks}`)
   if (dg.off !== 'wind_charge') bits.push(`в левой ${dg.off || 'пусто'}`)
-  bits.push(dg.vy0 > 0.2 ? 'прыжок был' : 'без прыжка')
+  bits.push(dg.vy0 > 0.2 ? 'бросок после отрыва' : 'бросок с земли')
   if (dg.web) bits.push('в паутине')
   bits.push(`vy max ${r(dg.vyMax)}`)
   return bits.join(', ')
@@ -80,9 +80,8 @@ function diagText (dg) {
 // булава — в правую заранее (крит от заряда > 0.9: 30 тиков из 33), заряды
 // ветра — в левую (смена ЛЕВОЙ руки заряд правой не трогает: Player.tick
 // сверяет только главную руку), щит или тотем из левой — в рюкзак и обратно
-// после посадки. Прыжок и в следующем тике (уже в воздухе, пакет позиции
-// ушёл) — заряд под ноги, чуть за спину: всплеск в 0.25 над полом, толчок «от
-// центра к глазам» — вверх и немного к нему.
+// после посадки. Заряд с земли и сразу прыжок: не наследуем +0.42 вверх.
+// Всплеск в 0.25 над полом, толчок «от центра к глазам» — вверх, дальше рулим к нему.
 // stillOk() — пока копится заряд булавы, он не ушёл и не поднял щит.
 export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null, telemetryHp = e => healthOf(bot, e), chain = null }: any = {}) {
   const out: any = { launched: false, hit: false, swung: false, note: '' }
@@ -144,26 +143,15 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
   const unDiag = () => { try { bot._client.removeListener('explosion', onBoom); bot._client.removeListener('raw.entity_velocity', onKick) } catch {} }
   // Прыжок: тик с отпущенным прыжком — сброс перезарядки автопрыжка
   // (prismarine-physics jumpTicks: пока прыжок зажат, следующий — через 10
-  // тиков; бой перед этим мог прыгать за критом). Бросок — на тике прыжка
-  // (fireWind ждёт ближайший тик); не прыгнул — бросок стоя, строго вниз
-  // (прицел ниже), 2026-09-26.
+  // тиков; бой перед этим мог прыгать за критом). Бросок — с земли,
+  // следующий тик уже в прыжке: заряд не наследует скорость отрыва вверх.
   if (jump && bot.entity.onGround) {
     await nextTick(bot)
-    try { bot.setControlState('jump', true) } catch {}
   }
-  const fired: any = await fireWind(bot, () => {
-    const p = bot.entity.position
-    const eyeY = pick.eyeOf(bot).y
-    // Стоим (прыжка не было) — строго под ноги: центр всплеска в 0.25 над
-    // полом прямо под нами, толчок вверх целиком (стоя — v ≈ 1.09, замер
-    // probe-mace). В прыжке — чуть за спину (LAUNCH_BACK): горизонталь к нему.
-    if (bot.entity.onGround || bot.entity.velocity.y < 0.2) return { yaw: bot.entity.yaw, pitch: -Math.PI / 2 }
-    // Точка всплеска: на полу, LAUNCH_BACK за спиной (взгляд к нему — (−sin, −cos)).
-    const bx = p.x + Math.sin(toward) * LAUNCH_BACK
-    const bz = p.z + Math.cos(toward) * LAUNCH_BACK
-    const dx = bx - p.x; const dz = bz - p.z
-    return { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(y0 - eyeY, Math.hypot(dx, dz)) }
-  }, { swap, hand: swap ? 'main' : 'off', before: () => { try { bot.setControlState('jump', false); dg.off = bot.inventory.slots[45] ? bot.inventory.slots[45].name : null; dg.vy0 = bot.entity.velocity.y; dg.web = webOnBody(bot) } catch {} } })
+  const fired: any = await fireWind(bot, moved => selfWindAim(bot, {
+    moved, yaw: toward, back: bot.entity.onGround || bot.entity.velocity.y < .2 ? 0 : LAUNCH_BACK
+  }), { swap, hand: swap ? 'main' : 'off', before: () => { try { bot.setControlState('jump', jump && bot.entity.onGround); dg.off = bot.inventory.slots[45] ? bot.inventory.slots[45].name : null; dg.vy0 = bot.entity.velocity.y; dg.web = webOnBody(bot) } catch {} } })
+  if (fired.fired && jump) await nextTick(bot)
   try { bot.setControlState('jump', false) } catch {}
   if (!fired.fired) { unDiag(); await restoreOff(); out.note = 'булава: заряд не ушёл — ' + fired.why; return out }
   // Точка всплеска для урона от падения: сервер ставит позицию игрока в тик
@@ -197,7 +185,7 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
     const why1 = diagText(dg)
     const t1 = gameClock.now()
     while (gameClock.now() < (bot._ndWindCd || 0) && gameClock.now() - t1 < 700) await sleep(25)
-    const f2: any = await fireWind(bot, () => ({ yaw: bot.entity.yaw, pitch: -Math.PI / 2 }), { swap, hand: swap ? 'main' : 'off' })
+    const f2: any = await fireWind(bot, moved => selfWindAim(bot, { moved }), { swap, hand: swap ? 'main' : 'off' })
     if (f2.fired) {
       bot._ndWind = { impactY: bot.entity.position.y, until: gameClock.now() + 2000 }
       launched = await waitLift()

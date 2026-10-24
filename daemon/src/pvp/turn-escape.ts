@@ -1,5 +1,6 @@
 import { pickFiller } from '../build'
 import { keyDir } from '../moves'
+import * as flee from '../flee'
 import * as tempo from '../tempo'
 import * as totemMod from '../totem'
 import { hasEffect, reachFrom, stepSafe } from './body'
@@ -13,6 +14,26 @@ import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 export async function safetyTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, clear, ctl, duo, escapePearl, finish, guard, holdWeapon, pathTo, releaseFightItems, seesNow, session, st, strategicRequest, tt, used, util } = ctx
   const { arenaStay, flightRecovery, hp, safeMedical, safety } = turn
+  // На арене последний бой не запрещает выход: спуск/прокоп уже сравнен с ценой боя на месте в pickDirection.
+  if (arenaStay && ctx.AR && !flightRecovery && !safeMedical && safety.action !== 'fight' && safety.action !== 'dead') {
+    const threats = tt.threats(), foes = threats.map(e => e.id)
+    const cell = p => p ? `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` : '?'
+    const inputs = [cell(bot.entity.position), hp, ...threats.map(e => `${e.id}:${cell(e.position)}`)].join('|')
+    const checked = ctx.arenaExitCheck
+    // Неудачный поиск — с частотой самого flee, а не тяжёлый прогноз в каждом тике боя.
+    if (!checked || checked.inputs !== inputs || turn.now - checked.at >= 300) {
+      const plan = flee.pickDirection(bot, flee.hostilesAround(bot, 64, foes), null, [], ctx.AR, null, true)
+      ctx.arenaExitCheck = plan?.drop ? null : { inputs, at: turn.now }
+      if (plan?.drop) {
+        pathTo(false); ctx.pathing = false; clear(); ctx.aim = 'free'
+        if (guard) await guard.raise(false)
+        await flee.smartFlee(session, ctl, { foes, arena: ctx.AR, timeoutMs: Math.max(0, Math.min(3000, ctx.deadline - turn.now)) })
+        ctx.aim = 'target'
+        await holdWeapon()
+        return NEXT
+      }
+    }
+  }
   if (!arenaStay && !flightRecovery && !(ctx.lastStand && safety.action !== 'dead' && !safety.hazard) && safety.action !== 'fight' && (safety.action !== 'recover' || !safeMedical)) {
     pathTo(false); ctx.pathing = false; clear(); ctx.aim = 'free'
     if (guard) await guard.raise(false)

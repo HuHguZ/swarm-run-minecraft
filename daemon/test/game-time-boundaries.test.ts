@@ -12,9 +12,10 @@ import { Session } from '../src/session'
 const GAME_TIME_MODULES = ['dragon', 'clutch', 'blockmoves', 'edges', 'pvp', 'combat', 'movement', 'bastion', 'nether', 'actions', 'crystal',
   'mining', 'containers', 'architect', 'structures', 'index:rpc']
 // Файлы тел, где стеночные часы по делу (путь от src/): метка «клещей» между ботами команды живёт в реальном времени
-// (ставит team-assist, читает aerial-lance), журнал комбо fight-graph — отметки для разбора, не бюджет; templateFit
+// (ставит team-assist, читает aerial-lance), срок свежести снимка партнёра по ветру (team-wind: снимок приходит по RPC из
+// другого демона, свои игровые часы там не общие), журнал комбо fight-graph — отметки для разбора, не бюджет; templateFit
 // (structures/templates) меряет время процессора.
-const WALL_CLOCK_ALLOWED = ['combat/aerial-lance.js', 'pvp/team-assist.js', 'pvp/fight-graph.js', 'structures/templates.js']
+const WALL_CLOCK_ALLOWED = ['combat/aerial-lance.js', 'combat/team-wind.js', 'pvp/team-assist.js', 'pvp/fight-graph.js', 'structures/templates.js']
 
 function gameTimeFiles (): string[] {
   const src = path.join(__dirname, '../src')

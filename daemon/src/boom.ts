@@ -1,5 +1,7 @@
 'use strict'
 import * as gameClock from './game-clock'
+import { isPlayer } from './pvp/rules'
+import { blastTeamRisk } from './combat/ally-safety'
 // «Динамит» на арене (просьба 2026-09-26: «про-игроки динамитом выстреливают и
 // убивают им, очень быстро, механизм какой-то»). Это cart PvP 1.21: рельс под
 // ноги, на него вагонетка с TNT, и горящая стрела из лука с «Огнём» — взрыв в
@@ -48,7 +50,8 @@ const CRYSTAL_P = 6
 // Слабая стрела (натяжение ~8 тиков, скорость ≤ 1 б/т): вагонетка —
 // 4…5.5 (радиус до 11). Полная — до 8.5 (радиус 17): себе не выжить.
 const CART_DRAW_MS = 450
-const CART_P_MAX = 5.5
+// MinecartTNT.explode: 4 + random * 1.5 * min(|arrow velocity|, 5), including inherited shooter motion.
+const CART_P_MAX = 4 + 1.5 * 5
 const CART_P_AVG = 4.75
 const DEBUG = !!process.env.ND_DEBUG_BOOM
 // ND_BOOM=0 — не пользоваться взрывчаткой (прогон «до»); защита остаётся.
@@ -320,21 +323,36 @@ function hitReach (bot, e) {
 
 // Оценка взрыва ex (сущность или {name, at}) прямо сейчас: ему, мне, толчок
 // в яму, убьёт ли. power — какой силы ждать (вагонетка от слабой стрелы).
-function judge (bot, foe, center, P, { cache = new Map(), foeAt = null, meAt = null }: any = {}) {
+function judge (bot, foe, center, P, { cache = new Map(), foeAt = null, meAt = null, foeHp = null }: any = {}) {
   const me = meAt || bot.entity.position
   const fp = foeAt || foe.position
   const him = blast(bot, center, P, fp, { def: defenseOf(bot, foe), cache })
   const mine = blast(bot, center, P, me, { def: defenseOf(bot, bot.entity), cache })
-  const hisHp = (healthOf(bot, foe) ?? 20) + absorptionOf(bot, foe)
+  const hisHp = foeHp?.(foe) ?? (isPlayer(foe) || foe.name === 'player' ? 20 : (healthOf(bot, foe) ?? 20) + absorptionOf(bot, foe))
   const myHp = (bot.health ?? 20) + absorptionOf(bot, bot.entity)
   const off = him.dmg > 0.5 && knockedOff(bot, foe, him.kb)
   const kill = him.dmg >= hisHp || off
-  return { him, mine, off, kill: kill && !totemIn(foe), hisHp: r2(hisHp), myHp: r2(myHp) }
+  return { him, mine, off, kill: kill && !totemIn(foe), hisHp: r2(hisHp), myHp: r2(myHp), allyRisk: blastTeamRisk(bot, center, P) }
+}
+
+// Rechecked in the release stack: the draw/look may have changed both our HP and the visible team geometry.
+function detonationSafe(bot, ex) {
+  const center = centerOf(ex), power = ex.name === 'end_crystal' ? CRYSTAL_P : CART_P_MAX
+  if (blastTeamRisk(bot, center, power).unsafe || !Number.isFinite(bot.health) || bot.health <= 0) return false
+  const mine = blast(bot, center, power, bot.entity.position, { seen: 1, def: defenseOf(bot, bot.entity) })
+  return mine.dmg < bot.health + absorptionOf(bot, bot.entity) && !knockedOff(bot, bot.entity, mine.kb)
+}
+
+function cartMeleeSafe(bot, ex) {
+  const v = ex.velocity
+  // Native destroy drops a stationary cart as an item; a moving cart instead primes a 0..38 tick fuse.
+  return v && Number.isFinite(v.x) && Number.isFinite(v.z) && v.x * v.x + v.z * v.z < 0.009999999776482582 || detonationSafe(bot, ex)
 }
 
 // Стоит ли взрывать: ему заметно, мне терпимо (не смертельно и не больше
 // трети хп без тотема), размен в нашу пользу.
 function worth (j, { totem = false }: any = {}) {
+  if (j.allyRisk?.unsafe) return false
   const lim = totem ? j.myHp + 6 : Math.min(j.myHp - 5, Math.max(3, j.myHp * 0.35))
   if (j.mine.dmg > lim) return false
   if (j.kill) return true
@@ -388,7 +406,7 @@ async function shootAt (bot, ctl, ex, { drawMs = null, shouldStop = null, onDraw
     point: () => pt(),
     follow: false,
     drawMs: drawMs || (isCart ? CART_DRAW_MS : 1150),
-    shouldStop: () => ctl.aborted || ex.isValid === false || (shouldStop && shouldStop()),
+    shouldStop: () => ctl.aborted || ex.isValid === false || !detonationSafe(bot, ex) || (shouldStop && shouldStop()),
     onDraw
   }).catch(e => ({ shot: false, why: e.message }))
   return r
@@ -447,8 +465,8 @@ async function backOff (bot, ctl, from, { ms = 900, until = null, stepSafe = nul
 // На бой: что взорвать сейчас и от чего уйти. pvp.js зовёт plan() в цикле
 // (null — нечего), run() держит тело до выстрела; threat() — его взрывчатка
 // рядом со мной, defend() — ответ на неё.
-function create (bot: any, { enemy, used = () => {}, crystals = true, telemetryHp = e => healthOf(bot, e) }: any = {}) {
-  const bm = boomState(bot, { enemy, used, crystals, telemetryHp })
+function create (bot: any, { enemy, used = () => {}, crystals = true, telemetryHp = e => healthOf(bot, e), foeHp = null }: any = {}) {
+  const bm = boomState(bot, { enemy, used, crystals, telemetryHp, foeHp })
   const { st, close } = bm
   return {
     st,
@@ -467,15 +485,15 @@ function create (bot: any, { enemy, used = () => {}, crystals = true, telemetryH
 
 // Взрывчатка одного боя (прежние let и const замыкания create): счёт st, своя взрывчатка (mine), сторож урона по его хп.
 interface BoomState {
-  bot: any; enemy: () => any; used: (s: string) => void; crystals: boolean; telemetryHp: (e: any) => number | null
+  bot: any; enemy: () => any; used: (s: string) => void; crystals: boolean; telemetryHp: (e: any) => number | null; foeHp: ((e: any) => number | null) | null
   st: any; mine: Set<number>; hpWatch: any; close: () => void; watchHp: (e: any, why: string) => void
 }
 
-function boomState (bot, { enemy, used, crystals, telemetryHp }: any): BoomState {
+function boomState (bot, { enemy, used, crystals, telemetryHp, foeHp }: any): BoomState {
   // crystals: false — кристаллы ведёт crystal.js (2026-09-30), здесь только вагонетки.
   const st: any = { placed: {}, shots: 0, booms: 0, dealt: [], self: 0, kills: 0, defuse: 0, dodges: 0, counter: 0, broken: 0, holes: 0 }
   const mine = new Set<number>() // id своей взрывчатки
-  const bm: BoomState = { bot, enemy, used, crystals, telemetryHp, st, mine, hpWatch: null, close: null, watchHp: null }
+  const bm: BoomState = { bot, enemy, used, crystals, telemetryHp, foeHp, st, mine, hpWatch: null, close: null, watchHp: null }
   // Взрывы: сколько блоков выбито (светокамень, стекло) — по blockUpdate рядом
   // с центром в тот же тик.
   const onExplosion = (pkt) => {
@@ -520,7 +538,7 @@ function boomState (bot, { enemy, used, crystals, telemetryHp }: any): BoomState
 }
 
 function boomPlan (bm: BoomState, ctx: any = {}) {
-  const { bot, enemy, crystals, mine } = bm
+  const { bot, enemy, crystals, mine, foeHp } = bm
   if (!ON || !bot.entity) return null
   const e = enemy()
   if (!e || !e.position || e.isValid === false) return null
@@ -538,16 +556,16 @@ function boomPlan (bm: BoomState, ctx: any = {}) {
     if (ex.name === 'tnt_minecart' && !k.flame) continue
     if (!k.bow || !k.arrows) continue
     const P = ex.name === 'end_crystal' ? CRYSTAL_P : CART_P_AVG
-    const j = judge(bot, e, centerOf(ex), P, { cache })
-    const jw = ex.name === 'end_crystal' ? j : judge(bot, e, centerOf(ex), CART_P_MAX, { cache })
-    if (worth(j, { totem }) && worth({ ...jw, him: j.him, kill: j.kill }, { totem })) return { kind: 'shoot', ex, j }
+    const j = judge(bot, e, centerOf(ex), P, { cache, foeHp })
+    const jw = ex.name === 'end_crystal' ? j : judge(bot, e, centerOf(ex), CART_P_MAX, { cache, foeHp })
+    if (worth(j, { totem }) && worth({ ...jw, him: j.him, kill: j.kill }, { totem }) && detonationSafe(bot, ex)) return { kind: 'shoot', ex, j }
   }
   // 2. Кристалл рядом с ним, ударить рукой (2–3 тика), если себе терпимо.
   if (crystals && k.crystals > 0 && d < 6 && ctx.onObsidian !== false) {
     const spots = spotsNear(bot, e.position, { crystal: true, foe: e, maxR: 2 })
     let best = null
     for (const s of spots) {
-      const j = judge(bot, e, s.center, CRYSTAL_P, { cache })
+      const j = judge(bot, e, s.center, CRYSTAL_P, { cache, foeHp })
       // Ударить сможем: рамка кристалла 2×2×2 над клеткой, рука 3.
       const eye = me.offset(0, EYE, 0)
       const cx = clamp(eye.x, s.center.x - 1, s.center.x + 1); const cy = clamp(eye.y, s.center.y, s.center.y + 2); const cz = clamp(eye.z, s.center.z - 1, s.center.z + 1)
@@ -584,7 +602,7 @@ function boomPlan (bm: BoomState, ctx: any = {}) {
 }
 
 async function boomRun (bm: BoomState, ctl, p, ctx: any = {}) {
-  const { bot, enemy, st, mine, watchHp } = bm
+  const { bot, enemy, st, mine, watchHp, foeHp } = bm
   const e = enemy()
   const out = { ok: false, note: '' }
   if (p.kind === 'shoot') {
@@ -605,6 +623,7 @@ async function boomRun (bm: BoomState, ctl, p, ctx: any = {}) {
       if (pc.crystal.isValid === false) break
       if (hitReach(bot, pc.crystal) <= REACH) {
         await bot.lookAt(pc.crystal.position.offset(0, 1, 0), true).catch(() => {})
+        if (ctl.aborted || ctx.stop?.() || !detonationSafe(bot, pc.crystal)) break
         try { bot.attack(pc.crystal) } catch {}
         hit = true
       } else await sleep(TICK_MS)
@@ -629,7 +648,7 @@ async function boomRun (bm: BoomState, ctl, p, ctx: any = {}) {
       stepSafe: ctx.stepSafe,
       until: () => {
         if (!e || e.isValid === false) return true
-        const j = judge(bot, e, centerOf(ex), P, {})
+        const j = judge(bot, e, centerOf(ex), P, { foeHp })
         return bot.entity.position.distanceTo(ex.position) > 6.5 && worth(j, {})
       }
     })
@@ -667,6 +686,7 @@ async function boomDefend (bm: BoomState, ctl, t, ctx: any = {}) {
   const reach = hitReach(bot, ex)
   if (ex.name === 'tnt_minecart' && reach <= REACH - 0.1) {
     await bot.lookAt(ex.position.offset(0, 0.35, 0), true).catch(() => {})
+    if (ctl.aborted || ctx.stop?.() || !cartMeleeSafe(bot, ex)) return null
     try { bot.attack(ex) } catch {}
     st.defuse++
     return 'разобрал его вагонетку с TNT ударом'
@@ -689,6 +709,7 @@ async function boomDefend (bm: BoomState, ctl, t, ctx: any = {}) {
   }
   if (ex.name === 'end_crystal' && reach <= REACH - 0.1 && t.his && t.his.dmg > t.my.dmg + 4 && t.my.dmg < myHp - 4) {
     await bot.lookAt(ex.position.offset(0, 1, 0), true).catch(() => {})
+    if (ctl.aborted || ctx.stop?.() || !detonationSafe(bot, ex)) return null
     try { bot.attack(ex) } catch {}
     st.counter++
     const e = enemy()
@@ -713,7 +734,7 @@ async function boomDefend (bm: BoomState, ctl, t, ctx: any = {}) {
       set('forward', !ctx.stepSafe || ctx.stepSafe({ x: -Math.sin(bot.entity.yaw), z: -Math.cos(bot.entity.yaw) }))
       await sleep(TICK_MS * 2)
       set('forward', false)
-      if (hitReach(bot, ex) <= REACH - 0.1) { try { bot.attack(ex) } catch {} st.defuse++; return 'подошёл и разобрал его вагонетку с TNT' }
+      if (hitReach(bot, ex) <= REACH - 0.1 && !ctl.aborted && !ctx.stop?.() && cartMeleeSafe(bot, ex)) { try { bot.attack(ex) } catch {} st.defuse++; return 'подошёл и разобрал его вагонетку с TNT' }
       return 'иду разобрать его вагонетку с TNT'
     }
     return null

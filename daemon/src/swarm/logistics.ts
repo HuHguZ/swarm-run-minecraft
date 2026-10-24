@@ -83,3 +83,28 @@ export function nextBuild(board: SwarmBoard, member: SwarmMember, leaseMs = 3000
   for (const cell of cells) { const claimed = board.claim(cell.id, member.id, leaseMs); if (claimed) return claimed }
   return null
 }
+
+// Обмен в бою (пользователь 24.10: «тяжёлому раненому — золотое яблоко от легкораненого»): тяжело ранен (< 10 хп) и яблок
+// нет — нужда в одном; ранен — свои держит; цел (≥ 16) — свои отдаёт. Перевозку делают существующие передачи.
+const APPLES = ['golden_apple', 'enchanted_golden_apple']
+export function healExchange(health: number, inventory: Record<string, number>, reserve: Record<string, number>, needs: Record<string, number>) {
+  const has = APPLES.some(n => (inventory[n] || 0) > 0)
+  for (const n of APPLES) if (inventory[n]) reserve[n] = health >= 16 ? 0 : inventory[n]
+  if (health < 10 && !has) needs.golden_apple = 1
+}
+
+// Фуражир (пользователь 24.10): в команде от 6 живых самый слабый не держит запасов — яблоки, заряды, стрелы, зелья, жемчуг
+// и лишнее оружие отдаёт бойцам (себе — одно оружие); собирает он их обычными походами за лутом.
+export function pickForager<T extends { id: string; strength: number; reserve?: Record<string, number>; inventory?: Record<string, number> }>(team: T[], current?: string): T | null {
+  if (team.length < 6) return null
+  const sorted = [...team].sort((a, b) => a.strength - b.strength || a.id.localeCompare(b.id))
+  // Не скакать между почти равными: прежний остаётся, пока он среди трёх слабейших.
+  const f = sorted.slice(0, 3).find(m => m.id === current) || sorted[0]
+  let keptWeapon = false
+  for (const n of Object.keys(f.inventory || {})) {
+    const weapon = /(_sword|_axe|_spear)$|^(mace|trident|bow|crossbow)$/.test(n)
+    if (weapon && !keptWeapon) { keptWeapon = true; continue }
+    f.reserve = { ...f.reserve, [n]: 0 }
+  }
+  return f
+}

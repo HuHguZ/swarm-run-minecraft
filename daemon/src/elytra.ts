@@ -6,7 +6,7 @@ const gameClock: typeof import('./game-clock') = require('./game-clock')
 //     взглядом, набор высоты, круги под потолком арены, посадка без урона.
 //  2. Уход с фейерверками на малом хп: подальше от него и повыше, глоток или
 //     яблоко в воздухе, посадка там, где его нет.
-//  3. Пике с булавой: сверху почти отвесно (щит сверху не держит), перед
+//  3. Пике с булавой: сверху почти отвесно (поднятый щит держит и сверху), перед
 //     ударом элитры — на нагрудник (полёт кончается, высота падения, набранная
 //     в пике, остаётся) и удар с падения; мимо — элитры обратно и уйти в полёт.
 //  4. Против летуна (крючки в pvp.js): не гоняться по земле, стрелять в его
@@ -84,8 +84,8 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
   const takeoffIn = (b, c, o: any = {}) => takeoff(b, c, { arena, ...o })
   const flyIn = (b, c, o: any = {}) => fly(b, c, { arena, ...o })
   const aerial = (require('./combat/aerial-executor') as typeof import('./combat/aerial-executor')).createAerialCombat(bot, {
-    enemy, worldOf, kit, landingSpot, gliding, predictGlider, takeoff: takeoffIn, fly: flyIn, land: landDressed,
-    swapChest, startGlide, allow, used, stats: st
+    enemy, worldOf: b => worldOf(b, { observed: !!arena }), kit, landingSpot, gliding, predictGlider, takeoff: takeoffIn, fly: flyIn, land: landDressed,
+    swapChest, startGlide, allow, used, stats: st, arena
   })
   const lanceMod: typeof import('./combat/aerial-lance') = require('./combat/aerial-lance')
   let nextDive = 0
@@ -96,6 +96,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
     st,
     gliding: () => fl.flying(),
     threat: () => fl.threat(),
+    planDive (ctx) { const e = enemy(); return e && gameClock.now() >= nextDive ? divePlan(bot, e, ctx) : null },
     // Что делать сейчас: 'escape' — уход лечиться, 'dive' — пике с булавой.
     decide (ctx) {
       // Без элитр в рюкзаке (весь нынешний «арсенал») — сразу мимо: ни
@@ -103,29 +104,35 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
       if (!ON || !bot.entity || !hasElytra(bot)) return null
       const e = enemy()
       if (!e || !e.position) return null
+      // Уход нужен, когда не переживаем размен; отсутствие яблока не повод оставаться под мечом.
+      const leave = ctx.hp <= (ctx.safety?.threshold ?? ctx.healAt)
       if (gliding(bot.entity) || gliding(e)) {
-        if (ctx.hp <= ctx.healAt && ctx.heal && kit(bot).rockets >= 2 && gameClock.now() >= nextEscape) {
+        if (leave && kit(bot).rockets >= 2 && gameClock.now() >= nextEscape) {
           nextEscape = gameClock.now() + 8000
           return { kind: 'escape' }
         }
+        const decision = aerial.decide(undefined, ctx)
+        // Уже над ним с заряженной булавой — падение раньше нового разбега копьём.
+        if (decision.node === 'DiveStrike') return { kind: 'aerial', decision }
         // Таран копьём (s7b): в полёте — тоже, если копьё и ракеты есть, а его щит не в деле.
         // Показ 09.10: 4 с паузы в воздухе отдавали полёт перехвату (AerialIntercept) — оба бота кружили друг вокруг друга;
         // таран сам разводит (разбег прочь) и бросает в пике.
         if (gameClock.now() >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = gameClock.now() + 500; return { kind: 'lance' } }
-        const decision = aerial.decide(undefined, ctx)
         return decision.selected ? { kind: 'aerial', decision } : null
       }
       if (!bot.entity.onGround) return null
       const now = gameClock.now()
       const k = kit(bot)
-      if (!k.elytra || k.rockets < 1) return null
-      if (ctx.hp <= ctx.healAt && ctx.heal && !ctx.eatSafe && now >= nextEscape && k.rockets >= 2) {
+      if (!k.elytra) return null
+      if (leave && !(ctx.safeMedical ?? (ctx.heal && ctx.eatSafe)) && now >= nextEscape && k.rockets >= 2) {
         const W = worldOf(bot)
         if (headroom(W, bot.entity.position, 8) >= 6) { nextEscape = now + 8000; return { kind: 'escape' } }
       }
       // Показ 09.10: 6 с / 15 с паузы — бот подолгу бился пешком, хотя таран выгоднее (ракеты стережёт lancePlan ≥ 3).
-      if (now >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = now + 2000; return { kind: 'lance' } }
-      if (now >= nextDive && divePlan(bot, e, ctx)) { nextDive = now + 9000; return { kind: 'dive' } }
+      const dv = now >= nextDive ? divePlan(bot, e, ctx) : null
+      // Выбранное графом пике не терять за более ранней веткой тарана.
+      if (!(dv && ctx.prefer === 'dive') && now >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = now + 2000; return { kind: 'lance' } }
+      if (dv) { nextDive = now + 9000; return dv }
       return null
     },
     async run (ctl, plan, ctx: any = {}) {
@@ -133,13 +140,14 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
       if (plan.kind === 'aerial') return aerial.run(ctl, ctx)
       if (plan.kind === 'escape') return escape(bot, ctl, e, { heal: ctx.heal, enough: ctx.enough, stats: st, used, allow, arena })
       if (plan.kind === 'lance') {
-        const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena, telemetryHp })
+        const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena, telemetryHp,
+          afterPass: flightCtl => aerial.afterLance(flightCtl, ctx) })
         // Ни одного попадания — не сразу снова (ракеты и время).
         if (!res.hit) nextLance = gameClock.now() + 1000
         return res
       }
       if (plan.kind === 'dive') {
-        const res: any = await diveSmash(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, telemetryHp, arena })
+        const res: any = await diveSmash(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, telemetryHp, arena, chain: ctx.chain })
         // Без подтверждённого попадания пике расходует ракеты и грозит падением.
         if (!res.hit) nextDive = gameClock.now() + 30000
         return res

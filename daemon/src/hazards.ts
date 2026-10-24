@@ -8,6 +8,20 @@ const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const AIRY = /^(air|cave_air|void_air|water|cobweb|short_grass|tall_grass|fern)$/
 
+// Паутина действует при пересечении рамки, даже если центр ног в соседней клетке.
+function webCells (bot, entity = bot.entity) {
+  if (!entity?.position) return []
+  const { lo, hi } = (require('./pick') as typeof import('./pick')).hitboxOf(bot, entity)
+  const cells = []
+  for (let y = Math.ceil(hi.y) - 1; y >= Math.floor(lo.y); y--) {
+    for (let x = Math.floor(lo.x); x < Math.ceil(hi.x); x++) for (let z = Math.floor(lo.z); z < Math.ceil(hi.z); z++) {
+      const at = new Vec3(x, y, z)
+      if (bot.blockAt(at)?.name === 'cobweb') cells.push(at)
+    }
+  }
+  return cells
+}
+
 function nameAt (bot, p) {
   const b = bot.blockAt(p)
   return b ? b.name : null
@@ -83,4 +97,4 @@ function nearest (list, from) {
   return best
 }
 
-export { hazardsNear, pitTrap, nearest }
+export { hazardsNear, pitTrap, nearest, webCells }

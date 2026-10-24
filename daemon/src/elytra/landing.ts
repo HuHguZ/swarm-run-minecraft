@@ -7,6 +7,9 @@ const routes = new WeakMap<object, any>()
 
 export function landingPlan (W, st, goal, price, H = 18) {
   let work = 0
+  // В явно оплаченном спуске допустим урон; касание прогноза чуть входит в пол, итог считает landingDamage.
+  const safeLimit = SAFE_FALL + (goal.maxFallDamage > 0 ? goal.maxFallDamage + 1 - 1e-6 : 0)
+  const accepts = fd => goal.maxFallDamage > 0 ? fd < safeLimit : fd <= SAFE_FALL
   // A CPU budget, not a flight-physics coefficient. Exhaustion retains choose's local fallback.
   const exhausted = {}
   const spend = () => { if (++work > 32768) throw exhausted }
@@ -23,7 +26,7 @@ export function landingPlan (W, st, goal, price, H = 18) {
     for (let i = 0; i < path.length; i++) {
       s = advance(s, path[i])
       if (s.kind) {
-        if (s.kind !== 'floor' || s.fd > SAFE_FALL) return null
+        if (s.kind !== 'floor' || !accepts(s.fd)) return null
         const r = { ...s, t: i + 1 }
         const { c, safe } = price(r)
         return safe ? { c, r, path: path.slice(0, i + 1) } : null
@@ -57,7 +60,7 @@ export function landingPlan (W, st, goal, price, H = 18) {
       // This client-style fall channel only prunes the search to retain S7d descent control.
       // Final acceptance uses independent movement fd and the complete collision-checked path.
       const canRecover = (from, t) => {
-        if (from.kind) return from.kind === 'floor' && from.fd <= SAFE_FALL
+        if (from.kind) return from.kind === 'floor' && accepts(from.fd)
         const p = { ...from.p }; const v = { ...from.v }
         let fd = from.fd; let clientFd = from.clientFd ?? fd; let boost = from.boost
         for (let j = 0; j < H; j++) {
@@ -69,9 +72,9 @@ export function landingPlan (W, st, goal, price, H = 18) {
           boost--
           fd = p.y > oldY ? 0 : fd + Math.max(0, oldY - p.y)
           clientFd += Math.max(0, oldY - p.y)
-          if (clientFd > SAFE_FALL) return false
+          if (!accepts(clientFd)) return false
           if (p.y > oldY) return true
-          if (p.y <= goal.at.y && fd <= SAFE_FALL) return true
+          if (p.y <= goal.at.y && accepts(fd)) return true
         }
         return false
       }
@@ -85,7 +88,7 @@ export function landingPlan (W, st, goal, price, H = 18) {
         const before = s.p.y
         s = advance(s, command)
         if (s.kind) {
-          if (s.kind === 'floor' && s.fd <= SAFE_FALL) {
+          if (s.kind === 'floor' && accepts(s.fd)) {
             const result = evaluate(path)
             if (result) {
               if (!best || result.c < best.c) best = { ...path[0], ...result }

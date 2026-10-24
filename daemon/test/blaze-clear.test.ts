@@ -182,7 +182,16 @@ test('TNT exact placement and the final ignition guard preserve the previous are
       let ignited = 0
       bot.inventory.items = () => ['tnt', 'flint_and_steel'].map(name => ({ name, count: 1, type: data.itemsByName[name].id }))
       build.placeBlockAt = async (_bot, p) => { placements.push(p); put(p.x, p.y, p.z, 'tnt'); return { ok: true } }
-      bot.activateBlock = async b => { ignited++; put(b.position.x, b.position.y, b.position.z, 'air') }
+      bot.equip = async item => { bot.heldItem = item }
+      bot.lookAt = async at => {
+        const d = at.minus(bot.entity.position.offset(0, 1.62, 0))
+        bot.entity.yaw = Math.atan2(-d.x, -d.z); bot.entity.pitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
+      }
+      bot._client = { write(name, packet) {
+        assert.equal(name, 'block_place'); assert.ok(packet.location.equals(cell))
+        ignited++; put(cell.x, cell.y, cell.z, 'air')
+      } }
+      bot.activateBlock = async () => { throw new Error('smooth aim must not reopen the final ignition guard') }
       bot.waitForTicks = async () => {}
       const r = await tnt.tntAt({ require: () => bot }, { aborted: false }, { at: cell.offset(.5, 0, .5), maxOff: 0, exact: true, beforeIgnite: () => approved })
       assert.equal(placements.length, 1); assert.ok(placements[0].equals(cell))

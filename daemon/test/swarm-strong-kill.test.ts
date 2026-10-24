@@ -4,6 +4,7 @@ import { SwarmBoard, planPvp, type SwarmMember } from '../src/swarm'
 import { shoveValue, SHOVE } from '../src/swarm/shove'
 import { MELEE_CAP } from '../src/swarm/race'
 import { harmWait, WINDOW_MS } from '../src/pvp/strike-order'
+import { digSeconds, attackSeconds } from '../src/swarm/dislodge'
 
 // Рой против сильного одиночки (стенд 21.10, чемпион в незерите с Защитой IV и Шипами III): убивают булава с падения,
 // зелья вреда и сброс в пустоту — ближний бой толпой только кормит его шипы и меч.
@@ -27,7 +28,7 @@ const onHim = (plan: Map<string, any>) => [...plan.values()].filter(t => t.kind 
 
 test('strong foe: two swords take every invulnerability window, the rest of the melee stays off; mace and harming always go', () => {
   assert.equal(MELEE_CAP, 2, 'a sword charges in 12 ticks, the window is 10: two swords fill it')
-  const team = [...Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k)),
+  const team = [...Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k, k < MELEE_CAP ? { ench: { sharpness: 5 } } : {})),
     blue('mace', 6, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 4 } }),
     blue('harm', 7, { inventory: { diamond_sword: 1, splash_potion: 2 }, potions: { splash_strong_harming: 2 } })]
   const f = scene(team)
@@ -41,16 +42,17 @@ test('strong foe: two swords take every invulnerability window, the rest of the 
   for (const id of ['s2', 's3', 's4', 's5']) assert.notEqual(plan.get(id)!.kind, 'fight', `${id}: a third sword adds nothing but thorns`)
 })
 
-test('strong foe at a void edge: every sword in reach shoves, the far edge is wind work only', () => {
+test('strong foe at a void edge: swords and wind lead him to the void, including a chain of hits from afar', () => {
   const team = Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k, k === 5 ? { inventory: { diamond_sword: 1, wind_charge: 3 } } : {}))
   const edge = scene(team)
   const close = planPvp(edge.board, team, { ...STRONG, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 1 }) })
   assert.equal(onHim(close).length, 6, 'a sprint hit from the far side drops him: all of them')
   assert.ok(onHim(close).every(t => t.data!.shove && Math.cos(t.data!.slot * Math.PI / 4) > 0), 'from the side away from the void')
-  const far = scene(team.map(m => ({ ...m })))
+  const far = scene(team.map((m, k) => ({ ...m, ...(k < MELEE_CAP ? { ench: { sharpness: 5 } } : {}) })))
   const plan = planPvp(far.board, far.members, { ...STRONG, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 4 }) })
   assert.ok(plan.get('s5')!.data!.shove && plan.get('s5')!.data!.push, 'four blocks to the edge: the wind charge reaches')
-  assert.equal(onHim(plan).filter(t => !t.data!.push).length, MELEE_CAP, 'a hit does not throw him four blocks: swords stay capped')
+  assert.equal(onHim(plan).filter(t => !t.data!.push).length, 5, 'несколько ударов ведут к краю в четырёх блоках: работают все пять мечников')
+  assert.ok(onHim(plan).every(t => t.data!.shove && Math.cos(t.data!.slot * Math.PI / 4) > 0), 'и заряды, и цепь ударов направлены в пустоту')
   const maceMan = [blue('mace', 0, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 2 } }), blue('m3', 1, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 3 } }), ...Array.from({ length: 4 }, (_, k) => blue(`c${k}`, k + 2))]
   const g = scene(maceMan)
   const pm = planPvp(g.board, maceMan, { ...STRONG, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 4 }) })
@@ -80,13 +82,15 @@ test('a fight task that turns into a shove reaches the board, not the old task w
 })
 
 test('undermining the strong foe: the hole over the void goes first, obsidian waits for a diamond pickaxe', () => {
-  // Земля за полем: песок на обсидиане фундамента, под ним пустота (watch.ts holeCells, F = 0); галерея — падение 7 бл.
-  const cell = (x: number, z: number, more: any) => ({ x, y: 63, z, feetY: 64, blocks: ['sand', 'obsidian'], stands: [], handMs: 250750, ...more })
+  // Земля за полем: песчаник на обсидиане фундамента, под ним пустота (watch.ts holeCells, F = 0); галерея — падение 7 бл.
+  const cell = (x: number, z: number, more: any) => ({ x, y: 63, z, feetY: 64, blocks: ['cut_sandstone', 'obsidian'], stands: [p(x + 1.5, 64, z + .5)], handMs: 254000, ...more })
   const voidHole = cell(2, 1, { drop: Infinity, tier: 2 }), gallery = cell(-1, 1, { drop: 7, blocks: ['sandstone', 'sandstone'], handMs: 8000 })
   const digSites = () => [gallery, voidHole]
   const crowd = () => Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k + 1))
   const pick = [blue('pick', 0, { position: p(0.5, 64, 4.5), inventory: { diamond_sword: 1, diamond_pickaxe: 1 } }), ...crowd()]
   const f = scene(pick)
+  const walk = Math.hypot(3, 3) / 5.6
+  assert.ok(digSeconds(pick[0], voidHole) + walk < attackSeconds(pick[0], f.board.enemies()[0]), 'копка с подходом дешевле доступной атаки по видимой броне')
   const t = planPvp(f.board, pick, { ...STRONG, digSites }).get('pick')!
   assert.equal(t.data!.dig, '2,63,1', `the gallery is nearer to him, the void kills: ${JSON.stringify(t.data)}`)
   assert.equal(t.data!.drop, Infinity, 'the driver knows the hole is lethal (edgeNear → shove)')

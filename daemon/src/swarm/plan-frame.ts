@@ -1,7 +1,7 @@
 // Рой (swarm.ts): кадр плана боя (planPvp). PvpPlan — общее состояние одного вызова: вход, строй, группы и то, что
 // посчитали прежние фазы (plan-assault, plan-flee, plan-doctrines, plan-jobs, plan-assign); фазы читают его по порядку
 // и дописывают своё. Оценки plan-judges привязываются к нему здесь.
-import type { SwarmPosition, SwarmMember, SharedEnemy, SwarmFact, SwarmTask, SwarmKind, Doctrine } from './types'
+import type { SwarmPosition, SwarmMember, SharedEnemy, SwarmFact, SwarmTask, SwarmKind, Doctrine, DigSite } from './types'
 import type { SwarmBoard, PvpMemory } from './board'
 import type { Edge } from './shove'
 import { groupOf, groupVerdict, TEAM_LINK, REINFORCE_LINK } from './fight'
@@ -10,7 +10,7 @@ import { hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, target
 
 // foesLeft — сколько врагов живо (лента смертей в чате — открытое знание, не зрение); нет — неизвестно (соло против людей).
 // killsBy — та же лента: сколько наших убил каждый враг за раунд.
-export type PvpOptions = { foesLeft?: number; killsBy?: Record<string, number>; doctrine?: Doctrine; quorum?: number; leaseMs?: number; aggressive?: boolean; hideouts?: SwarmPosition[]; perches?: SwarmPosition[]; gather?: { item: string; deficit: number; spot: SwarmPosition }; edgeOf?: (p: SwarmPosition) => Edge | null; digSites?: (p: SwarmPosition) => SwarmPosition[]; campSpots?: SwarmPosition[]; ladderSites?: { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }[] }
+export type PvpOptions = { foesLeft?: number; killsBy?: Record<string, number>; doctrine?: Doctrine; quorum?: number; leaseMs?: number; aggressive?: boolean; hideouts?: SwarmPosition[]; perches?: SwarmPosition[]; gather?: { item: string; deficit: number; spot: SwarmPosition }; edgeOf?: (p: SwarmPosition, foe?: SharedEnemy) => Edge | null; digSites?: (p: SwarmPosition) => DigSite[]; campSpots?: SwarmPosition[]; ladderSites?: { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }[] }
 type LadderSite = { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }
 
 export interface PvpPlan {
@@ -59,11 +59,13 @@ export interface PvpPlan {
   sectorOf: (m: SwarmMember, foe: SharedEnemy) => number
   shoveOf: (foe: SharedEnemy) => number
   edgeAt: (foe: SharedEnemy) => Edge | null
-  ringAt: (foe: SharedEnemy, k: number, r: number) => SwarmPosition
+  ringAt: (foe: SharedEnemy, k: number, r: number, occupied?: SwarmPosition[]) => SwarmPosition
   gatherers: Set<string>
   lastEnemy: SwarmFact | undefined
   held: (key: string) => Map<string, SwarmPosition>
-  diggers: Map<string, { site: SwarmPosition; foe: SharedEnemy }>
+  diggers: Map<string, { site: DigSite; foe: SharedEnemy }>
+  digAvoid: SwarmPosition[]
+  digVacate: Map<string, SwarmPosition>
   ladderers: Map<string, LadderSite>
   campers: Map<string, SwarmPosition>
   // оценки plan-judges, привязанные к этому вызову

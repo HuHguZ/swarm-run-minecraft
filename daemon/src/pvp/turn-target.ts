@@ -11,12 +11,14 @@ import { foodAnimals } from './food-fire'
 import { countOf, findItem, findPotion } from './potions'
 import { EDIBLE, EYE, FAR, FIX, HIT_REACH, TICK_MS } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+import { isAlly } from '../combat/ally-safety'
 
 // Жив ли я и цель, убил ли, обход моба, следующая цель, конец по времени.
 export async function targetTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, burningFood, clear, clearArea, dead, deadline, edgeTally, finish, foodFire, guard, hm, holdWeapon, kills, opts, otherAttacker, retarget, st, tt, used, vision } = ctx
   const now = turn.now = gameClock.now()
   if (!bot.entity || (bot.health ?? 20) <= 0 || ctx.selfDied) return { end: finish({ died: true }) }
+  if (isAlly(bot, ctx.entity)) return { end: finish({ stopped: 'цель — союзник' }) }
   vision.observe(ctx.entity)
   if (opts.purpose === 'food' && foodAnimals.has(ctx.entity.name) && (ctx.entity.metadata?.[0] & 1) && !burningFood.has(ctx.entity.id)) {
     burningFood.add(ctx.entity.id); foodFire.burningObserved++

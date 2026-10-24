@@ -1,4 +1,7 @@
 'use strict'
+import { Vec3 } from 'vec3'
+import { dimensions } from './navigation/geometry'
+import { rayBox } from './pick'
 // Шаги клавишами: куда смотрит какая клавиша и можно ли туда шагнуть. Общее
 // для боя (pvp.js) и побега (flee.js) — отдельно, чтобы они не тянули друг
 // друга по кругу.
@@ -31,6 +34,21 @@ const SLOWS = new Set(['cobweb'])
 function stepSafe (bot, dir, { water = true, reach = 0.9 }: any = {}) {
   const me = bot.entity.position
   const p = me.offset(dir.x * reach, 0, dir.z * reach)
+  const { half, height } = dimensions(bot)
+  const motion = p.minus(me)
+  // Край рамки тоже цепляет паутину: проверяем весь проход, а не только центр конечной точки.
+  for (let x = Math.floor(Math.min(me.x, p.x) - half); x <= Math.floor(Math.max(me.x, p.x) + half); x++) {
+    for (let z = Math.floor(Math.min(me.z, p.z) - half); z <= Math.floor(Math.max(me.z, p.z) + half); z++) {
+      for (let y = Math.floor(me.y); y < me.y + height; y++) {
+        if (blockName(bot, new Vec3(x, y, z)) !== 'cobweb') continue
+        const lo = { x: x - half + 1e-7, y: y - height + 1e-7, z: z - half + 1e-7 }
+        const hi = { x: x + 1 + half - 1e-7, y: y + 1 - 1e-7, z: z + 1 + half - 1e-7 }
+        const inside = q => q.x >= lo.x && q.x <= hi.x && q.y >= lo.y && q.y <= hi.y && q.z >= lo.z && q.z <= hi.z
+        // Из уже зацепившей тело паутины всё ещё можно выйти.
+        if (rayBox(me, motion, lo, hi, 1) != null && (!inside(me) || inside(p))) return false
+      }
+    }
+  }
   const feet = p.floored()
   for (const dy of [0, 1]) {
     const n = blockName(bot, feet.offset(0, dy, 0))

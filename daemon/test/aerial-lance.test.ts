@@ -59,7 +59,7 @@ test('таран: план находит касание на заходе св�
   if (pl2 && pl2.exit === 'wall') assert.ok(pl2.c > free.c, `выход в стену дороже: ${pl2.c} > ${free.c}`)
 })
 
-test('таран: план годен с элитрами, ракетами, копьём и нагрудником; щит — нет', () => {
+test('таран: план годен с элитрами, ракетами, копьём и нагрудником; щит — только спереди', () => {
   const items = [{ name: 'elytra', count: 1 }, { name: 'firework_rocket', count: 8 }, { name: 'iron_spear', count: 1 }, { name: 'diamond_chestplate', count: 1 }]
   const bot: any = {
     inventory: { items: () => items, slots: [] as any[] },
@@ -69,7 +69,10 @@ test('таран: план годен с элитрами, ракетами, к�
   }
   const e = { position: { x: 10.5, y: 100, z: 0.5 } }
   assert.ok(L.lancePlan(bot, e, { d: 10, hp: 20 }))
-  assert.equal(L.lancePlan(bot, e, { d: 10, hp: 20, hisShield: true }), null)
+  // Щит: смотрит на нас (yaw π/2 — взгляд к −x) — отказ; спиной или боком — таран (рой заходит со всех сторон).
+  assert.equal(L.lancePlan(bot, { ...e, yaw: Math.PI / 2 }, { d: 10, hp: 20, hisShield: true }), null)
+  assert.ok(L.lancePlan(bot, { ...e, yaw: -Math.PI / 2 }, { d: 10, hp: 20, hisShield: true }), 'спиной со щитом')
+  assert.ok(L.lancePlan(bot, { ...e, yaw: 0 }, { d: 10, hp: 20, hisShield: true }), 'боком со щитом')
   assert.equal(L.lancePlan(bot, e, { d: 10, hp: 6 }), null)
   items[1].count = 2
   assert.equal(L.lancePlan(bot, e, { d: 10, hp: 20 }), null, 'ракет < 3')

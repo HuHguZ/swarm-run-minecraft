@@ -1,6 +1,7 @@
 // Рой (swarm.ts): счёт боя по видимому — личный (assessSwarmFight) и командный (assessTeamFight), группы своих и их
 // приговор (groupOf, groupVerdict), политика бегства (mustFlee).
 import * as damage from '../pvp/damage-model'
+import { REGEN_FAST } from '../pvp/hp-estimate'
 import type { SwarmPosition, SwarmMember, SharedEnemy } from './types'
 import { distance, count, sharpWeapon } from './common'
 import { retreatWhy } from './retreat'
@@ -55,13 +56,13 @@ function combatProfile(m: SwarmMember, foe: SharedEnemy) {
     // Крит — то же правило, что у врага (enemyAttack): оружие ближнего боя с полным зарядом — крит, кулак — нет. Доля
     // критов у ботов ниже (бой лаборатории 14.10: 1 из 9), но решение сравнивает стороны: одно правило сдвигает время
     // убийства и выживания одинаково, а «свои всегда критуют» давало перекос в свою пользу.
-    const raw = damage.meleeRaw({ weapon, sharpness: m.ench?.sharpness || 0, crit: damage.isMeleeWeapon(weapon) })
+    const raw = damage.meleeRaw({ weapon, sharpness: weapon === m.weapon ? m.ench?.sharpness || 0 : 0, crit: damage.isMeleeWeapon(weapon) })
     const interval = Math.max(damage.IFRAME_TICKS, damage.ticksToCharge(weapon))
     const hit = damage.afterDefense(raw, 'melee', defense)
     const candidate = { member: m, defense: ownDefense(m), raw, kind: 'melee', interval, hit, ranged: false }
     if (!best || hit / interval > best.hit / best.interval) best = candidate
   }
-  if (m.inventory?.arrow && (m.inventory.bow || m.inventory.crossbow)) {
+  if ((m.attackArrows ?? (m.inventory?.arrow || 0) + (m.inventory?.spectral_arrow || 0)) > 0 && (m.inventory?.bow || m.inventory?.crossbow)) {
     const bow = !!m.inventory.bow
     const speed = damage.arrowSpeedAt(bow ? 3 : damage.CROSSBOW_ARROW_SPEED, distance(m.position, foe.position))
     const outcomes = damage.arrowOutcomes({ speed, power: m.ench?.power || 0, crit: true })
@@ -99,6 +100,29 @@ function enemyAttack(e: SharedEnemy, m: SwarmMember) {
   const radial = e.velocity ? Math.max(0, (e.velocity.x * (m.position.x - e.position.x) + e.velocity.z * (m.position.z - e.position.z)) / Math.max(0.1, Math.hypot(m.position.x - e.position.x, m.position.z - e.position.z)) * 20) : 0
   const arrival = kind === 'projectile' ? distance(e.position, m.position) / ((weapon === 'crossbow' ? damage.CROSSBOW_ARROW_SPEED : 3) * 20) : kind === 'explosion' ? 0 : Math.max(0, distance(e.position, m.position) - 3) / Math.max(5.6, radial)
   return { raw, kind, interval, arrival: Math.ceil(arrival * 20), breach: glint && weapon === 'mace' ? 4 : 0 }
+}
+// Личная цена без прибавки за толпу: слабый удар не становится сильнее от числа союзников.
+export function memberFight(m: SwarmMember, foe: SharedEnemy) {
+  let low = combatProfile(m, foe)
+  const bare = { ...foe, equipment: { ...foe.equipment, enchanted: false } }
+  const gap = Math.max(.1, distance(m.position, foe.position))
+  const away = ((foe.position.x - m.position.x) * (foe.velocity?.x || 0) + (foe.position.z - m.position.z) * (foe.velocity?.z || 0)) / gap * 20
+  // Таран копьём — альтернатива уколу; убегающий с той же скоростью не даёт относительной скорости для урона.
+  for (const weapon of Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0 && damage.isSpear(n))) {
+    const raw = damage.spearChargeRaw({ weapon, sharpness: weapon === m.weapon ? m.ench?.sharpness || 0 : 0, rel: Math.max(0, 5.6 - away) })
+    const interval = Math.max(damage.IFRAME_TICKS, damage.ticksToCharge(weapon))
+    const hit = damage.afterDefense(raw, 'melee', enemyDefense(foe))
+    if (hit / interval > low.hit / low.interval) low = { ...low, raw, hit, interval, kind: 'melee' }
+  }
+  const interval = low.interval / 20
+  const damageRange: [number, number] = [low.hit, damage.afterDefense(low.raw, low.kind, enemyDefense(bare))]
+  const incoming = enemyAttack(foe, m)
+  const hit = damage.afterDefense(incoming.raw, incoming.kind, ownDefense(m), { breach: incoming.breach })
+  const survival = hit > 0 ? Math.max(0, Math.ceil(m.health / hit) - 1) * incoming.interval / 20 : Infinity
+  const attackSeconds = (foe.hpEstimate ?? 20) / Math.max(Number.EPSILON, low.hit / interval)
+  // Блеск — диапазон, не знание чар. Сравниваем нижний урон с возможным регеном и ценой ответного размена.
+  const rearm = low.hit / interval <= REGEN_FAST * 20 && attackSeconds > survival
+  return { damage: damageRange, interval, survival, attackSeconds, rearm }
 }
 // Сколько проживу под этими ударами (без своих ответов), с общим окном неуязвимости: двое синхронных лучников не дают
 // двух полных стрел в одно окно. Бой кончился раньше нашей смерти — выживание всё равно меряется, а не берётся формулой

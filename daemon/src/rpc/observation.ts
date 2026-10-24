@@ -28,7 +28,10 @@ function observationMethods ({ session, cfg, bus, vision, gameClock, state }: Rp
     return {
       fairPlay: cfg.fairPlay,
       server: `${cfg.host}:${cfg.port}`,
-      ...(p?.swarm ? { sightings: require('../swarm-senses').swarmSightings(session.bot, p.swarmAllies), ownEnchants: enchantedGear(session.bot) } : {}),
+      rescuing: session.current?.name === 'fly_to' && !!session.current.params?.rescue && !!session.current.ctl && !session.current.ctl.aborted,
+      // Неделимая связка тела (utility/fight riptideSmash): рой не шлёт новых заданий, пока не кончится.
+      combo: session.bot?._ndCombo && session.bot._ndCombo.until > gameClock.now() ? session.bot._ndCombo.kind : null,
+      ...(p?.swarm ? { at: session.bot?.entity?.position, sightings: require('../swarm-senses').swarmSightings(session.bot, p.swarmAllies), ownEnchants: enchantedGear(session.bot), windOut: session._windOut?.log.splice(0), pearls: require('../combat/pearl-watch').enemyPearls(session.bot) } : {}),
       ...(p && p.items ? {
         items: session.bot?.inventory?.slots?.slice(5).filter(Boolean).map(it => require('../pvp/combat-observe').itemObs(session.bot, it)) || [],
         storage: session.bot?.inventory?.slots ? Array.from({ length: 36 }, (_, index) => {

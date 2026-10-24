@@ -163,18 +163,40 @@ export async function ensureHotbar (bot, names) {
   return true
 }
 
-// Заряд ветра на тике физики: aim() считает взгляд по позиции этого тика
-// (пакет позиции уйдёт с ним же), бросок — после пакета (afterPacket; как у
-// лука и броска, throw.js). Заряды в левой руке — «использовать» левой, правая
-// не меняется. Иначе — выбрать слот заряда, «использовать» и (swap) сразу
-// вернуть прежний: на Paper заряд меча всё равно обнулится (см. SWAP), зато
-// меч снова в руке без лишнего тика.
-export function fireWind (bot, aim, { swap = SWAP, before = null, hand = null }: any = {}) {
+// Видимая грань пола, реальный сдвиг бросающего и положение ног к разрыву (jar 1.21.11).
+export function selfWindAim (bot, { yaw = bot.entity.yaw, back = 0, moved }: any) {
+  const pick = require('../pick') as typeof import('../pick')
+  const edges = require('../edges') as typeof import('../edges')
+  const wind = require('../combat/team-wind') as typeof import('../combat/team-wind')
+  const { Vec3 } = require('vec3') as typeof import('vec3')
+  const from = pick.eyeOf(bot), down = new Vec3(0, -1, 0)
+  const above = from.offset(Math.sin(yaw) * back, 0, Math.cos(yaw) * back)
+  const floor = pick.blockOnRay(bot, above, down, from.y - bot.game.minY)
+  if (!floor) return null
+  moved = moved.clone()
+  if (bot.entity.onGround) moved.y = 0
+  const shot = wind.windShot(bot, from, above.plus(down.scaled(floor.t)), moved)
+  if (!shot || shot.normal.y !== 1) return null
+  const control = { ...edges.IDLE }
+  for (const key of Object.keys(control)) control[key] = !!bot.getControlState(key)
+  const state = edges.stateOf(bot, control), world = edges.worldOf(bot), sim = edges.simOf(bot)
+  const falling = !state.onGround && state.vel.y < 0
+  for (let tick = 0; tick < shot.ticks; tick++) {
+    sim(state, world)
+    // Посадка раньше разрыва уже нанесёт урон: поздний MLG заряд не спасёт.
+    if (falling && state.onGround && tick < shot.ticks - 1) return null
+  }
+  return wind.windImpulse(bot, state.pos, shot.burst).y > 0 ? shot : null
+}
+
+// Бросок после пакета позиции; immediate — текущий тик MLG, чтобы не ждать приземления.
+export function fireWind (bot, aim, { swap = SWAP, before = null, hand = null, immediate = false }: any = {}) {
   return new Promise<any>(resolve => {
     const off = hand === 'off' || (hand == null && offWind(bot))
     const wi = off ? -1 : hotbarIndex(bot, 'wind_charge')
     if (!off && wi < 0) return resolve({ fired: false, why: 'заряда нет в хотбаре' })
     if (gameClock.now() < (bot._ndWindCd || 0)) return resolve({ fired: false, why: 'перезарядка' })
+    const lastPos = bot.entity.position.clone()
     let done = false
     const onT = () => {
       if (done) return
@@ -182,11 +204,24 @@ export function fireWind (bot, aim, { swap = SWAP, before = null, hand = null }:
       gameClock.clearTimeout(timer)
       bot.removeListener('physicsTick', onT)
       let sol = null
-      try { if (before) before(); sol = aim() } catch {}
+      const aimPos = bot.entity.position.clone(), aimMovement = aimPos.minus(lastPos)
+      try { if (before) before(); sol = aim(aimMovement) } catch {}
       if (!sol) return resolve({ fired: false, why: 'некуда' })
       bot.look(sol.yaw, sol.pitch, true).catch(() => {})
       afterPacket(bot, () => {
         try {
+          const actual = { yaw: bot.entity.yaw, pitch: bot.entity.pitch }
+          const { WIND } = require('../combat/team-wind') as typeof import('../combat/team-wind')
+          const yawError = Math.atan2(Math.sin(actual.yaw - sol.yaw), Math.cos(actual.yaw - sol.yaw))
+          if (![actual.yaw, actual.pitch, sol.yaw, sol.pitch].every(Number.isFinite) || Math.abs(yawError) > WIND.dispersion || Math.abs(actual.pitch - sol.pitch) > WIND.dispersion) {
+            resolve({ fired: false, why: 'wind_look_changed' }); return
+          }
+          const moved = bot.entity.position.equals(aimPos) ? aimMovement.clone() : bot.entity.position.minus(aimPos)
+          if (bot.entity.onGround) moved.y = 0
+          const { windReleaseSafe } = require('../combat/wind-safety') as typeof import('../combat/wind-safety')
+          if (!windReleaseSafe(bot, sol, moved) || (actual.yaw !== sol.yaw || actual.pitch !== sol.pitch) && !windReleaseSafe(bot, actual, moved)) {
+            resolve({ fired: false, why: 'unsafe_allied_wind' }); return
+          }
           const back = bot.quickBarSlot
           if (off) bot.activateItem(true)
           else {
@@ -197,11 +232,12 @@ export function fireWind (bot, aim, { swap = SWAP, before = null, hand = null }:
           // Заряд — не «натягивают»: mineflayer иначе считает руку занятой.
           bot.usingHeldItem = false
           bot._ndWindCd = gameClock.now() + WIND_CD_MS
-          resolve({ fired: true, yaw: sol.yaw, pitch: sol.pitch, from: bot.entity.position.clone(), off, swapped: !off && swap && back !== wi })
+          resolve({ fired: true, yaw: sol.yaw, pitch: sol.pitch, from: bot.entity.position.clone(), shot: sol, off, swapped: !off && swap && back !== wi })
         } catch (e) { resolve({ fired: false, why: e.message }) }
       })
     }
     const timer = gameClock.setTimeout(() => { if (!done) { done = true; bot.removeListener('physicsTick', onT); resolve({ fired: false, why: 'физика стоит' }) } }, 400)
     bot.on('physicsTick', onT)
+    if (immediate) onT()
   })
 }

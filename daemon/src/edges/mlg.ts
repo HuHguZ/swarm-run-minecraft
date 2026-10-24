@@ -4,6 +4,7 @@
 import { PlayerState, SAFE_FALL, USE_RANGE, EYE, HALF, CORNERS } from './forecast'
 import * as gameClock from '../game-clock'
 import * as clutch from '../clutch'
+import { blockReference, replaceable, othersOf, occupied } from '../clutch/blocks'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 // Сторож падения — всегда, не только в бою. Вода под ноги в последний тик до
 // земли (BucketItem.use: луч от глаз на 4.5 блока; сервер считает от позиции
@@ -101,6 +102,7 @@ function installFallGuard (session, { minFall = 6 }: any = {}) {
   // Readiness for an explicitly priced fall is physical; mlgDrop's HP/height
   // budget remains the ordinary pathfinder policy. Planning does not take the hand.
   st.waterReady = () => waterReady(fg)
+  st.webReady = () => webReady(fg)
   st.planWater = (plan) => planWater(fg, plan)
   const onTick = () => fallTick(fg)
   bot.on('physicsTick', onTick)
@@ -197,34 +199,46 @@ function waterReady (fg: FallGuard) {
   if (left > 0) return { ok: false, why: 'ведро только что в хотбаре', retryMs: left }
   return { ok: true }
 }
-function planWater (fg: FallGuard, { owner, until }) {
+function webReady (fg: FallGuard) {
+  const { session, bot, st } = fg
+  if (!bot.entity || (bot.health ?? 20) <= 0) return { ok: false, why: 'нет живого тела' }
+  if (process.env.ND_MLG === '0' || process.env.ND_CLUTCH === '0' || session.mlgOff) return { ok: false, why: 'выключено' }
+  if (session.current?.name === 'dragon' || !survivalMode(bot)) return { ok: false, why: 'другой режим' }
+  if (st.placed || typeof bot._genericPlace !== 'function') return { ok: false, why: 'рука не готова' }
+  return hotbar(fg, 'cobweb') >= 0 ? { ok: true } : { ok: false, why: 'паутина не в хотбаре' }
+}
+function planWater (fg: FallGuard, { owner, until, material = 'water' }) {
   const { bot, st } = fg
-  if (owner == null || !Number.isFinite(until) || until <= gameClock.now() || !st.waterReady().ok) return null
-  const token = { owner, until, airborne: false }
+  if (material !== 'water' && material !== 'cobweb') return null
+  if (owner == null || !Number.isFinite(until) || until <= gameClock.now() || !(material === 'cobweb' ? st.webReady() : st.waterReady()).ok) return null
+  const token = { owner, until, material, startY: bot.entity.position.y, airborne: false }
   fg.waterPlan = token
   return () => {
     if (fg.waterPlan !== token) return
     // Cancelling the caller on the ground retracts the plan immediately.
     // Once airborne, finish this safety action through landing or its deadline.
-    if (!bot.entity || bot.entity.onGround || inWaterNow(fg)) fg.waterPlan = null
+    if (!bot.entity || bot.entity.onGround || inWaterNow(fg) || material === 'cobweb' && inWebNow(fg)) fg.waterPlan = null
     else token.airborne = true
   }
 }
 const activeWaterPlan = (fg: FallGuard) => {
   const { bot } = fg
   if (!fg.waterPlan) return null
-  const landed = bot.entity && (bot.entity.onGround || inWaterNow(fg))
+  const landed = bot.entity && (bot.entity.onGround || inWaterNow(fg) || fg.waterPlan.material === 'cobweb' && inWebNow(fg))
   if (!bot.entity || (bot.health ?? 20) <= 0 || gameClock.now() >= fg.waterPlan.until || (fg.waterPlan.airborne && landed)) fg.waterPlan = null
-  else if (!landed) fg.waterPlan.airborne = true
+  // На самом краю физика чередует onGround при той же высоте: это ещё не прыжок.
+  else if (!landed && Math.abs(bot.entity.position.y - fg.waterPlan.startY) > 1e-7) fg.waterPlan.airborne = true
   return fg.waterPlan
 }
+const inWebNow = (fg: FallGuard) => !!(fg.bot.entity?.isInWeb || fg.bot.entity && fg.bot.blockAt(fg.bot.entity.position, false)?.name === 'cobweb')
 
 // Тик сторожа: шаг клатча, своя лужа (подобрать), ведро под ноги.
 function fallTick (fg: FallGuard) {
   const { session, bot, st } = fg
   try {
     const plannedWater = activeWaterPlan(fg)
-    const clutchChoice = clutchStep(fg)
+    // Явный план уже оценил падение: каменный клатч не должен занять его руку.
+    const clutchChoice = plannedWater ? { action: 'none' } : clutchStep(fg)
     const e = bot.entity
     if (!e || !e.position || (bot.health ?? 20) <= 0) { st.peak = null; return }
     // У дракона свой сторож (dragon.js fallGuard) — не драться с ним за руку.
@@ -270,15 +284,18 @@ function clutchStep (fg: FallGuard) {
 function pickUpWater (fg: FallGuard, e) {
   const { bot, st, hand } = fg
   const pl = st.placed
-  if (e.onGround || inWaterNow(fg)) {
+  const web = pl.material === 'cobweb'
+  if (web && inWebNow(fg)) pl.contact = true
+  if (e.onGround || inWaterNow(fg) || pl.contact) {
     if (!pl.landed) { pl.landed = gameClock.now(); pl.hpLand = bot.health ?? 20 }
     const since = gameClock.now() - pl.landed
     // Спасло ли — по здоровью: блок воды приходит клиенту позже, чем
     // сервер уже погасил им падение (прогон 2026-09-26: «промах» без урона).
     if (!pl.said && since >= 300) {
       pl.said = true
-      if ((bot.health ?? 0) >= pl.hpAir - 0.5) { st.saved++; emit(fg, 'saved', { fall: pl.fall, hp: bot.health }) } else { st.missed++; st.missedAt = gameClock.now(); emit(fg, 'missed', { fall: pl.fall, hp: bot.health }) }
+      if ((!web || pl.contact) && (bot.health ?? 0) >= pl.hpAir - 0.5) { st.saved++; emit(fg, 'saved', { fall: pl.fall, hp: bot.health }) } else { st.missed++; st.missedAt = gameClock.now(); emit(fg, 'missed', { fall: pl.fall, hp: bot.health }) }
     }
+    if (web) { if (pl.said) st.placed = null; return }
     if (since < 150) return
     // Вода — в клетке посадки или внутри залитого блока под ней (нижний
     // полублок: ведро заливает его, а не клетку над ним — ферма 30.09,
@@ -345,6 +362,7 @@ function dropWater (fg: FallGuard, e, clutchChoice, plannedWater) {
   // Клатч взял падение на себя — ведро не трогает руку.
   if (clutchChoice.action === 'clutch') return
   if (e.velocity.y > -0.2) return
+  if (plannedWater?.material === 'cobweb') { dropWeb(fg, e, plannedWater); return }
   const dim = String((bot.game && bot.game.dimension) || '')
   if (/nether/.test(dim)) return
   const { top, wet, cell } = landingTop(bot, p)
@@ -373,6 +391,40 @@ function dropWater (fg: FallGuard, e, clutchChoice, plannedWater) {
   // раньше ведро отнимало у него руку и взгляд (2026-09-26).
   if (bot._ndDescend && next > 0.05) return
   throwWater(fg, p, top, cell, fall, hp, h)
+}
+
+function dropWeb (fg: FallGuard, e, plan) {
+  const { bot, st, hand } = fg
+  if (plan.scheduled || !st.webReady().ok) return
+  const { top, wet, cell } = landingTop(bot, e.position)
+  if (!cell || wet || st.peak - top <= SAFE_FALL || e.position.y <= top) return
+  const ref = cell.offset(0, -1, 0); const face = new Vec3(0, 1, 0)
+  const faceAim = (require('../pick') as typeof import('../pick')).faceAim
+  if (!faceAim(bot, ref, face, { range: USE_RANGE })) return
+  const snapshot = e.position.clone()
+  plan.scheduled = true; st.busy = true; hand.hold(250)
+  afterPacket(bot, () => hand.as(() => {
+    plan.scheduled = false
+    if (activeWaterPlan(fg) !== plan || !st.webReady().ok || bot.entity.onGround || bot.entity.position.distanceTo(snapshot) > 1e-7) return
+    const rb = bot.blockAt(ref, false)
+    const point = faceAim(bot, ref, face, { range: USE_RANGE })
+    if (!point || !blockReference(rb) || !replaceable(bot.blockAt(cell, false)) || occupied(cell, othersOf(bot.entities, bot.entity.id))) return
+    const eye = snapshot.offset(0, EYE, 0); const d = point.minus(eye)
+    const yaw = Math.atan2(-d.x, -d.z); const pitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
+    bot.look(yaw, pitch, true)?.catch?.(() => {})
+    // Как блочный клатч: точный поворот и щелчок после пакета позиции, без await.
+    bot._client.write('look', { yaw: 180 - yaw * 180 / Math.PI, pitch: -pitch * 180 / Math.PI,
+      onGround: false, flags: { onGround: false, hasHorizontalCollision: !!bot.entity.isCollidedHorizontally } })
+    const slot = hotbar(fg, 'cobweb')
+    if (slot < 0) return
+    if (bot.quickBarSlot !== slot - 36) bot.setQuickBarSlot(slot - 36)
+    const pl = st.placed = { t: gameClock.now(), pos: cell, fall: Math.round(st.peak - top), hpAir: bot.health, material: 'cobweb' }
+    try {
+      const sent = bot._genericPlace(rb, face, { delta: point.minus(ref), forceLook: 'ignore', swingArm: 'right' })
+      Promise.resolve(sent).catch(() => { if (st.placed === pl) { st.placed = null; st.missed++; st.missedAt = gameClock.now(); emit(fg, 'missed', { material: 'cobweb' }) } })
+      st.fired++; emit(fg, 'fired', { material: 'cobweb', fall: pl.fall }); hand.hold(150)
+    } catch { st.placed = null; st.missed++; st.missedAt = gameClock.now(); emit(fg, 'missed', { material: 'cobweb' }) }
+  }))
 }
 
 function throwWater (fg: FallGuard, p, top, cell, fall, hp, h) {

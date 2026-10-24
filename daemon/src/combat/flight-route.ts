@@ -64,10 +64,15 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
     const landed = !ctl.aborted ? await sky.land(bot, ctl, { at: graph.complete ? landing : null, maxMs: 12000, stats: statistics, arena: params.arena }) : { ok: false, why: 'interrupted' }
     if (ctl.aborted && sky.gliding(bot.entity)) landAnyway(bot, ctl, params.arena, statistics)
     const position = bot.entity.position
-    return { ok: graph.complete && landed.ok && !ctl.aborted, stopped: stop ?? (!graph.complete ? 'route incomplete' : !landed.ok ? landed.why : null),
+    const ground = landed.ground || (bot.entity.onGround ? { ...position } : null)
+    const landingError = ground ? landing.distanceTo(new Vec3(ground.x, ground.y, ground.z)) : position.distanceTo(landing)
+    // Безопасно сесть вообще — задача land; маршрут обещает именно выбранную площадку, а не этаж ниже.
+    // Тот же допуск 3 блока, что у сцены try-flight-route; высота — как у допуска опоры перед взлётом.
+    const arrived = !!ground && landingError <= 3 && Math.abs(ground.y - landing.y) <= 1
+    return { ok: graph.complete && landed.ok && arrived && !ctl.aborted, stopped: ctl.aborted ? 'interrupted' : stop ?? (!graph.complete ? 'route incomplete' : !landed.ok ? landed.why : !arrived ? 'landing_missed' : null),
       crossings: graph.crossings, expectedGates: graph.gates.length, collisionTicks, rockets: rocketBefore - sky.rocketCount(bot),
       gameMs: clock.now() - started, hpBefore, hp: bot.health,
-      landing: { ...position }, landingError: position.distanceTo(landing), statistics, trace }
+      landing: { ...position }, ground, landingError, statistics, trace }
   } finally { bot.removeListener('physicsTick', observe) }
 }
 

@@ -1,13 +1,16 @@
 import * as assess from '../assess'
 import * as tempo from '../tempo'
 import * as throwMod from '../throw'
+import * as gameClock from '../game-clock'
 import { countOf, findItem, potionOf, potionRole } from './potions'
-import { BOX_FRONT_MS, FIX } from './rules'
+import { BOX_FRONT_MS, FIX, TICK_MS } from './rules'
 import { type DuelCtx } from './turn'
+import { isAlly } from '../combat/ally-safety'
 
 // Начало боя: план против мобов, оружие, щит, дебют по темпу.
 export async function openDuel (ctx: DuelCtx) {
   const { bot, buildHot, clearArea, fortOut, fortPossible, guard, healItem, heldName, holdItem, holdWeapon, leadFn, opts, pickWeaponFor, pvpSkills, rangedAllowed, retarget, st, style, tt, used } = ctx
+  if (isAlly(bot, ctx.entity)) return
   if (!ctx.prof.player) {
     try {
       const p = assess.plan(bot, { radius: clearArea || 16 })
@@ -27,7 +30,16 @@ export async function openDuel (ctx: DuelCtx) {
   const buffUp = ctx.buffUp = (...args: any[]) => pvpSkills.buffUp(...args)
   if (tempo.ON && ctx.prof.player && !ctx.lastStand) {
     // Арена зовёт бой кусками по 3 с: пауза дебюта (до 1.2 с) против толпы — стоять под ударами в начале каждого куска.
-    if (!(require('./turn-crowd').ON && (opts.targets || []).length >= 3)) await ctx.sleep(style.openDelayMs)
+    if (!(require('./turn-crowd').ON && (opts.targets || []).length >= 3)) {
+      const until = gameClock.now() + style.openDelayMs
+      for (;;) {
+        // Наблюдатель уже работает: добровольная пауза не должна съесть окно штатной защиты от булавы.
+        if (ctx.ctl.aborted || ctx.mc.threat()) return
+        const left = until - gameClock.now()
+        if (left <= 0) break
+        await ctx.sleep(Math.min(TICK_MS, left))
+      }
+    }
     const drinkable = k => findItem(bot, i => i.name === 'potion' && (potionOf(i) || '').replace(/^(long|strong)_/, '') === k)
     const d0 = ctx.entity.position.distanceTo(bot.entity.position)
     const plan = tempo.pickOpening({

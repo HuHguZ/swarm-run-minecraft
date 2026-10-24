@@ -28,7 +28,7 @@ import { mobDetourTurn, duoTurn, backAttackerTurn } from './pvp/turn-foes'
 import { maceDefenseTurn, windPushTurn, smashSetupTurn, smashTurn } from './pvp/turn-mace'
 import { boomDefenseTurn, crystalTurn, boomOffenseTurn } from './pvp/turn-blast'
 import { arrowPickupTurn, crossbowTurn, bowTurn } from './pvp/turn-ranged'
-import { terrainTurn, scoopTurn, webTurn, fireTurn, pitTurn } from './pvp/turn-hazards'
+import { terrainTurn, scoopTurn, webTurn, webObstacleTurn, fireTurn, pitTurn } from './pvp/turn-hazards'
 import { incomingTurn, dodgeTurn, shieldsTurn } from './pvp/turn-projectiles'
 import { punishTurn, potionFirstTurn, utilTurn, showmanTurn } from './pvp/turn-tempo'
 import { flyerTurn, farApproachTurn, debuffTurn, spearTurn, lanceWebTurn } from './pvp/turn-approach'
@@ -36,10 +36,10 @@ import { meleeIntentTurn, creeperFleeTurn, steerTurn, edgeTurn, unblockTurn, exi
 
 // Ход боя — ступени по порядку (pvp/turn.ts: протокол ответа ступени).
 const TURN: Array<(ctx: DuelCtx, turn: TurnFrame) => any> = [
-  targetTurn, measureTurn, safetyTurn, skySenseTurn, braceReleaseTurn, skyDefenseTurn, blastRetreatTurn,
+  targetTurn, measureTurn, safetyTurn, skySenseTurn, braceReleaseTurn, skyDefenseTurn, webTurn, blastRetreatTurn,
   pearlResponseTurn, flightTurn, recoverTurn, foeReadTurn, fightGraphTurn, noteSightTurn, postureTurn, holdArenaTurn,
   mobDetourTurn, arenaClimbTurn, maceDefenseTurn, boomDefenseTurn, crystalTurn, dressTurn, rebuffTurn, duoTurn,
-  backAttackerTurn, arrowPickupTurn, terrainTurn, scoopTurn, webTurn, fireTurn, offhandTurn, fortTurn, healTurn,
+  backAttackerTurn, arrowPickupTurn, terrainTurn, scoopTurn, webObstacleTurn, fireTurn, offhandTurn, fortTurn, healTurn,
   lowHpTurn, perchTurn, incomingTurn, dodgeTurn, pitTurn, lanceWebTurn, climbToHimTurn, punishTurn, windPushTurn, glideShotTurn,
   potionFirstTurn, boomOffenseTurn, crossbowTurn, bowTurn, utilTurn, showmanTurn, hiddenFoeTurn, breakUnderTurn,
   counterPillarTurn, standoffTurn, stuckTurn, hopTurn, repositionTurn, flyerTurn, shieldsTurn, farApproachTurn,
@@ -58,10 +58,12 @@ function traceFrame (ctx: DuelCtx, turn: TurnFrame, by: string) {
 }
 
 async function duel (session, ctl, entity, opts: any = {}) {
+  const maceIntent = session.current
   const safety = opts.guard?.safety || require('./combat-safety').watch(session.bot)
   const vision = createLastSeen(session.bot)
   const totem0 = totemMod.snapshot(session.bot)
-  try { return await duelBody(session, ctl, entity, { ...opts, safety, vision, totem0 }) } finally {
+  try { return await duelBody(session, ctl, entity, { ...opts, safety, vision, totem0, maceIntent }) } finally {
+    if (session.bot?._ndMaceDefense?.ctl === ctl) delete session.bot._ndMaceDefense
     vision.close()
     if (!opts.guard?.safety) safety.close()
   }

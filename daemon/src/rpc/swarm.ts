@@ -112,7 +112,7 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
         if (!patched && !safe.aborted) await S.swarmHold(session, safe, p)
       }
       return inspect() || { camp: 'hold', patched, sealed: F.enclosure(bot, box.cell).sealed }
-    }, { timeoutMs: p.camp === true ? 12000 : 5000, interruptOn: ['death', 'kicked', 'disconnected'] }),
+    }, { timeoutMs: p.camp === true ? 12000 : p.whileSmash || p.whileDraw ? 21000 : 5000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     swarm_pillar: async (p: any = {}) => session.runIntent('swarm_pillar', ctl => require('../swarm-position-work').swarmPillar(session, ctl, p), { timeoutMs: 30000, interruptOn: ['death', 'kicked', 'disconnected'] }),
     swarm_keep: async (p: any = {}) => session.immediate(async () => {
       if (p.cells !== undefined && (!Array.isArray(p.cells) || p.cells.length > 4096)) return { ok: false, why: 'invalid_cells' }
@@ -135,6 +135,7 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
     assist: async (p) => session.runIntent('assist', (ctl) => require('../pvp/team-assist').assist(session, p || {}, ctl), { timeoutMs: p?.mode === 'deny' || p?.mode === 'pickup' ? 9000 : 5000, params: p || {}, interruptOn: ['death', 'kicked', 'disconnected'] }),
     team_hint: async (p) => session.immediate(async () => require('../pvp/team-assist').hint(session, p || {})),
     fight_yield: async (p) => ({ status: 'done', detail: require('../combat').requestStrategicYield(session, p || {}), events: [], state: session.state() }),
+    fight_guard: async (p) => ({ status: 'done', detail: require('../combat').requestFightGuard(session, p || {}), events: [], state: session.state() }),
     // Выпить баффы, которых на мне нет (арена 10.10: «пусть ускоряются жёстко и мочат»; в рюкзаках по 2–6 зелий, бой их
     // не пил). Зелье узнаётся по potion_contents (pvp.potionOf): скорость — swiftness, сила — strength, реген, огнестойкость.
     drink_buffs: async (p) => session.immediate(async () => {

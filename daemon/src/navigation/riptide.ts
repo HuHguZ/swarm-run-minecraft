@@ -1,7 +1,9 @@
 import { Vec3 } from 'vec3'
-import { bodyClear, supportAt, verticalLift, type Point } from './geometry'
+import { bodyBox, bodyClear, intersects, supportAt, verticalLift, type Point } from './geometry'
 import { landingDamage } from './landing'
 import { executePlan, forecastOwner, IDLE, planImpulseLanding, planImpulseLandingAsync, simulatePlan, type Cancellation, type JumpPlan, type MovementBot, type State, type Step, type WaterLaunch } from './parkour'
+import { hitboxOf } from '../pick'
+import { visibleAllies, allyAt, allyWorld } from '../combat/ally-safety'
 
 interface RiptideItem { name: string; durabilityUsed?: number; maxDurability?: number }
 export interface RiptideBot extends MovementBot {
@@ -44,7 +46,10 @@ function riptideStart(bot: MovementBot, level: number, yaw: number, pitch: numbe
 export function planRiptide(bot: MovementBot, level: number, yaw: number, pitch: number, target?: Point, initial?: State): RiptidePlan | null {
   const start = riptideStart(bot, level, yaw, pitch, initial)
   if (!start) return null
-  const plan = planImpulseLanding(bot, start.state, target)
+  // ponytail: флаг на боте, а не параметр сквозь runRiptide — связка «Тягун → булава» (utility/fight riptideSmash) разрешает
+  // посадку с уроном (удар булавой гасит падение) и забирает полёт после взлёта; параметр — если появится второй такой вызов.
+  const mace = (bot as any)._ndRiptideMace as { maxDamage: number } | undefined
+  const plan = planImpulseLanding(bot, start.state, target, 160, mace ? { maxDamage: mace.maxDamage } : undefined)
   return plan ? { ...plan, lift: start.lift, impulse: start.impulse } : null
 }
 
@@ -71,6 +76,48 @@ function motionPlan(bot: MovementBot, steps: Step[], initial?: State): JumpPlan 
   return safe ? { steps, states, ticks: steps.length, target: { ...state.pos } } : null
 }
 const idleSteps = (bot: MovementBot, ticks: number): Step[] => Array.from({ length: ticks }, () => ({ yaw: bot.entity.yaw, control: IDLE }))
+
+// LivingEntity.checkAutoSpinAttack uses AABB.minmax(previous,current), not a point ray or capsule.
+// Unknown allied HP cannot buy the native 8 raw damage. Predict the full 20 attack ticks at release.
+function alliedSpinSafe(bot: MovementBot, level: number, yaw: number, pitch: number, plan: RiptidePlan): boolean {
+  const allies = visibleAllies(bot)
+  if (!allies.length) return true
+  const sight = allyWorld(bot) as MovementBot, start = riptideStart(sight, level, yaw, pitch)
+  if (!start) return false
+  const frames: Vec3[][] = []
+  for (const steps of [Array.from({ length: 20 }, (_, i) => plan.steps[i] || { yaw, control: IDLE }), idleSteps(bot, 20)]) {
+    const path: Vec3[] = []
+    simulatePlan(sight, steps, state => path.push(state.pos.clone()), start.state)
+    frames.push(path)
+  }
+  const pending: Vec3[] = []
+  simulatePlan(sight, idleSteps(bot, 20), state => pending.push(state.pos.clone()), new PlayerState(sight, IDLE))
+  frames.push(pending)
+  const clear = (points: Vec3[], fromTick: number, toTick: number) => {
+    const own = bodyBox(sight, points[0])
+    for (const p of points.slice(1)) {
+      const next = bodyBox(sight, p)
+      for (const axis of ['X', 'Y', 'Z']) { own[`min${axis}`] = Math.min(own[`min${axis}`], next[`min${axis}`]); own[`max${axis}`] = Math.max(own[`max${axis}`], next[`max${axis}`]) }
+    }
+    for (const ally of allies) {
+      const box = hitboxOf(bot, ally), a = allyAt(bot, ally, fromTick), b = allyAt(bot, ally, toTick)
+      // An observed obstacle or later input can stop the ally along its current velocity forecast.
+      const feet = [ally.position, a, b]
+      const other = { minX: Math.min(...feet.map(p => p.x)) - box.w / 2, maxX: Math.max(...feet.map(p => p.x)) + box.w / 2,
+        minY: Math.min(...feet.map(p => p.y)), maxY: Math.max(...feet.map(p => p.y)) + box.h,
+        minZ: Math.min(...feet.map(p => p.z)) - box.w / 2, maxZ: Math.max(...feet.map(p => p.z)) + box.w / 2 }
+      if (intersects(own, other)) return false
+    }
+    return true
+  }
+  if (!clear([bot.entity.position, start.state.pos], 0, 0)) return false
+  for (let tick = 1; tick <= 20; tick++) {
+    const points = frames.flatMap(path => [tick === 1 ? start.state.pos : path[tick - 2], path[tick - 1]])
+    // Before the receipt, runtime sends a no-impulse coast; also bound received push and the landing controller.
+    if (points.some(p => !bodyClear(sight, p, { water: true })) || !clear(points, tick - 1, tick)) return false
+  }
+  return true
+}
 
 /** A few native launch angles to one observed target; no item use or actual controls. */
 export async function planRiptideTo(bot: MovementBot, ctl: Cancellation, level: number, target: Point, wet: (state?: State) => boolean): Promise<{ yaw: number; pitch: number; plan: RiptidePlan } | null> {
@@ -182,16 +229,37 @@ export async function runRiptide(bot: RiptideBot, ctl: Cancellation, item: Ripti
     const releaseFrom = bot.entity.position.clone()
     boundaryOwner = forecastOwner(releaseFrom, hp, boundary.pos)
     bot._ndParkourForecast = boundaryOwner
+    // Charge/landing controllers use a neutral pitch; restore the validated launch before its packet boundary.
+    await bot.look(yaw, pitch, true)
+    let alliedCollision = false, releaseAimChanged = false
+    // Прицел боя (ctx.aim) за тот же тик поворачивает к врагу поверх нашего взгляда — выпуск со сбитым взглядом не шлём, а
+    // повторяем на следующих тиках (стенд 24.10: «Тягун» в бою срывался riptide_release_aim_changed почти каждый раз).
+    for (let tries = 0; tries < 4 && !released && !alliedCollision && !ctl.aborted; tries++) {
+    releaseAimChanged = false
     await releaseAtTick(() => {
       // Some callers are already on the sent frame; utility.onTickThen waits
       // one real tick. Accept only those two observed native positions.
       if (ctl.aborted || (bot.health ?? hp) < hp || !wet() || Math.min(bot.entity.position.distanceTo(releaseFrom), bot.entity.position.distanceTo(boundary.pos)) > .1) return
-      if (!planRiptide(bot, level, yaw, pitch, target)) return
+      const actualImpulse = riptideImpulse(level, bot.entity.yaw, bot.entity.pitch), intendedImpulse = riptideImpulse(level, yaw, pitch)
+      if (!actualImpulse || !intendedImpulse) { releaseAimChanged = true; return }
+      if (actualImpulse.distanceTo(intendedImpulse) > 1e-5) {
+        // Чужой поворот (прицел, щит, рефлексы) успел в пакет этого тика. Сервер берёт угол рывка из последнего пакета
+        // поворота (TridentItem.releaseUsing → getYRot/getXRot), так что свой пакет look прямо перед выпуском возвращает
+        // проверенный угол — без лишнего тика (повтор тиками срывался: стенд 24.10, 2 из 2 со страховкой).
+        const conv = require('mineflayer/lib/conversions')
+        bot.entity.yaw = yaw; bot.entity.pitch = pitch
+        try { (bot._client as any).write('look', { yaw: Math.fround(conv.toNotchianYaw(yaw)), pitch: Math.fround(conv.toNotchianPitch(pitch)), onGround: bot.entity.onGround, flags: { onGround: bot.entity.onGround, hasHorizontalCollision: false } }) } catch { releaseAimChanged = true; return }
+      }
+      const current = planRiptide(bot, level, yaw, pitch, target)
+      if (!current) return
+      if (!alliedSpinSafe(bot, level, yaw, pitch, current)) { alliedCollision = true; return }
       releaseState = { pos: { ...bot.entity.position }, velocity: { ...bot.entity.velocity }, onGround: bot.entity.onGround, isInWater: bot.entity.isInWater }
       releaseServerAt = bot.ndClock?.serverNow()
       released = true; bot.deactivateItem()
     })
-    if (!released) return { ok: false, why: 'riptide_release_not_sent', ticks: charged }
+    if (!releaseAimChanged) break
+    }
+    if (!released) return { ok: false, why: alliedCollision ? 'riptide_allied_spin_collision' : releaseAimChanged ? 'riptide_release_aim_changed' : 'riptide_release_not_sent', ticks: charged }
     if (!accepted) {
       // The server receipt may arrive several real movement frames after the
       // release. Keep the same controller owning a separately validated coast;
@@ -210,6 +278,7 @@ export async function runRiptide(bot: RiptideBot, ctl: Cancellation, item: Ripti
     bot.entity.position.y += forecast.lift
     bot.entity.velocity = bot.entity.velocity.plus(forecast.impulse)
     if (forecast.lift > 0) bot.entity.onGround = false
+    if ((bot as any)._ndRiptideMace) return { ok: true, handedOff: true, level, strength: 1.5 + .75 * (level - 1), chargedTicks: charged, serverSpin: true, ticks: charged, moved: 0 } as any
     const result = await executePlan(bot, ctl, forecast, state => {
       const last = forecast!.states[forecast!.states.length - 1]
       return state.pos.distanceTo(last.pos) < .3 && (state.onGround || state.isInWater) && bodyClear(bot, state.pos, { water: true })
@@ -223,3 +292,42 @@ export async function runRiptide(bot: RiptideBot, ctl: Cancellation, item: Ripti
     if (!released) { try { bot.setQuickBarSlot((bot.quickBarSlot + 1) % 9) } catch {} }
   }
 }
+
+/** Steep riptide arc onto a target for the riptide → mace combo: plain player ballistics after the native impulse + 1.2 lift
+ * (gravity .08, drag .98, air ×.91). Of the arcs whose fall passes over him (≤ 2.5 bl.) at least 5.8 above his feet, the
+ * lowest: a miss costs the fall (fallDistance − 3), so maxApex caps it. Riptide III is 3 bl./t — to land within 14 bl. it goes
+ * 33–38 up, a miss is death; Riptide I lands 5–11 bl. away from 6–12 up.
+ * ponytail: без заряда ветра под себя в падении (сброс fallDistance) — с ним годились бы и высокие дуги II–III. */
+export function riptideArc(level: number, from: Point, target: Point, maxApex = Infinity) {
+  return riptideArcs(level, from, target, maxApex, [0])[0] ?? null
+}
+/** All acceptable arcs, the course also turned by the given offsets (around allies in the spin path): lowest first per course. */
+export function riptideArcs(level: number, from: Point, target: Point, maxApex = Infinity, turns = [0, .25, -.25, .5, -.5]) {
+  const direct = Math.atan2(-(target.x - from.x), -(target.z - from.z)), out: { yaw: number; pitch: number; miss: number; apex: number }[] = []
+  for (const turn of turns) {
+    const yaw = direct + turn
+    let best: { yaw: number; pitch: number; miss: number; apex: number } | null = null
+    for (let pitch = 1.4; pitch >= .3; pitch -= .05) {
+      const v0 = riptideImpulse(level, yaw, pitch)
+      if (!v0) continue
+      let p = { x: from.x, y: from.y + 1.2, z: from.z }, v = { x: v0.x, y: v0.y, z: v0.z }, apex = p.y, miss = Infinity
+      for (let t = 0; t < 80; t++) {
+        p = { x: p.x + v.x, y: p.y + v.y, z: p.z + v.z }; v = { x: v.x * .91, y: (v.y - .08) * .98, z: v.z * .91 }
+        apex = Math.max(apex, p.y)
+        if (v.y < 0 && p.y <= target.y + 2.5) { miss = Math.hypot(p.x - target.x, p.z - target.z); break }
+      }
+      const high = apex - target.y
+      if (high >= 5.8 && high <= maxApex && miss <= 2.5 && (!best || high < best.apex)) best = { yaw, pitch, miss, apex: high }
+    }
+    if (best) out.push(best)
+  }
+  return out
+}
+/** Pre-launch check of one arc: a safe native landing (with the mace allowance on the bot) and no ally in the spin path. */
+export function riptideArcSafe(bot: MovementBot, level: number, yaw: number, pitch: number) {
+  // Без цели посадки — как сам рывок связки (runRiptide из utility/fight без target).
+  const plan = planRiptide(bot, level, yaw, pitch)
+  if (!plan) return 'посадки нет'
+  return alliedSpinSafe(bot, level, yaw, pitch, plan) ? null : 'свой на пути'
+}
+

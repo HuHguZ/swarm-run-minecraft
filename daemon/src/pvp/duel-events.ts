@@ -14,11 +14,13 @@ import { findItem, potionOf } from './potions'
 import { ANGRY_IF_HIT, EYE, HOSTILE_MOB, TICK_MS, isPlayer } from './rules'
 import { Vec3 } from './vec3'
 import { type DuelCtx } from './turn'
+import { isAlly } from '../combat/ally-safety'
 
 // Удары и смерти, другие нападающие, мобы, двое на одного, утилиты, фаерболы, его лук.
 export function installEvents (ctx: DuelCtx) {
   const { attackers, bot, bowWatch, ctl, dead, mobHits, noteExchange, session, st, swatted, tt, used, vision } = ctx
   const onHurt = ctx.onHurt = (victim, source) => {
+    if (isAlly(bot, source) || isAlly(bot, victim)) return
     if (victim?.id === ctx.entity.id) { ctx.targetHurtAt = gameClock.now(); ctx.targetHurtBy = source ? (source.id === bot.entity?.id ? bot.username : source.username || null) : null; ctx.strikeSlotAt = 0 }
     if (source && bot.entity && ((victim?.id === ctx.entity.id && source.id === bot.entity.id) || (victim === bot.entity && source.id === ctx.entity.id))) noteExchange()
     if (victim?.id === ctx.entity.id && source === bot.entity) {
@@ -39,7 +41,7 @@ export function installEvents (ctx: DuelCtx) {
     let best = null
     for (const [id, a] of attackers) {
       const e = vision.observe(a.e)
-      if (now - a.at > 4000 || !e || !vision.visible(e) || e.isValid === false || dead.has(id) || lookDead(bot, e) || e.id === ctx.entity.id) continue
+      if (now - a.at > 4000 || !e || !vision.visible(e) || e.isValid === false || dead.has(id) || isAlly(bot, e) || lookDead(bot, e) || e.id === ctx.entity.id) continue
       const dist = e.position.distanceTo(bot.entity.position)
       if (dist > 14) continue
       const score = (now - a.at) / 1000 + dist / 3 - a.n * 0.3
@@ -49,7 +51,7 @@ export function installEvents (ctx: DuelCtx) {
   }
   const onDead = ctx.onDead = (e) => {
     if (e) dead.add(e.id)
-    if (e?.id === ctx.entity.id) {
+    if (e?.id === ctx.entity.id && !isAlly(bot, e)) {
       ctx.killed = true
       if (ctx.lastStand) session.bus?.emit('last_stand_kill', { target: ctx.entity.id, swings: st.swings, landed: st.landed, health: bot.health })
     }

@@ -382,7 +382,7 @@ const unblockPath = async () => {
     return false
   }
 
-const digWatch = async (block, abortIf) => {
+const digWatch = async (block, abortIf, forceLook = true) => {
     let why = null
     const plan = ctx.tools.bestFor(ctx.bot, block)
     const iv = ctx.gameClock.setInterval(() => {
@@ -390,7 +390,7 @@ const digWatch = async (block, abortIf) => {
       const w = abortIf()
       if (w) { why = w; try { ctx.bot.stopDigging() } catch {} }
     }, ctx.TICK_MS)
-    try { await ctx.withTimeout(ctx.bot.dig(block, true), (Number.isFinite(plan.ms) ? plan.ms : 1000) + 500) } catch {} finally { ctx.gameClock.clearInterval(iv) }
+    try { await ctx.withTimeout(ctx.bot.dig(block, forceLook), (Number.isFinite(plan.ms) ? plan.ms : 1000) + 500) } catch {} finally { ctx.gameClock.clearInterval(iv) }
     return why
   }
 return { bucketLanding, useOnGroundAt, scoop, towerShield, hazardOnLine, unblockPath, digWatch }

@@ -2,6 +2,7 @@
 // RPC демона — полёт и рывки: элитры, ветер, жемчуг, спасение.
 // Фабрика методов над контекстом демона (rpc/context.ts); обработчики перенесены из src/index.ts.
 import type { RpcContext } from './context'
+import { LAUNCH_BACK } from '../mace/consts'
 
 function aerialMethods ({ session }: RpcContext) {
   const methods = {
@@ -24,6 +25,20 @@ function aerialMethods ({ session }: RpcContext) {
         const hpBefore = bot.health
         const minFloorY = Number.isFinite(p.killY) ? p.killY + 1 : -Infinity
         const rescueCtl = sky.flightControl(bot, ctl)
+        // В яме у врага сухой пол ещё не спасение: с ракетой и открытым верхом уходим вверх и прочь.
+        if (k.rockets > 0 && sky.headroom(W, bot.entity.position, 6) >= 4) {
+          const sight = require('../pvp/last-seen').createLastSeen(bot)
+          try {
+            const foe = (session._ndFoes || []).map(name => sight.observe(bot.players?.[name]?.entity))
+              .filter(e => e && sight.visible(e)).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
+            if (foe) {
+              const r = await sky.escape(bot, rescueCtl, foe, { arena: p.arena ? { ...p.arena, y: t.y } : null })
+              const ok = !!r.ok && (bot.health ?? 0) > 0 && !rescueCtl.aborted
+              return { ...r, ok, why: ok ? null : (bot.health ?? 0) <= 0 ? 'death' : rescueCtl.aborted ? 'flight_superseded' : r.note,
+                hp: Math.round(hpBefore - bot.health) }
+            }
+          } finally { sight.close() }
+        }
         const pickLanding = () => sky.landingSpot(bot, W, {
           near: bot.entity.position, floorY: Math.max(bot.entity.position.y, t.y), depth: 80, minFloorY,
           inside: (x, z) => inside({ x, y: bot.entity.position.y, z })
@@ -145,7 +160,9 @@ function aerialMethods ({ session }: RpcContext) {
       try { r = await require('../combat/flight-route').runFlightRoute(session, ctl, { gates, landing, timeoutSeconds: p.timeoutSeconds ?? 20, arena: p.arena }) } catch (e: any) { r = { ok: false, stopped: e.message } }
       try { if (!sky.gliding(bot.entity) && sky.wearingElytra(bot)) await sky.swapChest(bot, 'chest') } catch {}
       // Дальше пешком — боем драйвера (fight сам идёт к цели); goto отсюда ждал бы конца этого же полёта.
-      return { ok: !!r?.ok, walkIn, why: r?.stopped || null, landing, ridge: Math.round(ridge.y), cruise: Math.round(cruise), hp: r?.hpBefore != null ? Math.round(r.hpBefore - r.hp) : null }
+      return { ok: !!r?.ok, walkIn, why: r?.stopped || null, at: { ...bot.entity.position },
+        landing: r?.landing || null, ground: r?.ground || null, plannedLanding: landing, landingError: r?.landingError ?? null,
+        ridge: Math.round(ridge.y), cruise: Math.round(cruise), hp: r?.hpBefore != null ? Math.round(r.hpBefore - r.hp) : null }
     }, { timeoutMs: ((p.timeoutSeconds ?? 20) + 10) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Только таран копьём по игроку target (сцена pvp/try-lance: точность захода без выбора хода боя): passes заходов,
     // итог каждого — по used(), касания — его damage_event с причиной «я» за весь таран (не только пока копьё в деле).
@@ -161,7 +178,7 @@ function aerialMethods ({ session }: RpcContext) {
       const passes: string[] = []
       const hurts: number[] = []
       const clock = require('../game-clock')
-      const onHurt = (pk: any) => { if (bot.entity && L.ownHit(pk, bot.entity.id, e.id)) hurts.push(clock.now()) }
+      const onHurt = (pk: any) => { if (bot.entity && L.ownSpearHit(pk, bot.entity.id, e.id)) hurts.push(clock.now()) }
       bot._client.on('damage_event', onHurt)
       const used = (s: string) => { const m = /^элитры: таран(?: копьём)? — (.+?)(?: \(план.*)?$/.exec(s); if (m && m[1] !== 'разбег') passes.push(m[1]) }
       try {
@@ -172,6 +189,9 @@ function aerialMethods ({ session }: RpcContext) {
     ledge_to: async (p: any = {}) => session.runIntent('ledge_to', ctl => require('../navigation/parkour').ledgeTo(session, ctl, p), { timeoutMs: Math.max(1, Math.min(20, p.timeoutSeconds ?? 8)) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     wind_receive: async (p: any = {}) => session.runIntent('wind_receive', ctl => require('../combat/team-wind').windReceive(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     wind_boost: async (p: any = {}) => session.runIntent('wind_boost', ctl => require('../combat/team-wind').windBoost(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    wind_report: async (p: any = {}) => ({ status: 'done', detail: p.pairProgress ? await require('../combat/team-wind').windPairProgress(session, p) : require('../combat/enemy-wind-execute').enemyWindReport(session, p), events: [], state: session.state() }),
+    enemy_wind_plan: async (p: any = {}) => ({ status: 'done', detail: await require('../combat/enemy-wind-execute').enemyWindPlan(session, p), events: [], state: session.state() }),
+    wind_out: async (p: any = {}) => session.runIntent('wind_out', ctl => require('../combat/enemy-wind-execute').enemyWindExecute(session, ctl, p), { exclusive: false, timeoutMs: 5000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Прыжок на заряде ветра в точку (wind-leap.ts): to — клетка, куда встать (ноги); dryRun — только план.
     wind_leap: async (p: any = {}) => session.runIntent('wind_leap', async (ctl) => {
       session.require()
@@ -185,6 +205,8 @@ function aerialMethods ({ session }: RpcContext) {
     rescue_config: async (p: any = {}) => {
       session._rescue = p.off ? null : { safe: p.safe, killY: Number(p.killY), arena: p.arena }
       const bot = session.bot
+      // Реактивный сброс ветром живёт там же, где знание арены и линии смерти (rescue_config раз в 20 с всем ботам).
+      if (bot && p.arena && !p.off) require('../combat/wind-out').installWindOut(session)
       if (bot && !bot._ndRescue) {
         require('../elytra').install(bot)
         bot._ndRescue = true
@@ -226,6 +248,8 @@ function aerialMethods ({ session }: RpcContext) {
       try {
         const e = sight.observe(bot.players?.[p.target]?.entity)
         if (!e || !sight.visible(e)) return { ok: false, fired: false, why: 'цель не видна' }
+        // Принудительный толчок команды тоже бессмыслен в паутине (q8): её сперва разбирают.
+        if ([0, 1].some(dy => bot.blockAt(e.position.offset(0, dy, 0).floored())?.name === 'cobweb')) return { ok: false, fired: false, why: 'цель в паутине' }
         // Всплеск — 2.4 бл. от точки у его ног: свой рядом с целью улетит вместе с ней (DeepSeek, разбор сброса 21.10).
         if ((p.allies || []).some((n: string) => { const a = bot.players?.[n]?.entity; return a && a.position.distanceTo(e.position) < 3 })) return { ok: false, fired: false, why: 'свой у цели' }
         const mace = require('../mace')
@@ -235,10 +259,12 @@ function aerialMethods ({ session }: RpcContext) {
       } finally { sight.close() }
     }, { timeoutMs: 3000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Прыжок на заряде ветра (10.10: «зарядами ветра передвигаться — подкидывать себя, убегать, подниматься высоко»):
-    // up — заряд под ноги в прыжке (вверх ~7 бл.); toward {x,z} — разбег к точке, в прыжке заряд под ноги чуть позади:
+    // up — заряд строго под ноги и сразу прыжок; toward {x,z} — разбег к точке, в прыжке заряд под ноги чуть позади:
     // взрыв толкает вперёд и вверх. Перезарядка заряда 10 тиков; times ≤ 3 подряд.
     wind_jump: async (p) => session.runIntent('wind_jump', async (ctl) => {
       const bot = session.require()
+      const wind = require('../mace/hands') as typeof import('../mace/hands')
+      wind.install(bot)
       const n = Math.max(1, Math.min(3, p?.times ?? 1))
       let used = 0
       const y0 = bot.entity.position.y
@@ -253,38 +279,31 @@ function aerialMethods ({ session }: RpcContext) {
         const wc = bot.inventory.items().find(i => i.name === 'wind_charge')
         if (!wc) break
         await bot.equip(wc, 'hand')
+        bot.clearControlStates()
         let yaw = bot.entity.yaw
         if (p?.toward) {
           const dx = p.toward.x - bot.entity.position.x; const dz = p.toward.z - bot.entity.position.z
           yaw = Math.atan2(-dx, -dz)
           await bot.look(yaw, 0, true)
-          bot.setControlState('sprint', true); bot.setControlState('forward', true)
-          await bot.waitForTicks(3)
-        }
-        bot.setControlState('jump', true)
-        await bot.waitForTicks(2)
-        bot.setControlState('jump', false)
-        // Вниз (вверх — строго под ноги; вперёд — под ноги, чуть за спину).
-        // up — строго под ноги (подъём на ярус: вверх ~7 бл., в полёте — вперёд к цели); иначе — под ноги чуть за спину.
+          if (!p.up) {
+            bot.setControlState('sprint', true); bot.setControlState('forward', true)
+            await bot.waitForTicks(3)
+          } else await bot.waitForTicks(1)
+        } else await bot.waitForTicks(1) // Отпустить прежний автопрыжок перед отрывом.
         const flat = p?.toward && !p?.up
-        // Заряд — только в опору (13.10: «себе под ноги — только когда есть опора, а так пулял в никуда»): луч взгляда до
-        // первого твёрдого блока в 3.5 бл., точка удара не дальше 2.3 от ног (всплеск достаёт до 2.4); за спиной пусто —
-        // строго вниз; и там нет — не бросать.
-        const burstAt = (yw, pt) => {
-          const e = bot.entity.position.offset(0, 1.62, 0); const d = { x: -Math.sin(yw) * Math.cos(pt), y: Math.sin(pt), z: -Math.cos(yw) * Math.cos(pt) }
-          for (let s = 0.2; s <= 3.5; s += 0.1) {
-            const q = e.offset(d.x * s, d.y * s, d.z * s); const b = bot.blockAt(q.floored())
-            if (b && b.boundingBox === 'block') return q.distanceTo(bot.entity.position) <= 2.3 ? q : null
-          }
-          return null
-        }
-        let ly = flat ? yaw + Math.PI : yaw; let lp = flat ? -1.25 : -Math.PI / 2
-        if (!burstAt(ly, lp)) { ly = yaw; lp = -Math.PI / 2 }
-        if (!burstAt(ly, lp)) { bot.setControlState('sprint', false); bot.setControlState('forward', false); return { used, rise: 0, why: 'нет опоры для заряда' } }
-        await bot.look(ly, lp, true)
-        bot.activateItem(); used++
-        if (p?.toward) { await bot.waitForTicks(2); await bot.look(yaw, 0, true); bot.setControlState('forward', true); bot.setControlState('sprint', true) }
-        await bot.waitForTicks(10)
+        if (flat) bot.setControlState('jump', true)
+        // Вверх — бросок с земли и сразу прыжок; по ходу — на первом тике спринт-отрыва.
+        const fired = await wind.fireWind(bot, moved => !ctl.aborted &&
+          (wind.selfWindAim(bot, { moved, yaw, back: flat ? LAUNCH_BACK : 0 }) || wind.selfWindAim(bot, { moved })), {
+          hand: 'main', before: () => { bot.setControlState('jump', !flat && bot.entity.onGround); bot.setControlState('forward', false); bot.setControlState('sprint', false) }
+        })
+        if (fired.fired && !flat) await wind.nextTick(bot)
+        bot.setControlState('jump', false)
+        if (!fired.fired) return { used, rise: 0, why: fired.why }
+        used++
+        await bot.waitForTicks(Math.max(0, fired.shot.ticks - (flat ? 0 : 1)))
+        if (p?.toward) { await bot.look(yaw, 0, true); bot.setControlState('forward', true); bot.setControlState('sprint', true) }
+        await bot.waitForTicks(Math.max(0, 10 - fired.shot.ticks))
       }
       bot.setControlState('sprint', false); bot.setControlState('forward', false)
       for (let t = 0; t < 40 && !bot.entity.onGround && !ctl.aborted; t++) await bot.waitForTicks(1)

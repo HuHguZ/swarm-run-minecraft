@@ -125,6 +125,45 @@ function occupiedByEntity (bot, pos) {
   return null
 }
 
+// shortcut: проверяем выход за две клетки, дальние тупики потребуют общего графа виденных проходов.
+function alliedExitBlocked (bot, pos, item = bot.heldItem?.name, allies = bot._ndSwarmAllies || []) {
+  if (!allies.length) return null
+  const def = bot.registry?.blocksByName?.[item]
+  if (!def || def.boundingBox !== 'block') return null
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))(bot.registry)
+  const placed = Block.fromStateId(def.defaultState, 0)
+  // Лестница и прочие неполные формы не заменяются выдуманным полным кубом.
+  if (!placed.shapes.some(s => s.every((v, i) => v === (i < 3 ? 0 : 1)))) return null
+  placed.position = pos
+  const { seesPlayer }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
+  const { observedCollision }: typeof import('./pvp/search') = require('./pvp/search')
+  const { standPositions, bodyClear }: typeof import('./navigation/geometry') = require('./navigation/geometry')
+  const nearby = [bot.entity, ...(Object.values(bot.entities || {}) as any[]).filter(e => e !== bot.entity)].filter(e => e?.position &&
+    (e === bot.entity || allies.includes(e.username)) && Math.abs(e.position.x - pos.x - .5) <= 2 &&
+    Math.abs(e.position.z - pos.z - .5) <= 2 && Math.abs(e.position.y - pos.y) <= 3 && (e === bot.entity || seesPlayer(bot, e)))
+  if (!nearby.length) return null
+  const observed = observedCollision(bot), after = { ...observed, blockAt: p => p.floored().equals(pos) ? placed : observed.blockAt(p) }
+  const exit = (world, start) => {
+    const queue = [start], visited = new Set([`${Math.floor(start.x)},${start.y},${Math.floor(start.z)}`])
+    for (let i = 0; i < queue.length && i < 128; i++) {
+      const from = queue[i]
+      if (Math.max(Math.abs(Math.floor(from.x) - Math.floor(start.x)), Math.abs(Math.floor(from.z) - Math.floor(start.z))) >= 2) return true
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        for (const to of standPositions(world, from.offset(dx, 0, dz), { rise: 1.25, drop: 3 })) {
+          const key = `${Math.floor(to.x)},${to.y},${Math.floor(to.z)}`
+          if (visited.has(key)) continue
+          const y = Math.max(from.y, to.y)
+          if (![0, .5, 1].every(t => bodyClear(world, new Vec3(from.x + (to.x - from.x) * t, y, from.z + (to.z - from.z) * t)))) continue
+          visited.add(key); queue.push(to)
+        }
+      }
+    }
+    return false
+  }
+  for (const ally of nearby) if (exit(observed, ally.position) && !exit(after, ally.position)) return ally === bot.entity ? bot.username || 'себе' : ally.username
+  return null
+}
+
 function isFree (block) {
   return !!block && block.boundingBox === 'empty' && !/lava/.test(block.name)
 }
@@ -186,6 +225,8 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   const cannot = await holdFiller(bot, item, steady)
   if (cannot) return { ok: false, reason: cannot }
   if (ctl?.aborted) return { ok: false, reason: 'прервано' }
+  const trapped = alliedExitBlocked(bot, pos)
+  if (trapped) return { ok: false, reason: `перекрою последний выход своему ${trapped}` }
 
   const first = await againstFaces(bot, pos, timeoutMs, { honest, exactAim, ctl })
   if (first.ok) return first
@@ -604,9 +645,9 @@ async function escapePit (bot, ctl, { maxClimb = 24, mcData = null, session = nu
 
 module.exports = {
   FACES, FILLER, FALLING, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
-  isFree, occupiedByEntity, inPit, escapePit
+  isFree, occupiedByEntity, alliedExitBlocked, inPit, escapePit
 }
 export {
   FACES, FILLER, FALLING, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
-  isFree, occupiedByEntity, inPit, escapePit
+  isFree, occupiedByEntity, alliedExitBlocked, inPit, escapePit
 }

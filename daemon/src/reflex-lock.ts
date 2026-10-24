@@ -107,6 +107,13 @@ function take (s) {
 const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|clear_water|wind_jump|pearl_to|fly_to|lance|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
 // Подъём к цели (goto climb, Codex 15.10): щит и бой тактики от летящего трезубца не отбирают ноги — «лезу к RedTest1 —
 // The goal was changed» на каждом броске. Аварии (падение, лава, мало хп, застрял в блоке, взрыв) — как раньше.
+// Щит к падающему с булавой (swarm_hold whileSmash) — тоже приказ: тактика рвала стойку («cancelled by tactical»), и удар сверху
+// приходил в открытого (игра пользователя 23.10, 31ab: щит снят за 3.35 с, через 2 с — smashed).
+function shieldHold (s) {
+  const c = s.current, defense = s.bot?._ndMaceDefense
+  return !c?.ctl?.aborted && (c?.name === 'swarm_hold' && !!(c.params?.whileSmash || c.params?.whileDraw) ||
+    c?.name === 'fight' && defense?.current === c && !!defense.ctl && !defense.ctl.aborted && defense.until > gameClock.now())
+}
 function protectedClimb (s) {
   const c = s.current, h = s.tactics?.snapshot?.()?.state
   return (c?.name === 'goto' && !!c.params?.climb || c?.name === 'swarm_work' && c.params?.kind === 'dig' && !!c.params?._climb) && !c.ctl?.aborted && (s.bot?.health ?? 0) > (s.cfg?.lowHealth ?? 8) && !!h &&
@@ -115,7 +122,7 @@ function protectedClimb (s) {
 function start (s, fn, { triggerAt = gameClock.now(), source = 'melee', owner = 'Tactical', priority = 2, preempt = false, immediate = false }: any = {}) {
   install(s)
   const st = state(s)
-  if (owner !== 'Emergency' && s.current && !s.current.ctl?.aborted && (COMMANDED_ESCAPE.test(s.current.name || '') || protectedClimb(s))) return Promise.resolve({ acted: false, cancelled: true, why: 'идёт уворот по приказу' })
+  if (owner !== 'Emergency' && s.current && !s.current.ctl?.aborted && (COMMANDED_ESCAPE.test(s.current.name || '') || protectedClimb(s) || shieldHold(s))) return Promise.resolve({ acted: false, cancelled: true, why: 'идёт уворот по приказу' })
   if (st.active) {
     if (!preempt || st.active.priority > priority) return s.reflex
     st.active.ctl.abort()
@@ -274,6 +281,9 @@ function install (s) {
   if (!b || b._ndReflexLock) return
   b._ndReflexLock = true
   b._ndReflexSession = s
+  // Примесь клавиш внутри ограды: запоздалое действие не меняет ввод, а аварийный владелец выключает уворот сразу.
+  if (typeof b.setControlState === 'function' && typeof b.getControlState === 'function')
+    (require('./projectile-evasion') as typeof import('./projectile-evasion')).install(s, () => !state(s).active && allowed(s))
   const wrapAsync = (obj, name) => {
     const raw = obj?.[name]
     if (typeof raw !== 'function') return
@@ -322,5 +332,5 @@ function install (s) {
     }
   }
 }
-module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb, keepMagmaSneak }
-export { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb, keepMagmaSneak }
+module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb, shieldHold, keepMagmaSneak }
+export { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb, shieldHold, keepMagmaSneak }

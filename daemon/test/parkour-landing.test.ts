@@ -5,6 +5,8 @@ import { Vec3 } from 'vec3'
 import { EventEmitter } from 'node:events'
 import { repoJson } from '../src/paths'
 import { registry, Block, native, worldOf, drive } from './parkour-fixture'
+// Wall-time planning budget: 180 ms passes alone but times out under the full parallel suite; the search itself is unchanged.
+const PLAN_MS = 1500
 
 test('author checkpoint receipt parses the native 1.21.11 respawn position without treating chat absence as activation failure', () => {
   const { authorRespawn }: typeof import('../scenes/move/try-parkour-map') = require('../scenes/move/try-parkour-map')
@@ -28,7 +30,7 @@ test('hay landing damage uses the collided support and native fallOn multiplier 
   assert.equal(landingDamage(supportAt(bot, new Vec3(3.8, 2, .5), .04).block, 7), 4, 'a higher neighboring collision is the real floor')
   bot.entity.position = new Vec3(.5, 8, .5); bot.entity.velocity.y = -.0784000015258789
   const before = bot.entity.position.clone(); const target = new Vec3(2.5, 1, .5)
-  const options = { allowWalk: true, maxTicks: 38, planningMs: 180 }
+  const options = { allowWalk: true, maxTicks: 38, planningMs: PLAN_MS }
   const plan = await planJumpAsync(bot, { aborted: false }, target, options)
   assert.ok(plan, 'the existing native forecast must preserve a genuinely harmless seven-block hay landing')
   const landed = simulatePlan(bot, plan.steps)
@@ -52,7 +54,7 @@ test('an opt-in controlled hay drop has a real native contact while default, sto
   const cells: Array<[number, number, number, string]> = [[0, 9, 0, 'sand'], [1, 9, 0, 'sand'], [2, 0, 0, 'hay_block']]
   const { bot } = worldOf(cells)
   bot.entity.position = new Vec3(1.63552862687186, 10, .500763381991554); bot.entity.velocity.y = -.0784000015258789
-  const target = new Vec3(2.5, 1, .5); const options = { maxFallDamage: 1, allowWalk: true, planningMs: 180 }
+  const target = new Vec3(2.5, 1, .5); const options = { maxFallDamage: 1, allowWalk: true, planningMs: PLAN_MS }
   assert.equal(await planJumpAsync(bot, { aborted: false }, target, { ...options, maxFallDamage: 0 }), null)
   const plan = await planJumpAsync(bot, { aborted: false }, target, options)
   assert.ok(plan, 'the real nine-block hay shaft needs explicit one-HP permission, not a changed integrator')
@@ -95,7 +97,7 @@ test('controlled deep routing uses an observed open shaft instead of hay behind 
   const drop = route.find((option: any, index: number) => option.target.y < (index ? route[index - 1].target.y : 10) - 3.75)
   assert.equal(drop?.target.x, 3.5, 'the deep edge must enter the loaded open shaft, not the closed target column')
   for (const option of route) {
-    const plan = await planJumpAsync(bot, { aborted: false }, option.target, { allowWalk: true, maxFallDamage: 1, planningMs: 180 })
+    const plan = await planJumpAsync(bot, { aborted: false }, option.target, { allowWalk: true, maxFallDamage: 1, planningMs: PLAN_MS })
     assert.ok(plan, 'each selected approach/drop/walk still needs the existing native forecast')
     ;(plan.states.at(-1) as any).apply(bot)
     if (plan.fall) bot.health -= plan.fall.damage
@@ -123,7 +125,7 @@ test('controlled drop execution accepts only its grounded native fall receipt an
     bot.clearControlStates = () => { control = { ...IDLE } }
     const ctl = { aborted: false, onAbort: [] as Array<() => void> }
     const target = new Vec3(2.5, 1, .5)
-    const plan = await planJumpAsync(bot, ctl, target, { maxFallDamage: 1, allowWalk: true, planningMs: 180 })
+    const plan = await planJumpAsync(bot, ctl, target, { maxFallDamage: 1, allowWalk: true, planningMs: PLAN_MS })
     assert.ok(plan)
     const receipt = () => bot._client.emit('damage_event', { entityId: 1, sourceTypeId: mode === 'foreign' ? 28 : mode === 'unknown' ? 999 : fallType, sourceCauseId: mode === 'foreign' ? 3 : 0, sourceDirectId: 0 })
     bot.waitForTicks = async (ticks: number) => {
@@ -319,7 +321,7 @@ test('an explicit plain-floor fall budget (2..4) takes a 6-block walk-off onto s
   // Cliff top 6 (feet 7) and an island one block lower than 1 HP allows: floor 0 (feet 1), 2.5 blocks out.
   const { bot } = worldOf([[0, 6, 0, 'stone'], [3, 0, 0, 'end_stone'], [4, 0, 0, 'end_stone']])
   bot.entity.position = new Vec3(.5, 7, .5); bot.entity.velocity.y = -.0784000015258789
-  const target = new Vec3(3.5, 1, .5); const options = { allowWalk: true, maxTicks: 38, planningMs: 180 }
+  const target = new Vec3(3.5, 1, .5); const options = { allowWalk: true, maxTicks: 38, planningMs: PLAN_MS }
   assert.equal(await planJumpAsync(bot, { aborted: false }, target, { ...options, maxFallDamage: 1 }), null, 'no mitigator: 1 HP budget refuses a 3 HP landing')
   const plan = await planJumpAsync(bot, { aborted: false }, target, { ...options, maxFallDamage: 3 })
   assert.ok(plan, 'an explicit 3 HP budget accepts the plain-floor drop')

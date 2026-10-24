@@ -54,20 +54,81 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
       const ran = await B.dodgeBlast(session, ctl)
       return ran.cornered && !ctl.aborted && B.shieldableBlast(session.require()) ? { ...ran, shield: await B.shieldBlast(session, ctl) } : ran
     }, { timeoutMs: 8000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
-    // Паутина на теле: срезать мечом или ножницами (8 т на клетку) — голову, потом ноги; рукой — 20 с, нечем — не браться.
-    clear_web: async (p: any = {}) => session.runIntent('clear_web', async () => {
+    // Вне боя — снять паутину; боевой выбор щита/резки/воды/жемчуга делает webTurn.
+    clear_web: async (p: any = {}) => session.runIntent('clear_web', async (ctl) => {
       const bot = session.require()
-      const feet = bot.entity.position.floored()
-      const webs = [feet.offset(0, 1, 0), feet].map(c => bot.blockAt(c)).filter(b => b?.name === 'cobweb')
-      if (!webs.length) return { ok: true, cut: 0, why: 'не в паутине' }
+      const { webCells } = require('../hazards') as typeof import('../hazards')
+      const pick = require('../pick') as typeof import('../pick')
+      const tools = require('../tools') as typeof import('../tools')
+      const { directThreat } = require('../swarm-work') as typeof import('../swarm-work')
+      const webs = () => webCells(bot)
+      if (p.allies && (!Array.isArray(p.allies) || p.allies.length > 128 || p.allies.some(n => typeof n !== 'string' || n.length > 32))) return { ok: false, cut: 0, left: webs().length, why: 'invalid_allies' }
+      const hp0 = bot.health ?? 20
+      const threatened = ms => {
+        if ((bot.health ?? 20) < hp0 || directThreat(bot, p.allies || [], ms)) return 'direct_threat'
+        const foes = (Object.values(bot.entities || {}) as any[]).filter(e => e?.username && !(p.allies || []).includes(e.username)).map(e => e.username)
+        const smash = (require('../threats') as typeof import('../threats')).smashes(bot, foes)[0]
+        return smash && smash.ticks * 50 <= ms + 250 ? 'incoming_smash' : ''
+      }
+      if (!webs().length) return { ok: true, cut: 0, left: 0, why: 'не в паутине' }
+      bot.pathfinder?.setGoal(null); bot.clearControlStates()
       const items = bot.inventory.items()
-      const tool = items.find(i => i.name === 'shears') || items.find(i => /_sword$/.test(i.name))
-      if (!tool) return { ok: false, cut: 0, why: 'нечем срезать' }
-      if (bot.heldItem?.name !== tool.name) await bot.equip(tool, 'hand')
-      let cut = 0
-      for (const w of webs) { try { await bot.dig(w, true); cut++ } catch {} }
-      return { ok: cut === webs.length, cut, tool: tool.name }
-    }, { timeoutMs: 4000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+      const cutter = items.some(i => /_sword$|^shears$/.test(i.name))
+      const water = !cutter && !/nether/.test(String(bot.game?.dimension || '')) && items.find(i => i.name === 'water_bucket')
+      const hit = water && pick.blockOnRay(bot, pick.eyeOf(bot), { x: 0, y: -1, z: 0 }, 4.5, /^(water|lava|bubble_column)$/)
+      const source = hit?.pos?.offset(0, 1, 0)
+      if (water && hit?.block.name === 'cobweb' && source.y > webs()[0].y && /^(air|cave_air|void_air)$/.test(bot.blockAt(source)?.name || '')) {
+        const why = threatened(1500)
+        if (why) return { ok: false, cut: 0, left: webs().length, why }
+        await bot.equip(water, 'hand')
+        if (ctl.aborted) return { ok: false, cut: 0, left: webs().length, why: 'interrupted' }
+        await bot.look(bot.entity.yaw, -Math.PI / 2, true)
+        await gameClock.sleep(50)
+        if (!ctl.aborted) bot.activateItem()
+        for (let t = 0; t < 30 && !ctl.aborted && webs().length; t++) {
+          const why = threatened((30 - t) * 50)
+          if (why) return { ok: false, cut: 0, left: webs().length, why }
+          await gameClock.sleep(50)
+        }
+        if (!webs().length) return { ok: true, cut: 0, left: 0, how: 'water' }
+      }
+      let cut = 0, why = '', remaining = 0, started = 0
+      const stop = () => { try { bot.stopDigging() } catch {} }
+      ctl.onAbort.push(stop)
+      // Новая угроза не ждёт до 40 с ручной резки: отпустить дело, чтобы драйвер поднял щит или начал бой.
+      const check = () => {
+        if (why || ctl.aborted) return
+        const leftMs = Math.max(0, remaining - (gameClock.now() - started))
+        why = threatened(leftMs)
+        if (why) stop()
+      }
+      const watch = gameClock.setInterval(check, 50)
+      try {
+        while (!ctl.aborted && !why && webs().length) {
+          const eye = pick.eyeOf(bot)
+          // blockAim не имеет обращённой грани, когда глаза внутри контура паутины; прицел всё равно берёт её при t=0.
+          const at = webs().find(c => {
+            const to = c.offset(.5, .5, .5).minus(eye), length = to.norm()
+            return length < 1e-6 || pick.blockOnRay(bot, eye, to.scaled(1 / length), length + .01)?.pos.equals(c)
+          })
+          if (!at) { why = 'web_not_in_pick'; break }
+          const block = bot.blockAt(at), before = webs().length
+          remaining = tools.bestFor(bot, block).ms; started = gameClock.now()
+          check()
+          if (why) break
+          await bot.lookAt(at.offset(.5, .5, .5), true)
+          if (ctl.aborted || why) break
+          try { await bot.dig(block, false, null, ctl) } catch (e) { why ||= String(e?.message || e) }
+          if (bot.blockAt(at)?.name !== 'cobweb') cut++
+          if (webs().length >= before) { why ||= 'web_not_removed'; break }
+        }
+      } finally {
+        gameClock.clearInterval(watch)
+        const k = ctl.onAbort.indexOf(stop); if (k >= 0) ctl.onAbort.splice(k, 1)
+      }
+      const left = webs().length
+      return { ok: left === 0, cut, left, how: 'cut', why: ctl.aborted ? 'interrupted' : why }
+    }, { timeoutMs: 45000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Рывок уворота (12.10: «уворачиваясь — бегать и прыгать, а не шагать»): развернуться в сторону ухода, спринт и прыжки
     // ticks тиков, без поиска пути. Перед рывком — 3 клетки по ходу: без лавы/огня и с полом не глубже 4 бл.; опасно —
     // назад или вбок.
@@ -84,6 +145,7 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
       // глядя на угрозу; стен и пола там не мерить. Щит от булавы ставит драйвер (swarm_hold) — в воде так же.
       const mv = require('../movement')
       const water = mv.inWater(bot)
+      const maxDrop = Number.isFinite(p.maxDrop) ? Math.max(0, Math.min(3, p.maxDrop)) : 3
       let dx = p.dir.x / n, dz = p.dir.z / n, runLen = 9
       if (!water) {
         const base = Math.atan2(p.dir.z / n, p.dir.x / n)
@@ -91,7 +153,7 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
           const a = base + k * Math.PI / 4
           const dir = { x: Math.cos(a), z: Math.sin(a) }
           // До 6 бл.: из брызг зелья (радиус 4) за один рывок.
-          const run = fl.runLength(bot, dir, 6, 3, p.arena)
+          const run = fl.runLength(bot, dir, 6, maxDrop, p.arena)
           return { dir, run, c: Math.abs(k) * 2 + (6 - run.len) * 2 + (run.len >= 2 ? fl.enclosure(bot, run.end) * 0.5 : 0) }
         })
         // Тесно (галерея, лестница, гребень Колизея; 13.10: «зелья кидаю — стоят»: 19 раз «некуда» за 3 мин): годится и шаг
@@ -108,10 +170,16 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
             const wc = bot.inventory.items().find(i => i.name === 'wind_charge')
             try { if (bot.usingHeldItem) bot.deactivateItem() } catch {}
             if (wc) {
+              const wind = require('../mace/hands') as typeof import('../mace/hands')
+              wind.install(bot)
               await bot.equip(wc, 'hand')
-              bot.setControlState('jump', true); await bot.waitForTicks(2); bot.setControlState('jump', false)
-              await bot.look(bot.entity.yaw, -Math.PI / 2, true); bot.activateItem(); await bot.waitForTicks(6)
-              return { ok: true, how: 'ветром из ямы' }
+              bot.clearControlStates(); await bot.waitForTicks(1)
+              const fired = await wind.fireWind(bot, moved => !ctl.aborted && wind.selfWindAim(bot, { moved }), {
+                hand: 'main', before: () => bot.setControlState('jump', bot.entity.onGround)
+              })
+              if (fired.fired) await wind.nextTick(bot)
+              bot.setControlState('jump', false)
+              if (fired.fired) { await bot.waitForTicks(6); return { ok: true, how: 'ветром из ямы' } }
             }
             const c0 = bot.entity.position.floored()
             bot.setControlState('jump', true); await bot.waitForTicks(5); bot.setControlState('jump', false)
@@ -144,6 +212,8 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
         for (let t = 0; t < ticks && !ctl.aborted; t++) {
           if (look) bot.lookAt(look, true).catch(() => {})
           if (!fl.insideArena(bot.entity.position.offset(dx, 0, dz), p.arena)) break
+          // Во время подкопа прежняя опора могла исчезнуть; в прыжке пол ниже ног сам по себе нормален.
+          if (!water && maxDrop === 0 && bot.entity.onGround && fl.runLength(bot, { x: dx, z: dz }, 1, 0, p.arena).len < 1) return { ok: false, why: 'пол по ходу исчез' }
           keys()
           bot.setControlState('jump', water || !!p.jump && !!bot.entity.onGround)
           await gameClock.sleep(50)

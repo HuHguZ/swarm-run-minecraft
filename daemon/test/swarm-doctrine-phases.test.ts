@@ -338,7 +338,7 @@ test('hp estimate: the board keeps the lowest honest upper bound across allies, 
   assert.ok(hurt.ourLoss < fresh.ourLoss, 'a foe already at 7 dies sooner and hurts us less')
 })
 
-test('натиск против людей: вооружённые все в бой, голый вплотную дерётся, на 5–16 бл. — за спины своих, вдали лутается', () => {
+test('натиск против людей: пробивающие в бой, голый вплотную дерётся, издали прячется и перевооружается', () => {
   const naked = { weapon: undefined, armor: [], ench: { protection: 0, sharpness: 0 }, inventory: {} }
   const team = [member('a', { position: p(0) }), member('a2', { position: p(-4) }), member('a3', { position: p(-6) }),
     member('b', { ...naked, position: p(-2) }), member('c', { ...naked, position: p(30) }), member('d', { ...naked, position: p(8) }),
@@ -348,7 +348,7 @@ test('натиск против людей: вооружённые все в б�
   const plan = planPvp(f.board, team, { quorum: 1, aggressive: true, hideouts: [p(-20), p(40)] })
   for (const id of ['a', 'a2', 'a3']) assert.equal(plan.get(id)!.kind, 'fight', `${id}: без резерва, на незерит идут все вооружённые`)
   assert.equal(plan.get('b')!.kind, 'flee')
-  assert.ok(plan.get('b')!.data!.regroup, 'свои рядом — к ним, а не в комнату')
+  assert.ok(plan.get('b')!.data!.hide && plan.get('b')!.data!.rearm, 'не пробивающий прячется и запрашивает комплект')
   assert.ok(plan.get('b')!.position.x < -4, 'за спины своих, по другую сторону от врага')
   assert.equal(plan.get('c')!.kind, 'loot')
   assert.equal(plan.get('d')!.kind, 'fight', 'вплотную не убежать — драться')
@@ -510,7 +510,7 @@ test('ямы: быстрые цели первыми, по 1–2 копател�
 test('натиск: после первого сундука (кожа, каменный меч) на незеритового не идёт — уходит; загнанный дерётся; алмазный — в бою', () => {
   const human = { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } }
   const leather = { weapon: 'stone_sword', armor: ['leather_helmet', 'leather_chestplate'], ench: { protection: 0, sharpness: 0 }, inventory: { stone_sword: 1 } }
-  const diamond = { weapon: 'diamond_sword', armor: ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots'], ench: { protection: 0, sharpness: 0 }, inventory: { diamond_sword: 1 } }
+  const diamond = { weapon: 'diamond_sword', armor: ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots'], ench: { protection: 0, sharpness: 5 }, inventory: { diamond_sword: 1 } }
   const team = [member('l', { ...leather, position: p(10, 64, 14) }), member('lc', { ...leather, position: p(7) }),
     ...['d1', 'd2', 'd3', 'd4'].map((id, k) => member(id, { ...diamond, position: p(2, 64, k * 2 - 3) }))]
   const f = scene(team)
@@ -555,15 +555,15 @@ test('погоня: слабые свои, отход в контакте, лу�
   }
 })
 
-test('натиск: 40 своих — экипированная группа бьёт незеритового, голые не голосуют', () => {
+test('натиск: 40 своих — пробивающие бьют незеритового, слабый лут не становится сильнее от толпы', () => {
   const human = { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } }
-  for (const [material, equipped, fighters] of [[null, 0, 0], ['leather', 20, 20], ['iron', 10, 10], ['diamond', 10, 10]] as const) {
+  for (const [material, equipped, fighters] of [[null, 0, 0], ['leather', 20, 0], ['iron', 10, 0], ['diamond', 10, 10]] as const) {
     const team = Array.from({ length: 40 }, (_, i) => {
       const mat = i < equipped ? material : null
       const weapon = mat ? `${mat === 'leather' ? 'stone' : mat}_sword` : undefined
       return member(`b${i}`, { position: p(-14 + i % 5 * 1.25, 64, -4.375 + Math.floor(i / 5) * 1.25),
         strength: mat ? 80 : 20, weapon, armor: mat ? ['helmet', 'chestplate', 'leggings', 'boots'].map(s => `${mat}_${s}`) : [],
-        ench: { sharpness: 0, protection: 0 }, inventory: weapon ? { [weapon]: 1 } : {} })
+        ench: { sharpness: mat === 'diamond' ? 5 : 0, protection: 0 }, inventory: weapon ? { [weapon]: 1 } : {} })
     })
     const f = scene(team), options = { aggressive: true, quorum: 2, hideouts: [p(-30, 64, -10), p(-30, 64, 10)] }
     for (const moving of [false, true]) {
@@ -571,8 +571,9 @@ test('натиск: 40 своих — экипированная группа б
       f.see('human', p(), { ...human, velocity: p(moving ? -.28 : 0, 0, 0) })
       const plan = [...planPvp(f.board, team, options).values()]
       assert.equal(plan.filter(t => t.kind === 'fight').length, fighters, `${material}: число атакующих`)
-      assert.equal(f.board.assault?.voters.length ?? 0, fighters, `${material}: число голосов`)
-      if (moving) assert.equal(plan.filter(t => t.data?.kite).length, 40 - fighters, 'голые продолжают уходить от погони')
+      assert.equal(f.board.assault?.voters.length ?? 0, equipped, `${material}: число голосов`)
+      assert.equal(plan.filter(t => t.data?.rearm).length, 40 - fighters, 'каждому слабому нужен новый комплект')
+      if (moving) assert.equal(plan.filter(t => t.data?.kite).length, 40 - equipped, 'голые продолжают уходить от погони')
     }
   }
 })
@@ -923,4 +924,37 @@ test('blast: a crystal at arm length is run from, never fought, even when the tr
   assert.equal(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'netherite at full hp, crystal 2 blocks off: away from it')
   f.at(2000); f.see('crystal', p(1.5), { threat: 'blast', equipment: { weapon: 'end_crystal' } })
   assert.equal(planPvp(f.board, f.members).get('a')!.kind, 'flee', 'closer still: not "caught, turn and fight"')
+})
+
+test('погоня: насест удерживает отход при остановке человека, даже если рядом можно копать яму', () => {
+  const poor = { weapon: 'stone_sword', armor: ['leather_helmet', 'leather_chestplate'], ench: {}, strength: 20 }
+  const fly = member('fly', { ...poor, role: 'miner-builder', inventory: { stone_sword: 1, elytra: 1, firework_rocket: 8 } })
+  const team = [fly, ...[0, 1, 2].map(k => member('far' + k, { ...poor, position: p(-80 - k * 5), inventory: { stone_sword: 1 } }))]
+  const f = scene(team), options = { aggressive: true, quorum: 1, perches: [p(-20, 82)], digSites: q => [p(q.x - 5, 63)] }
+  const human = { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } }
+  f.see('human', p(9), { ...human, velocity: p(-.28, 0, 0) })
+  const first = planPvp(f.board, team, options).get('fly')!
+  assert.equal(first.kind, 'flee')
+  assert.equal(first.data!.perch, true)
+  assert.ok(!first.data!.kite, 'насест идёт отдельной веткой, без kite')
+  f.at(1500); f.see('human', p(8.1), { ...human, velocity: p(0, 0, 0) })
+  const held = planPvp(f.board, team, options).get('fly')!
+  assert.equal(held.kind, 'flee', 'человек остановился: не возвращаться к яме под ним')
+  assert.equal(held.data!.perch, true)
+  assert.ok(!held.data!.dig)
+  f.at(2000); f.see('human', p(50), { ...human, velocity: p(0, 0, 0) })
+  assert.equal(planPvp(f.board, team, options).get('fly')!.kind, 'loot', 'оторвался по-настоящему — отход кончился')
+})
+
+test('перегруппировка: цель к своим сохраняет их ярус, не этаж бегущего и не среднюю высоту', () => {
+  const runner = member('run', { position: p(0, 140), weapon: 'stone_sword', armor: ['leather_helmet', 'leather_chestplate'], ench: {}, inventory: { stone_sword: 1 } })
+  const low = member('low', { position: p(-4, 120) })
+  const high = member('high', { position: p(-4, 128) })
+  const team = [runner, low, high], f = scene(team)
+  f.see('human', p(9, 140), { velocity: p(-.28, 0, 0), equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } })
+  const task = planPvp(f.board, team, { aggressive: true, quorum: 1 }).get('run')!
+  assert.equal(task.kind, 'flee')
+  assert.equal(task.data!.regroup, true)
+  assert.ok([low.position.y, high.position.y].includes(task.position!.y), 'на выбранной высоте есть свой; 124 между ярусами не цель')
+  assert.ok(task.position!.x < low.position.x, 'по-прежнему за спины своих, прочь от человека')
 })

@@ -40,6 +40,10 @@ export function knockOff (bot, e, { blocking = false }: any = {}) {
 export function pushPlan (bot, e, { sees = true, theyUp = false, busy = null, closing = 0, cooldownLeft = 0, blocking = false }: any = {}) {
   if (!sees || !windReady(bot)) return null
   if (!e || !e.position || e.isValid === false) return null
+  // В паутине толчок пуст: Entity.makeStuckInBlock режет ход до 0.25/0.05 и обнуляет скорость после шага — всплеск его не
+  // сдвинет (пользователь 23.10: «ветром в паутине в меня кидаются, я всё равно не двигаюсь — просто ресурсы расходуют»).
+  const webAt = dy => bot.blockAt?.(e.position.offset(0, dy, 0).floored())?.name === 'cobweb'
+  if (webAt(0) || webAt(1)) return null
   const me = bot.entity.position
   const dist = pick.eyeOf(bot).distanceTo(e.position.offset(0, pick.hitboxOf(bot, e).h / 2, 0))
   if (dist < 2.2 || dist > 14) return null

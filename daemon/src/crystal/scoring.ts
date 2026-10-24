@@ -74,6 +74,7 @@ function landed (t, win, def = null) {
 // hisTotem — тотем у него в руке: «добить» — лишь сбить тотем, и за это
 // большой ценой себе (до смертельного) не платить — только обычным пределом.
 function worthHit (t, { myEff, hisEff, hisLand, press = false, hisTotem = false }: any) {
+  if (t.allyRisk) return false // explicit user rule: do not blast teammates, including knockback
   const worst = Math.max(t.me, t.meMax ?? t.me)
   // ND_CRYSTAL_RECKLESS=1 (арена 10.10: «пусть все взрывают друг друга»): рвать, если ему ≥ 2.5, а сам переживу с запасом 2.
   if (process.env.ND_CRYSTAL_RECKLESS === '1') return hisLand >= 2.5 && worst < myEff - 2

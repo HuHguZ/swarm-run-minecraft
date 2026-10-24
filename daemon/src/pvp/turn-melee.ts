@@ -9,9 +9,9 @@ import * as owShield from '../ow-shield'
 import * as read from '../read'
 import * as tempo from '../tempo'
 import * as totemMod from '../totem'
-import { creeperSwelling, edgeBurns, noteWindThrowers, onFire, reachFrom, stepSafe } from './body'
+import { creeperSwelling, digStepSafe, edgeBurns, noteWindThrowers, onFire, reachFrom, stepSafe } from './body'
 import { findItem } from './potions'
-import { CRIT_ANY_RISE, FIX, HIT_REACH, REACH_MARGIN, TICK_MS, cooldownMs, ticksToFall } from './rules'
+import { CRIT_ANY_RISE, EYE, FIX, HIT_REACH, REACH_MARGIN, TICK_MS, cooldownMs, ticksToFall } from './rules'
 import { Vec3 } from './vec3'
 import { crowdSteer } from './turn-crowd'
 import { strikeSlot, strikeWait } from './strike-order'
@@ -163,21 +163,33 @@ export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
     ctx.pushAt = now + 250
     try { ctx.push = edges.pushPlan(bot, ctx.entity, { vel: ctx.track.vel() }) } catch { ctx.push = null }
   }
-  if (ctx.push && d < 6 && !ctx.theirPit && !ctx.myPit) {
-    if (ctx.push.now) {
+  const order = ctx.session?.current?.params
+  const to = order?.target && order.target === ctx.entity.username ? order.shoveAt : null
+  let push = ctx.push
+  if (to && [to.x, to.y, to.z].every(Number.isFinite) && turn.inSight && !ctx.theirPit && !ctx.myPit && d < 6) {
+    // Дальняя цепь: держим один край и бьём спринтом; с неверной стороны сначала обходим, иначе откатим его назад.
+    const p = ctx.entity.position, dx = to.x - p.x, dz = to.z - p.z, n = Math.hypot(dx, dz)
+    if (Number.isFinite(n) && n > .3) {
+      const aligned = ((p.x - me.x) * dx + (p.z - me.z) * dz) / (n * (Math.hypot(p.x - me.x, p.z - me.z) || 1)) > .9
+      push = { now: aligned ? 'sprint' : null, stand: { x: p.x - dx / n * 2.5, z: p.z - dz / n * 2.5 }, sure: true }
+      if (!aligned) turn.canHit = false
+    }
+  }
+  if (push && d < 6 && !ctx.theirPit && !ctx.myPit) {
+    if (push.now) {
       turn.pushing = true
-      turn.edgeHit = ctx.push.now
+      turn.edgeHit = push.now
       turn.back = false
-      if (r > HIT_REACH - 0.15 || (ctx.push.now === 'sprint' && cooldownLeft <= 150)) turn.forward = true
-      if (ctx.push.now === 'sprint' && cooldownLeft <= 150) turn.sprint = true
-      if (ready('pushNote')) { rest('pushNote', 3000); used(ctx.push.now === 'hit' ? 'он у края — бью сразу' : 'толкаю его в яму спринт-ударом') }
-    } else if (ctx.push.stand && (ctx.push.sure || !(FIX && pressing))) {
+      if (r > HIT_REACH - 0.15 || (push.now === 'sprint' && cooldownLeft <= 150)) turn.forward = true
+      if (push.now === 'sprint' && cooldownLeft <= 150) turn.sprint = true
+      if (ready('pushNote')) { rest('pushNote', 3000); used(push.now === 'hit' ? 'он у края — бью сразу' : 'толкаю его в яму спринт-ударом') }
+    } else if (push.stand && (push.sure || !(FIX && pressing))) {
       // Обход «встать так, чтобы яма была за ним» — пока размены идут; долго без размена (нажим) — бить, а не кружить
       // (S7d, s7d-z-27 «булава против щита»: 4+ мин на 3.0 бл. — я «захожу, чтобы столкнуть», он «не стою спиной к
       // яме», ничья по пределу раунда).
       turn.pushing = true
-      const px = ctx.push.stand.x - me.x
-      const pz = ctx.push.stand.z - me.z
+      const px = push.stand.x - me.x
+      const pz = push.stand.z - me.z
       const yaw = bot.entity.yaw
       const fwd = px * -Math.sin(yaw) + pz * -Math.cos(yaw)
       const right = px * Math.cos(yaw) + pz * -Math.sin(yaw)
@@ -462,6 +474,22 @@ export function controlsTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
   if (ctx.hitKind === 'crit' && !bot.entity.onGround && !meInWeb) turn.sprint = turn.sprint && bot.getControlState('sprint') && !mf.clock.srvSprint
   const kk = mf.override({ forward: turn.forward, back: turn.back, left: turn.strafe === 'left', right: turn.strafe === 'right', sprint: turn.sprint && (bot.food ?? 20) > 6, jump: turn.jump })
+  const params = ctx.session?.current?.params
+  const rawAvoid = ctx.opts?.digAvoid ?? params?.digAvoid
+  const valid = p => p && [p.x, p.y, p.z].every(Number.isFinite)
+  const avoid = Array.isArray(rawAvoid) ? rawAvoid.filter(p => valid(p) && (p.feetY === undefined || Number.isFinite(p.feetY))) : []
+  const stand = ctx.opts?.swarmStand ?? params?.swarmStand
+  const escaping = ctx.floorEscape || ctx.behindDrop || turn.safety?.hazard || meInWeb || bot.entity.isInWater || bot.entity.isInLava || onFire(bot) || ctx.dodgeKey && ctx.dodgeLine
+  const canHold = valid(stand) && valid(ctx.entity?.position) && turn.inSight &&
+    reachFrom(new Vec3(stand.x, stand.y + EYE, stand.z), ctx.entity) <= HIT_REACH
+  if (avoid.length && canHold && !escaping) {
+    kk.forward = false; kk.back = false; kk.left = false; kk.right = false; kk.sprint = false
+    const dx = stand.x - me.x, dz = stand.z - me.z
+    if (Math.hypot(dx, dz) > (bot.entity.width || .6) / 2) {
+      const key = ['forward', 'back', 'left', 'right'].sort((a, b) => { const x = keyDir(bot, a), y = keyDir(bot, b); return (y.x - x.x) * dx + (y.z - x.z) * dz })[0]
+      kk[key] = true
+    }
+  }
   // Последнее слово — безопасность шага (DeepSeek t3 21.10: план удара mf.override ставит W/S-tap поверх отменённых
   // клавиш; вперёд+вбок — диагональ, которую по отдельности никто не проверял; прыжок несёт на 1.5–2.5 бл.).
   for (const k of ['forward', 'back', 'left', 'right']) if (kk[k] && !stepSafe(bot, keyDir(bot, k))) kk[k] = false
@@ -479,6 +507,14 @@ export function controlsTurn (ctx: DuelCtx, turn: TurnFrame) {
   kk.sprint = kk.sprint && kk.forward
   // В воде с ходом — «прыжок» держать: тело всплывает, у бортика вылезает на берег (как игрок).
   if (bot.entity.isInWater && (kk.forward || kk.back || kk.left || kk.right)) kk.jump = true
+  if (avoid.length && !escaping) {
+    const f = keyDir(bot, kk.forward ? 'forward' : kk.back ? 'back' : ''), s = keyDir(bot, kk.left ? 'left' : kk.right ? 'right' : '')
+    const n = Math.hypot(f.x + s.x, f.z + s.z)
+    if (n) {
+      const reach = kk.jump ? kk.sprint ? 2.6 : 1.8 : .9
+      if (!digStepSafe(ctx, { x: (f.x + s.x) / n, z: (f.z + s.z) / n }, reach)) { kk.forward = false; kk.back = false; kk.left = false; kk.right = false; kk.sprint = false }
+    }
+  }
   set('forward', kk.forward)
   set('back', kk.back)
   set('left', kk.left)

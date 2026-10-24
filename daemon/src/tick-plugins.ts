@@ -131,6 +131,14 @@ function getPhysics () {
     }
     moveEntityWithHeading(entity, world, strafe, forward)`)
   if (!swimSource.includes('entity.ndPoseHeight === .6 ? .001 : .401') || !swimSource.includes('!ndWaterBudget || waterIds.includes(block.type)') || !swimSource.includes('const dy = Math.sin(entity.pitch || 0)')) throw new Error('Cannot apply reviewed swimming fluid bounds/flow/travel')
+  // LivingEntity.jumpFromGround (1.21.11): retain a larger existing upward impulse.
+  // Compare after Jump Boost, as getJumpPower includes the effect before Math.max.
+  const jumpSource = swimSource
+    .replace('        vel.y = Math.fround(0.42)', '        const ndBeforeJumpY = vel.y\n        vel.y = Math.fround(0.42)')
+    .replace('        if (entity.control.sprint) {\n          const yaw = Math.PI - entity.yaw', `        if (mcData.version.minecraftVersion === '1.21.11') vel.y = Math.max(vel.y, ndBeforeJumpY)
+        if (entity.control.sprint) {
+          const yaw = Math.PI - entity.yaw`)
+  if ((jumpSource.match(/ndBeforeJumpY/g) || []).length !== 2) throw new Error('Cannot apply reviewed native ground jump impulse')
   const modules = new Map()
   const data = new Map()
   const scopedRequire = request => {
@@ -151,7 +159,7 @@ function getPhysics () {
   }
   const localModule = { exports: {} }
   new Function('require', 'module', 'exports', '__filename', '__dirname', 'ndClimbableNames', 'ndWaterBudget',
-    `${swimSource}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename), climbableData.climbable.values.map(value => value.slice('minecraft:'.length)), process.env.ND_WATER_ESCAPE_BUDGET !== '0')
+    `${jumpSource}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename), climbableData.climbable.values.map(value => value.slice('minecraft:'.length)), process.env.ND_WATER_ESCAPE_BUDGET !== '0')
   return (cachedPhysics = localModule.exports)
 }
 

@@ -1,14 +1,15 @@
 // Рой (swarm.ts): план боя (planPvp) — остальным бой, сбор, резерв, лут или укрытие; план на доску (то же дело —
 // та же аренда).
 import * as damage from '../pvp/damage-model'
-import type { SwarmTask, SharedEnemy } from './types'
+import type { SwarmTask, SwarmMember, SharedEnemy, SwarmPosition } from './types'
 import type { PvpPlan } from './plan-frame'
 import { fledAt, markFled } from './board'
 import { distance, cellKey, ratio, count } from './common'
-import { visibleForce } from './fight'
+import { visibleForce, memberFight } from './fight'
 import { lineRank } from './doctrine'
 import { racesForLoot, behindRace, killMeans, MELEE_CAP } from './race'
-import { SHOVE, SHOVE_REACH } from './shove'
+import { SHOVE, SHOVE_REACH, shoveHits } from './shove'
+import { dislodgeSeconds, attackSeconds } from './dislodge'
 
 export function assignFighters(S: PvpPlan): void {
   // Добивание убегающего (командная игра): нас вдвое больше видимых врагов, а цель уходит от нашей середины — без резерва
@@ -21,14 +22,30 @@ export function assignFighters(S: PvpPlan): void {
   let searchers = 0
   // Сколько бьют в упор каждую цель (без булавы и зелий вреда) — для MELEE_CAP против сильного.
   const meleeOn = new Map<string, number>()
+  const rearming = new Set<string>()
   // Связка против сильного (пользователь 22.10: «паутина под него, топор выбивает щит, сразу удар булавой с высоты»): есть
   // свой с булавой и зарядом — топоры в упор без предела MELEE_CAP: щит, поднятый против булавы, выбивают на 5 с.
-  const comboMace = !!S.state.strongFew && S.team.some(a => killMeans(a).smash)
+  const comboMace = !!(S.state.strongFew || S.state.dislodge) && S.team.some(a => killMeans(a).smash)
   const runner = (e: SharedEnemy) => { const v = e.velocity || { x: 0, y: 0, z: 0 }, sp = Math.hypot(v.x, v.z), dx = e.position.x - S.center.x, dz = e.position.z - S.center.z, d = Math.hypot(dx, dz) || 1
     return sp > .15 && (v.x * dx + v.z * dz) / (sp * d) > .5 }
   const { board, team, enemies, plan, options, aggressive, doctrine, committed, center, forward, lineDuty, spots, put, assault, regroup, losing, prey, hunting, untouchable, loads, meanStrength, sectorOf, ringAt, shoveOf, gatherers, lastEnemy, diggers, ladderers, campers, hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, targetCost, archer, threatReach } = S
-  for (const m of team.filter(m => !plan.has(m.id)).sort((a, b) => b.strength - a.strength || a.id.localeCompare(b.id))) {
-    if (diggers.has(m.id)) { const { site: s, foe } = diggers.get(m.id)!; put(m, 'goto', { dig: cellKey(s), blocks: (s as any).blocks, stands: (s as any).stands, drop: (s as any).drop, target: foe.id, enemyPosition: foe.position, reason: (s as any).drop === Infinity ? 'подкоп: под ним пустота' : 'копаю яму-ловушку' }, s); continue }
+  const worthShove = (m: SwarmMember, foe: SharedEnemy, attack: number) => {
+    const edge = S.edgeAt(foe), gap = distance(m.position, foe.position)
+    if (!edge || shoveOf(foe) < SHOVE || gap > 16) return false
+    const walk = Math.max(0, gap - 3) / 5.6, wind = count(m.inventory, 'wind_charge') > (count(m.inventory, 'mace') ? 2 : 0)
+    const chain = shoveHits(foe, edge, { sprint: true, kb: m.ench?.knockback || 0 })
+    const work = (wind || (edge.at ?? 0) <= SHOVE_REACH ? damage.IFRAME_TICKS / 20 : chain * damage.IFRAME_TICKS / 20) + (wind ? 0 : walk)
+    return dislodgeSeconds(S, foe, 'shove', work, attack + walk) < attack + walk
+  }
+  for (const m of [...team].sort((a, b) => b.strength - a.strength || a.id.localeCompare(b.id))) {
+    const near = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
+    const personal = near && memberFight(m, near), kit = killMeans(m)
+    const shoveUseful = near && worthShove(m, near, attackSeconds(m, near, personal!.attackSeconds))
+    // Не пробивающий и проигрывающий размен получает другое дело; кирка нужна лишь у назначенной живой ямы.
+    const rearm = aggressive && personal?.rearm && !kit.smash && !kit.harm && !(kit.axe && comboMace) && !shoveUseful && !diggers.has(m.id)
+    if (rearm) rearming.add(m.id)
+    if (plan.has(m.id)) continue
+    if (diggers.has(m.id)) { const { site: s, foe } = diggers.get(m.id)!; put(m, 'goto', { dig: cellKey(s), undermine: !!(s as any).undermine, blocks: (s as any).blocks, stands: (s as any).stands, drop: (s as any).drop, target: foe.id, enemyPosition: foe.position, reason: (s as any).drop === Infinity ? 'подкоп: под ним пустота' : 'копаю яму-ловушку' }, s); continue }
     if (ladderers.has(m.id)) { const s = ladderers.get(m.id)!; put(m, 'goto', { ladder: s.key, reason: 'ставлю лестницу для своих' }, { x: s.x, y: s.y, z: s.z }); continue }
     if (campers.has(m.id)) { put(m, 'goto', { hold: 'ambush', camp: cellKey(campers.get(m.id)!), reason: 'засада в углу' }, campers.get(m.id)!); continue }
     // Цель держится, пока жива и видна, а новая не дешевле с запасом (4 — как 4 бл. пути): иначе цель менялась почти
@@ -71,17 +88,19 @@ export function assignFighters(S: PvpPlan): void {
     // Перегруппировка после проваленного штурма — так же для всех, кто не в схватке. Голые — и в штурме (пользователь
     // 14.10: «бегут к игроку без вещей»): штурм — для снаряжённых, голому сперва лут.
     // Сброс (shove.ts): он у смертельного обрыва — толкают все, кто в 16 бл. и достаёт (пользователь 21.10: «вместе они
-    // толкают жёстко»): удар — до SHOVE_REACH от края, заряд ветра — и дальше (wind_push сам прогоном тела решает, скинет ли).
+    // толкают жёстко»): в режиме сброса дальнюю цепь считаем по физике, заряд ветра проверяет траекторию сам.
     // Без резерва, смены линий и лута гонки — отброс от удара не зависит от брони бьющего.
     const wind = count(m.inventory, 'wind_charge')
-    const deadly = shoveOf(foe) >= SHOVE && distance(m.position, foe.position) <= 16 && ((S.edgeAt(foe)?.at ?? 0) <= SHOVE_REACH || wind > 0)
+    const edge = S.edgeAt(foe)
+    // Дальняя цепь оплачивается окнами удара: сравниваем с гонкой урона, а не запрещаем дальше трёх блоков.
+    const deadly = foe === near ? !!shoveUseful : worthShove(m, foe, attackSeconds(m, foe))
     // Против сильного (race.ts strongFew): в упор — двое лучших (MELEE_CAP: больше окно неуязвимости не пропустит) и те, кто
     // бьёт иначе — булава с взлёта, зелья вреда; у края — все, кто достаёт. Остальные — как переигранные: лут, укрытие, к своим
     // (вплотную — бой). Стенд 21.10: оба убийства чемпиона — булава с падения и сброс; ближним боем — ни одного.
-    const means = aggressive && S.state.strongFew ? killMeans(m) : null
+    const means = aggressive && (S.state.strongFew || S.state.dislodge) ? killMeans(m) : null
     const melee = !!means && !means.smash && !means.harm && !(means.axe && comboMace)
     const surplus = melee && !deadly && !(foe === prey && hunting(m)) && (meleeOn.get(foe.id) || 0) >= MELEE_CAP
-    if (aggressive && !(foe === prey && hunting(m)) && (weak(m) || surplus || outclassed(m, [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]) || regroup && !assault)) {
+    if (aggressive && !deadly && !(foe === prey && hunting(m)) && (rearm || weak(m) || surplus || outclassed(m, [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]) || regroup && !assault)) {
       const near = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0], gap = distance(m.position, near.position)
       if (gatherers.has(m.id)) { put(m, 'goto', { gather: options.gather!.item, count: 32, reason: 'добываю блоки для подъёма' }, options.gather!.spot); continue }
       // На насесте — сидеть, пока враг в 28 бл.: оттуда лук и еда; ушёл дальше — вниз за лутом.
@@ -104,6 +123,8 @@ export function assignFighters(S: PvpPlan): void {
       // Только издали (> 8 бл.): вплотную бег «за укрытие» — спиной под его меч (игра пользователя 21.10).
       const cover = gap > Math.max(edge, 8) && archer(near) && hideoutFor(m)
       if (cover) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, hide: true, panic: true, reason: `за укрытие от лучника (враг в ${Math.round(gap)} бл.)` }, cover); continue }
+      const rearmHide = rearm && gap > edge && hideoutFor(m)
+      if (rearmHide) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, hide: true, panic: true, reason: 'не пробиваю: укрытие и перевооружение' }, rearmHide); continue }
       const group = gap > edge && rallyFor(m, near)
       if (group) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, regroup: true, panic: true, reason: `к своим, нечем драться (враг в ${Math.round(gap)} бл.${fled ? ', убегал' : ''})` }, group); continue }
       const hide = gap > edge && hideoutFor(m)
@@ -162,10 +183,27 @@ export function assignFighters(S: PvpPlan): void {
     const shove = !search && deadly
     const slot = (aggressive || finishing || shove) && !search ? sectorOf(m, foe) : undefined
     // Булавник толкает ветром только сверх двух зарядов: они — на взлёт (стенд 22.10: «нет заряда» — 59 отказов за 3 раунда).
-    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > (count(m.inventory, 'mace') ? 2 : 0) && (shove || doctrine === 'wave' && wind > 2 && !count(m.inventory, 'mace')), ...(shove ? { shove: true } : {}), ...(finishing ? { finishing: true } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
+    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > (count(m.inventory, 'mace') ? 2 : 0) && (shove || doctrine === 'wave' && wind > 2 && !count(m.inventory, 'mace')), ...(shove ? { shove: true, shoveAt: { x: foe.position.x + edge!.x * (edge!.at ?? SHOVE_REACH), y: foe.position.y, z: foe.position.z + edge!.z * (edge!.at ?? SHOVE_REACH) } } : {}), ...(finishing ? { finishing: true } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
     loads.set(foe.id, (loads.get(foe.id) || 0) + m.strength / meanStrength)
     if (melee) meleeOn.set(foe.id, (meleeOn.get(foe.id) || 0) + 1)
   }
+  const guardStands: SwarmPosition[] = []
+  for (const [id, task] of plan) if (S.digAvoid?.length && task.data?.target && (task.kind === 'fight' || task.kind === 'goto' && !task.data.dig && !task.data.ladder && !task.data.hold && !task.data.gather)) {
+    const m = team.find(m => m.id === id)!, foe = enemies.find(e => e.id === task.data!.target)
+    if (!foe) continue
+    const slot = task.data!.slot ?? sectorOf(m, foe)
+    const vacate = S.digVacate.get(id)
+    const proposed = vacate && !guardStands.some(q => distance(q, vacate) < .6) ? vacate : ringAt(foe, slot, 2.5, guardStands)
+    const old = board.tasks().find(t => t.assignedTo === id && t.kind === task.kind && t.data?.target === foe.id)?.data?.swarmStand
+    // Безопасная прежняя стойка не рвёт бой при перераздаче соседних ям.
+    const keep = old && distance(old, foe.position) <= Math.max(SHOVE_REACH, distance(proposed, foe.position)) &&
+      !S.digAvoid.some(s => s.y === Math.floor(old.y - .01) && old.x + .3 > s.x && old.x - .3 < s.x + 1 && old.z + .3 > s.z && old.z - .3 < s.z + 1) &&
+      ![...diggers.values()].some(d => (d.site as any).stands?.some(q => distance(q, old) < .6)) && !guardStands.some(q => distance(q, old) < .6)
+    task.position = keep ? old : proposed
+    guardStands.push(task.position)
+    task.data = { ...task.data, slot, digAvoid: S.digAvoid, swarmStand: task.position }
+  }
+  for (const id of rearming) { const task = plan.get(id); if (task) task.data = { ...task.data, rearm: true } }
 }
 
 export function commitPlan(S: PvpPlan): Map<string, SwarmTask> {
@@ -174,7 +212,7 @@ export function commitPlan(S: PvpPlan): Map<string, SwarmTask> {
   for (const old of previous) if (![...plan.values()].some(t => t.id === old.id)) board.cancel(old.id)
   for (const [id, task] of plan) {
     const old = previous.find(t => t.id === task.id)
-    const unchanged = old?.claim && old.kind === task.kind && ['target', 'ally', 'cover', 'doctrine', 'role', 'committed', 'search', 'reserve', 'panic', 'hold', 'ambush', 'fountain', 'stage', 'regroup', 'hide', 'kite', 'perch', 'gather', 'slot', 'dig', 'camp', 'ladder', 'shove', 'push', 'assault', 'finishing', 'smash', 'axe'].every(key => old.data?.[key] === task.data?.[key])
+    const unchanged = old?.claim && old.kind === task.kind && ['digAvoid', 'swarmStand'].every(key => JSON.stringify(old.data?.[key]) === JSON.stringify(task.data?.[key])) && (!task.data?.dig || JSON.stringify(old.data?.stands) === JSON.stringify(task.data.stands)) && ['target', 'ally', 'cover', 'doctrine', 'role', 'committed', 'search', 'reserve', 'panic', 'hold', 'ambush', 'fountain', 'stage', 'regroup', 'hide', 'kite', 'perch', 'rearm', 'gather', 'slot', 'dig', 'undermine', 'camp', 'ladder', 'shove', 'push', 'assault', 'finishing', 'smash', 'axe'].every(key => old.data?.[key] === task.data?.[key])
     if (unchanged) { plan.set(id, old); continue }
     if (old?.status === 'done') board.cancel(old.id)
     plan.set(id, board.upsert(task))

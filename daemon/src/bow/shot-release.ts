@@ -45,8 +45,11 @@ function armRelease (S: ShotState) {
   const release = (s, shut, checkedAt, position) => {
     // Send inside the packet-boundary callback. Awaiting its Promise first
     // lets a synchronous catch-up burst change the server's last movement.
+    if (s && !shut) shut = blockedAt(bot, S.eye(), s, S.mode === 'compensate' ? S.myVel() : undefined, S.speed)
     if (!s || shut) { S.stopTick(); cancelDraw(); return { s, shut, checkedAt } }
     if (shouldStop?.()) { S.stopTick(); cancelDraw(); return { s, stopped: true } }
+    const ranged: typeof import('../ranged') = require('../ranged')
+    if (!ranged.offensiveArrow(ranged.firstArrow(bot), !!entity?.username || entity?.type === 'player')) { S.stopTick(); cancelDraw(); return { s, stopped: true } }
     if (!charge.ready(short ? 0 : 20)) { S.stopTick(); cancelDraw(); return { s, chargeError: charge.why() || 'bow_charge_not_confirmed' } }
     if (!point && !hasObservedVelocity(entity)) { S.stopTick(); cancelDraw(); return { s, unobserved: true } }
     // release_use_item поворота не несёт: стрела летит по последнему отправленному look, а он — из тела. Голова не там,
