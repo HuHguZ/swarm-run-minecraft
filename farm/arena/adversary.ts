@@ -5,7 +5,7 @@
 // креативе, цепочку динамита за убегающим, булаву сверху, лук издали, паутину на бота. Всё время считает стояние: бот ближе
 // 7 бл. ко мне секунду и дольше не двигается, не бьёт, не держит щит и не ест — «стоит» (время — для лога драйвера).
 // Итог сценария — строка «📋 {json}», общий — «📊 {json}».
-//   node dist/farm/arena/adversary.js <слот> [rush,undermine,tnt,mace,bow,web,idle,pit,tntlate,moat,room,rim,pearl,launch] [минут] [имя]
+//   node dist/farm/arena/adversary.js <слот> [rush,undermine,tnt,mace,bow,web,idle,pit,tntlate,moat,room,rim,rimrun,pearl,launch] [минут] [имя]
 import * as path from 'path'
 import { REPO_ROOT } from '../../daemon/src/paths'
 import { rcon } from './server'
@@ -107,11 +107,11 @@ async function rush () {
   await setMode('survival'); await immortal(); await hold('netherite_sword')
   const t = nearest(e => dist(e) > 14 && dist(e) < 60) || nearest()
   if (!t) return { skip: 'нет целей' }
-  const name = t.username, hp0 = await hpOf(name), from = +dist(t).toFixed(1), h0 = hurt.get(name) || 0, swing0 = watch.get(name)?.swing ?? -99
+  const name = t.username, d0 = dead.get(name), hp0 = await hpOf(name), from = +dist(t).toFixed(1), h0 = hurt.get(name) || 0, swing0 = watch.get(name)?.swing ?? -99
   bot.pathfinder.setGoal(new goals.GoalFollow(t, 1.5), true)
   let notice: any = null, swings = 0, lastHit = 0
   const t0 = Date.now()
-  while (Date.now() - t0 < 25000 && bot.entities[t.id] && !dead.has(name)) {
+  while (Date.now() - t0 < 25000 && bot.entities[t.id] && dead.get(name) === d0) {
     await sleep(50)
     const w = watch.get(name), d = dist(t)
     if (!notice && w) {
@@ -124,7 +124,7 @@ async function rush () {
   }
   stop()
   const back = (watch.get(name)?.swing ?? -99) > swing0
-  return { name, from, notice, swings, hits: (hurt.get(name) || 0) - h0, back, hpDrop: hp0 != null ? +(hp0 - ((await hpOf(name)) ?? 0)).toFixed(1) : null, died: dead.has(name) }
+  return { name, from, notice, swings, hits: (hurt.get(name) || 0) - h0, back, hpDrop: hp0 != null ? +(hp0 - ((await hpOf(name)) ?? 0)).toFixed(1) : null, died: dead.get(name) !== d0 }
 }
 
 // Подкоп в креативе (как пользователь 22.10): 8 с держусь в 3 бл. от цели и ломаю опору под её рамкой (до 2 вниз), куда бы
@@ -134,12 +134,12 @@ async function undermine () {
   const t = nearest(e => dist(e) < 48 && bot.blockAt(e.position.offset(0, -0.5, 0))?.boundingBox === 'block' && Math.hypot(watch.get(e.username)?.v.x || 0, watch.get(e.username)?.v.z || 0) < 0.1) ||
     nearest(e => dist(e) < 48 && bot.blockAt(e.position.offset(0, -0.5, 0))?.boundingBox === 'block')
   if (!t) return { skip: 'нет целей на полу' }
-  const name = t.username
+  const name = t.username, d0 = dead.get(name)
   await cmd(`execute at ${name} run tp ${NAME} ~3 ~0.5 ~`); await sleep(400)
   try { bot.creative.startFlying() } catch {}
   const t0 = Date.now()
   let broke = 0, falls = 0, floorY = t.position.y, walked = 0, last = t.position.clone(), digErr = ''
-  while (Date.now() - t0 < 8000 && bot.entities[t.id] && !dead.has(name)) {
+  while (Date.now() - t0 < 8000 && bot.entities[t.id] && dead.get(name) === d0) {
     const cells = new Map<string, any>()
     for (const [dx, dz] of [[-.3, -.3], [-.3, .3], [.3, -.3], [.3, .3]]) for (const dy of [1, 2]) {
       const c = t.position.offset(dx, -dy + 0.01, dz).floored(); cells.set(c.toString(), c)
@@ -163,10 +163,10 @@ async function tnt () {
   await setMode('creative'); await immortal()
   const t = nearest(e => dist(e) < 48)
   if (!t) return { skip: 'нет целей' }
-  const name = t.username, hp0 = await hpOf(name)
+  const name = t.username, d0 = dead.get(name), hp0 = await hpOf(name)
   const trail: any[] = []; const laid: any[] = []
   let dir0: any = null, turn = 0, lit = false
-  for (let k = 0; k < 12 && bot.entities[t.id] && !dead.has(name); k++) {
+  for (let k = 0; k < 12 && bot.entities[t.id] && dead.get(name) === d0; k++) {
     const c = t.position.floored()
     trail.push(c)
     const w = watch.get(name)
@@ -183,7 +183,7 @@ async function tnt () {
   }
   await sleep(2500)
   const hp1 = await hpOf(name)
-  return { name, laid: laid.length, turnDeg: Math.round(turn), hpDrop: hp0 != null && hp1 != null ? +(hp0 - hp1).toFixed(1) : null, died: dead.has(name) }
+  return { name, laid: laid.length, turnDeg: Math.round(turn), hpDrop: hp0 != null && hp1 != null ? +(hp0 - hp1).toFixed(1) : null, died: dead.get(name) !== d0 }
 }
 
 // Булава сверху: подлёт — телепорт на 14 бл. над целью (как взлёт на заряде ветра), падение с рулём на него, удар у земли.
@@ -193,13 +193,14 @@ async function mace () {
   const still = (e: any) => Math.hypot(watch.get(e.username)?.v.x || 0, watch.get(e.username)?.v.z || 0) < 0.15
   const t = nearest(e => dist(e) < 40 && openSky(e, 14) && still(e)) || nearest(e => dist(e) < 40 && openSky(e, 14))
   if (!t) return { skip: 'нет целей под открытым небом' }
+  const name = t.username, d0 = dead.get(name)
   await hold('mace')
-  const name = t.username, hp0 = await hpOf(name)
+  const hp0 = await hpOf(name)
   await cmd(`execute at ${name} run tp ${NAME} ~1 ~12 ~1`); await sleep(250)
   const t0 = Date.now()
   let hit = false, shield: boolean | null = null, d = 99, fled = 0
   const p0 = t.position.clone()
-  while (Date.now() - t0 < 4000 && bot.entities[t.id]) {
+  while (Date.now() - t0 < 4000 && bot.entities[t.id] && dead.get(name) === d0) {
     await bot.lookAt(t.position.offset(0, 1, 0), true)
     const h = Math.hypot(t.position.x - bot.entity.position.x, t.position.z - bot.entity.position.z)
     bot.setControlState('forward', h > 0.8); bot.setControlState('sprint', h > 2)
@@ -211,20 +212,47 @@ async function mace () {
   }
   stop(); await sleep(400)
   const hp1 = await hpOf(name)
-  return { name, hit, shield, fled: +fled.toFixed(1), hpDrop: hp0 != null && hp1 != null ? +(hp0 - hp1).toFixed(1) : null, died: dead.has(name) }
+  return { name, hit, shield, fled: +fled.toFixed(1), hpDrop: hp0 != null && hp1 != null ? +(hp0 - hp1).toFixed(1) : null, died: dead.get(name) !== d0 }
 }
 
 // Лук издали: 12 с стреляю в одну цель на 10–32 бл. по прямой видимости. Замер: попадания, ушёл ли из видимости,
 // поднял ли щит, пошёл ли на меня.
 async function bow () {
   await setMode('survival'); await immortal()
-  const t = nearest(e => dist(e) > 10 && dist(e) < 32 && sees(e))
+  const eligible = (e: any) => dist(e) > 10 && dist(e) < 32 && sees(e)
+  let t = nearest(eligible)
+  if (!t) {
+    // Fixture setup only: use an existing supported firing point, like room().
+    const pick: typeof import('../../daemon/src/pick') = require('../../daemon/src/pick')
+    const unknown = { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+    const world = { blockAt(p: any) { try { return bot.blockAt(p) || unknown } catch { return unknown } } }
+    const free = (c: any) => bot.blockAt(c)?.boundingBox === 'empty' && bot.blockAt(c.offset(0, 1, 0))?.boundingBox === 'empty' &&
+      bot.blockAt(c.offset(0, -1, 0))?.boundingBox === 'block' && !/water|lava|fire|cobweb|powder_snow|magma|cactus/.test((bot.blockAt(c)?.name || '') + bot.blockAt(c.offset(0, 1, 0))?.name + bot.blockAt(c.offset(0, -1, 0))?.name)
+    let spot: any = null, near: any = null
+    setup: for (const e of foes().filter(e => e.isValid !== false).sort((a, b) => dist(a) - dist(b)).slice(0, 8)) {
+      const base = e.position.floored()
+      for (const r of [12, 16]) for (let k = 0; k < 8; k++) for (const dy of [0, 1, -1]) {
+        const a = k / 8 * Math.PI * 2, c = base.offset(Math.round(Math.cos(a) * r), dy, Math.round(Math.sin(a) * r))
+        if (!free(c)) continue
+        const eye = c.offset(.5, 1.62, .5), delta = e.position.offset(0, 1.2, 0).minus(eye), n = delta.norm()
+        if (!pick.blockOnRay(world, eye, delta.scaled(1 / n), n)) { spot = c; near = e; break setup }
+      }
+    }
+    if (spot) {
+      const death0 = dead.get(near.username)
+      await cmd(`tp ${NAME} ${spot.x + .5} ${spot.y} ${spot.z + .5}`)
+      for (let k = 0; k < 40 && bot.entity.position.distanceTo(spot.offset(.5, 0, .5)) > 1; k++) await sleep(25)
+      if (dead.get(near.username) !== death0) return { skip: 'цель погибла при подходе' }
+      t = nearest(eligible)
+    }
+  }
   if (!t) return { skip: 'нет целей в видимости' }
+  const name = t.username, d0 = dead.get(name)
   if (!await hold('bow', 'minecraft:bow[enchantments={power:5,infinity:1}]')) return { skip: 'нет лука' }
   if (!bot.inventory.items().some((i: any) => i.name === 'arrow')) await cmd(`give ${NAME} minecraft:arrow 1`)
-  const name = t.username, h0 = hurt.get(name) || 0, t0 = Date.now()
+  const h0 = hurt.get(name) || 0, t0 = Date.now()
   let shots = 0, hidAt: number | null = null, shieldSeen = false, closest = dist(t)
-  while (Date.now() - t0 < 12000 && bot.entities[t.id] && !dead.has(name)) {
+  while (Date.now() - t0 < 12000 && bot.entities[t.id] && dead.get(name) === d0) {
     bot.activateItem()
     for (let k = 0; k < 22; k++) {
       await sleep(50)
@@ -238,7 +266,7 @@ async function bow () {
     bot.deactivateItem(); shots++
     await sleep(150)
   }
-  return { name, shots, hits: (hurt.get(name) || 0) - h0, hidMs: hidAt, shield: shieldSeen, closest: +closest.toFixed(1), died: dead.has(name) }
+  return { name, shots, hits: (hurt.get(name) || 0) - h0, hidMs: hidAt, shield: shieldSeen, closest: +closest.toFixed(1), died: dead.get(name) !== d0 }
 }
 
 // Паутина на бота рядом со мной: сколько тиков он из неё выходит.
@@ -246,14 +274,14 @@ async function web () {
   await setMode('survival'); await immortal(); await hold('netherite_sword')
   const t = nearest(e => dist(e) < 24)
   if (!t) return { skip: 'никого рядом' }
-  const name = t.username, c = t.position.floored()
+  const name = t.username, d0 = dead.get(name), c = t.position.floored()
   await cmd(`setblock ${c.x} ${c.y} ${c.z} minecraft:cobweb keep`); await cmd(`setblock ${c.x} ${c.y + 1} ${c.z} minecraft:cobweb keep`)
   const t0 = Date.now(); let outMs: number | null = null
-  while (Date.now() - t0 < 10000 && bot.entities[t.id] && !dead.has(name)) {
+  while (Date.now() - t0 < 10000 && bot.entities[t.id] && dead.get(name) === d0) {
     await sleep(50)
     if (!t.position.floored().equals(c) && !t.position.floored().equals(c.offset(0, 1, 0))) { outMs = Date.now() - t0; break }
   }
-  return { name, outMs, broke: bot.blockAt(c)?.name !== 'cobweb', died: dead.has(name) }
+  return { name, outMs, broke: bot.blockAt(c)?.name !== 'cobweb', died: dead.get(name) !== d0 }
 }
 
 // Стою среди них, не бью (человек осматривается, ест, перекладывает вещи): 10 с у ближайшего бота. Замер: сколько ударов
@@ -311,6 +339,44 @@ async function rim () {
   return { from, minY: +minY.toFixed(1), died, jumps, hitMe: (hurt.get(NAME) || 0) - me0 }
 }
 
+// Бег по гребню (пользователь 25.10: «довести до идеала попадание ветром»): живой игрок не стоит — со «Скоростью II» бежит
+// в спринте вдоль края верхнего яруса туда-обратно, прыгает и разворачивается раз в 1–3 с. Замер — как rim.
+async function rimrun () {
+  await setMode('survival'); await immortal(); await hold('netherite_sword')
+  await cmd(`effect give ${NAME} minecraft:speed 600 1 true`)
+  const spots = (process.env.ADV_RIM || '526.5 600.5;673.5 600.5;600.5 527.5;600.5 672.5').split(';').map(s => s.trim().split(/\s+/).map(Number))
+  let from: any = null
+  for (const [x, z] of spots) {
+    await cmd(`tp ${NAME} ${x} 165 ${z}`); await sleep(2500)
+    for (let k = 0; k < 30 && !bot.entity?.onGround; k++) await sleep(100)
+    if (bot.entity?.onGround && bot.entity.position.y > 145) { from = bot.entity.position.clone(); break }
+  }
+  if (!from) return { skip: 'гребень не нашёлся' }
+  say(`🧪 rimrun ${IDLE_MS / 1000} с: ${from.x.toFixed(2)},${from.y.toFixed(2)},${from.z.toFixed(2)}`)
+  const me0 = hurt.get(NAME) || 0, t0 = Date.now(), d0 = dead.get(NAME) ?? -1
+  let minY = from.y, dir = 1, turnAt = Date.now() + 1000 + Math.random() * 2000, jumps = 0
+  while (Date.now() - t0 < IDLE_MS && bot.entity && (dead.get(NAME) ?? -1) === d0) {
+    const p = bot.entity.position
+    if (p.y < from.y - 2 && minY >= from.y - 2) say(`🧪 rimrun: упал с гребня у ${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)} (r ${Math.hypot(p.x - 600, p.z - 600).toFixed(1)}, старт r ${Math.hypot(from.x - 600, from.z - 600).toFixed(1)}), ударов ${(hurt.get(NAME) || 0) - me0}, v ${bot.entity.velocity.x.toFixed(2)},${bot.entity.velocity.y.toFixed(2)},${bot.entity.velocity.z.toFixed(2)}`)
+    minY = Math.min(minY, p.y)
+    // Гребень круглый: бег по касательной к окружности вокруг центра (600 600) с поправкой к радиусу старта; не дальше 10 бл.
+    // по дуге от старта — иначе развернуться.
+    const ax = p.x - 600, az = p.z - 600, rr = Math.hypot(ax, az) || 1, r0 = Math.hypot(from.x - 600, from.z - 600)
+    const arc = Math.atan2(az, ax) - Math.atan2(from.z - 600, from.x - 600)
+    if (Date.now() > turnAt || Math.abs(arc * r0) > 10 && Math.sign(arc) === dir) { dir = -dir; turnAt = Date.now() + 1000 + Math.random() * 2000 }
+    const corr = Math.max(-.6, Math.min(.6, (r0 - rr) * .5))
+    const dx = -az / rr * dir + ax / rr * corr, dz = ax / rr * dir + az / rr * corr
+    // mineflayer: взгляд (−sin yaw, −cos yaw).
+    await bot.look(Math.atan2(-dx, -dz), 0, true)
+    bot.setControlState('forward', true); bot.setControlState('sprint', true)
+    if (bot.entity.onGround && Math.random() < .15) { bot.setControlState('jump', true); jumps++ } else bot.setControlState('jump', false)
+    await sleep(100)
+  }
+  bot.clearControlStates()
+  const died = (dead.get(NAME) ?? -1) !== d0 || minY < from.y - 30
+  return { from, minY: +minY.toFixed(1), died, jumps, hitMe: (hurt.get(NAME) || 0) - me0 }
+}
+
 // Жемчуг (караул жемчуга роя, пользователь 24.10): на поле бросаю жемчуг на 10–20 бл. в случайную сторону раз в ~6 с.
 // Замер: сколько бросков, сколько раз в 1.5 с после появления рядом (≤ 3 бл.) уже стоял бот — «встретили».
 async function pearl () {
@@ -339,25 +405,45 @@ async function pearl () {
   return { throws, met, hitMe: (hurt.get(NAME) || 0) - me0 }
 }
 
+// Подброс у края (игра пользователя 25.10: «подкидываю себя ветром на краю специально — кинут один заряд, и всё»): стою на гребне,
+// как rim, раз в ~4 с подлетаю на 6 бл. (свой заряд mineflayer не подбрасывает — телепорт вверх), дальше падаю сам. Замер как rim.
+async function rimlaunch () {
+  await setMode('survival'); await immortal(); await hold('netherite_sword')
+  const spots = (process.env.ADV_RIM || '526.5 600.5;673.5 600.5;600.5 527.5;600.5 672.5').split(';').map(s => s.trim().split(/\s+/).map(Number))
+  let from: any = null
+  for (const [x, z] of spots) {
+    await cmd(`tp ${NAME} ${x} 165 ${z}`); await sleep(2500)
+    for (let k = 0; k < 30 && !bot.entity?.onGround; k++) await sleep(100)
+    if (bot.entity?.onGround && bot.entity.position.y > 145) { from = bot.entity.position.clone(); break }
+  }
+  if (!from) return { error: 'гребень не найден' }
+  say(`🧪 rimlaunch ${IDLE_MS / 1000} с: ${from.x.toFixed(2)},${from.y.toFixed(2)},${from.z.toFixed(2)}`)
+  const t0 = Date.now(), d0 = dead.get(NAME) ?? -1
+  let minY = Infinity, launches = 0
+  while (Date.now() - t0 < IDLE_MS && bot.entity && (dead.get(NAME) ?? -1) === d0) {
+    if (bot.entity.onGround && bot.entity.position.y > from.y - 2) { await cmd(`execute at ${NAME} run tp ${NAME} ~ ~6 ~`); launches++ }
+    for (let k = 0; k < 40; k++) { await sleep(100); if (!bot.entity) break; minY = Math.min(minY, bot.entity.position.y) }
+    // Упал с гребня, но жив (ниже уступ) — назад на точку.
+    if (bot.entity && bot.entity.onGround && bot.entity.position.y < from.y - 2) { say(`🧪 rimlaunch: упал до y ${bot.entity.position.y.toFixed(1)}`); await cmd(`tp ${NAME} ${from.x} ${from.y} ${from.z}`); await sleep(1500) }
+  }
+  return { launches, minY: +minY.toFixed(1), died: (dead.get(NAME) ?? -1) !== d0 }
+}
+
 // Взлёт (жонглирование роя, пользователь 24.10: «подлетел высоко — закидывают, чтобы поднялся выше и улетел с арены»):
 // на поле среди ботов раз в ~5 с заряд ветра себе под ноги и прыжок — как игрок с булавой. Замер: высшая точка, вылетел ли.
 async function launch () {
   await setMode('survival'); await immortal()
-  await cmd(`give ${NAME} minecraft:wind_charge 32`); await sleep(300)
-  const near = nearest(); if (near) await cmd(`execute at ${near.username} run tp ${NAME} ~3 ~ ~`); await sleep(1500)
-  const t0 = Date.now(), y0 = bot.entity.position.y, d0 = dead.get(NAME) ?? -1
-  let maxY = y0, minY = y0, launches = 0
+  // Свой заряд под ноги mineflayer'ом не подбрасывает (подъём ~2 бл. на стенде 25.10) — «подброшенный» иначе: телепорт на 12 бл.
+  // над полем в 4 бл. от ближайшего бота, раз в ~5 с; дальше падает сам. Замер: самая низкая точка, вылетел ли.
+  const t0 = Date.now(), d0 = dead.get(NAME) ?? -1
+  let maxY = -Infinity, minY = Infinity, launches = 0
   while (Date.now() - t0 < IDLE_MS && bot.entity && (dead.get(NAME) ?? -1) === d0) {
-    const it = bot.inventory.items().find((i: any) => i.name === 'wind_charge')
-    if (it && bot.entity.onGround) {
-      await bot.equip(it, 'hand').catch(() => {})
-      await bot.look(bot.entity.yaw, -Math.PI / 2, true)
-      bot.setControlState('jump', true); bot.activateItem(); launches++
-      await sleep(120); bot.setControlState('jump', false)
-    }
-    for (let k = 0; k < 50; k++) { await sleep(100); maxY = Math.max(maxY, bot.entity.position.y); minY = Math.min(minY, bot.entity.position.y) }
+    const near = nearest()
+    if (near) await cmd(`execute at ${near.username} run tp ${NAME} ~4 ~12 ~`); else await cmd(`tp ${NAME} 600.5 135 600.5`)
+    launches++
+    for (let k = 0; k < 50; k++) { await sleep(100); if (!bot.entity) break; maxY = Math.max(maxY, bot.entity.position.y); minY = Math.min(minY, bot.entity.position.y) }
   }
-  return { launches, rise: +(maxY - y0).toFixed(1), minY: +minY.toFixed(1), died: (dead.get(NAME) ?? -1) !== d0 }
+  return { launches, rise: +(maxY - minY).toFixed(1), minY: +minY.toFixed(1), died: (dead.get(NAME) ?? -1) !== d0 }
 }
 
 // Я в яме на 2 бл. ниже, в 2 бл. от бота (пользователь: стояли у края, цель ниже — держали копьё или махали мимо). 10 с жду.
@@ -389,16 +475,16 @@ async function tntlate () {
   await setMode('creative'); await immortal()
   const t = nearest(e => dist(e) < 40)
   if (!t) return { skip: 'нет целей' }
-  const name = t.username
+  const name = t.username, d0 = dead.get(name)
   await cmd(`item replace entity ${name} weapon.offhand with minecraft:shield`); await sleep(500)
   await cmd(`execute at ${name} facing entity ${name} feet run tp ${NAME} ^ ^3 ^-9`); await sleep(200)
   const hp0 = await hpOf(name), p = t.position
   await cmd(`summon minecraft:tnt ${p.x.toFixed(2)} ${p.y.toFixed(2)} ${p.z.toFixed(2)} {fuse:12}`)
   let shield: boolean | null = null
-  for (let k = 0; k < 30; k++) { await sleep(50); if (k === 10) shield = handActive(t) }
+  for (let k = 0; k < 30 && dead.get(name) === d0; k++) { await sleep(50); if (k === 10) shield = handActive(t) }
   await sleep(1500)
   const hp1 = await hpOf(name)
-  return { name, shield, hpDrop: hp0 != null && hp1 != null ? +(hp0 - hp1).toFixed(1) : null, died: dead.has(name) }
+  return { name, shield, hpDrop: hp0 != null && hp1 != null ? +(hp0 - hp1).toFixed(1) : null, died: dead.get(name) !== d0 }
 }
 
 // Остров во рву: я на 3×3 посреди кольца воды 4 бл. шириной и 2 глубиной на поле Колизея (пользователь: «плывут по воде
@@ -451,7 +537,7 @@ async function room () {
   const fresh = (e: any) => tick - (watch.get(e.username)?.nearAt ?? -1e9) > 200
   const t = nearest(e => dist(e) < 80 && fresh(e) && roofed(e) && bot.blockAt(e.position.offset(0, -0.5, 0))?.boundingBox === 'block')
   if (!t) return { skip: 'никого свежего под крышей' }
-  const name = t.username, base = t.position.floored()
+  const name = t.username, death0 = dead.get(name), base = t.position.floored()
   const free = (c: any) => bot.blockAt(c)?.boundingBox === 'empty' && bot.blockAt(c.offset(0, 1, 0))?.boundingBox === 'empty' &&
     bot.blockAt(c.offset(0, -1, 0))?.boundingBox === 'block' && !/lava|fire|cobweb|water/.test((bot.blockAt(c)?.name || '') + bot.blockAt(c.offset(0, -1, 0))?.name)
   const clear = (c: any) => { const o = c.offset(.5, 1.62, .5), to = t.position.offset(0, 1.2, 0), dv = to.minus(o), n = dv.norm(); return !bot.world.raycast(o, dv.scaled(1 / n), n) }
@@ -467,7 +553,7 @@ async function room () {
   const t0 = Date.now(), p0 = t.position.clone(), d0 = dist(t), me0 = hurt.get(NAME) || 0
   let lookMs: number | null = null, moveMs: number | null = null, moved = 0, hitMs: number | null = null
   say(`🚪 вбежал к ${name} (${d0.toFixed(1)} бл.)`)
-  while (Date.now() - t0 < 8000 && bot.entities[t.id] && !dead.has(name)) {
+  while (Date.now() - t0 < 8000 && bot.entities[t.id] && dead.get(name) === death0) {
     await sleep(50)
     const ms = Date.now() - t0, to = bot.entity.position.minus(t.position), yaw = t.headYaw ?? t.yaw
     const cos = (-Math.sin(yaw) * to.x - Math.cos(yaw) * to.z) / (Math.hypot(to.x, to.z) || 1)
@@ -478,7 +564,7 @@ async function room () {
   return { name, d0: +d0.toFixed(1), lookMs, moveMs, moved, hitMs }
 }
 
-const SCENES: Record<string, () => Promise<any>> = { rush, undermine, tnt, mace, bow, web, idle, pit, tntlate, moat, room, rim, pearl, launch }
+const SCENES: Record<string, () => Promise<any>> = { rush, undermine, tnt, mace, bow, web, idle, pit, tntlate, moat, room, rim, rimrun, pearl, launch, rimlaunch }
 const results: any[] = []
 bot.once('spawn', async () => {
   // Креатив ломает сразу; расчёт времени mineflayer падал на зачарованиях предмета в руке («enchantments.concat»).
@@ -501,7 +587,7 @@ bot.once('spawn', async () => {
     const f0 = freezes.length
     // Рой далеко (лутает по ярусам) — к ближайшему боту: сценариям нужны цели рядом.
     const near = nearest()
-    if (scene !== 'rush' && scene !== 'rim' && scene !== 'pearl' && scene !== 'launch' && near && dist(near) > 30) { await setMode('survival'); await cmd(`execute at ${near.username} run tp ${NAME} ~ ~1 ~`); await sleep(1500) }
+    if (scene !== 'rush' && scene !== 'rim' && scene !== 'rimrun' && scene !== 'pearl' && scene !== 'launch' && scene !== 'rimlaunch' && near && dist(near) > 30) { await setMode('survival'); await cmd(`execute at ${near.username} run tp ${NAME} ~ ~1 ~`); await sleep(1500) }
     let r: any
     try { r = await fn() } catch (e: any) { r = { error: e.message } }
     stop()

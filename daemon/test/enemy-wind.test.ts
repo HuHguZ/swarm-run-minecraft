@@ -153,3 +153,51 @@ test('planner work stays bounded with thirty reports and shares each ally native
     t.diagnostic(JSON.stringify({ reports: name, coldMs: times[0], warmMeanMs: times.slice(1).reduce((a, b) => a + b, 0) / 5, maxMs: Math.max(...times) }))
   }
 })
+
+test('a running enemy keeps running until the burst: the forecast does not stop him on the spot', () => {
+  const { planEnemyWind } = require('../src/combat/enemy-wind')
+  // Бег со «Скоростью II» по полу к краю (0.39 бл/т): до попадания он бежит дальше и сам уходит за край — заряд не нужен (baseline.out).
+  const run = fixture()
+  run.foe.position = new Vec3(0.5, 1, 1.5); run.foe.onGround = true; run.foe.velocity = new Vec3(0, 0, .39)
+  const p1 = planEnemyWind(run.bot, run.foe, run.throwers, { ...run.options, reactAfterHit: true })
+  assert.ok(!p1 || p1.baseline.out, JSON.stringify(p1?.baseline))
+  // Стоящий там же — сам не вылетает.
+  const still = fixture()
+  still.foe.position = new Vec3(0.5, 1, 1.5); still.foe.onGround = true; still.foe.velocity = new Vec3(0, 0, 0)
+  const p2 = planEnemyWind(still.bot, still.foe, still.throwers, { ...still.options, reactAfterHit: true })
+  assert.ok(p2 && !p2.baseline.out, JSON.stringify(p2?.baseline))
+})
+
+test('colosseum edge is the outer-wall ellipse, not the square: minor axis and diagonal rims are at the edge', () => {
+  const { arenaRoom } = require('../src/combat/team-wind') as typeof import('../src/combat/team-wind')
+  const arena = { x: 600, z: 600, r: 80, ellipse: { a: 77, b: 65 } }
+  assert.ok(Math.abs(arenaRoom(arena, { x: 600, z: 662.5 }) - 2.5) < 1e-6)
+  assert.ok(arenaRoom(arena, { x: 647.5, z: 647.5 }) < 8)
+  assert.ok(arenaRoom(arena, { x: 600, z: 600 }) >= 65)
+  assert.ok(arenaRoom(arena, { x: 600, z: 670 }) < 0)
+  assert.equal(arenaRoom({ x: 0, z: 0, r: 10 }, { x: 3, z: -7 }), 3)
+})
+
+test('one synchronous enemy wind plan shares raw sight cells and the next plan sees same-tick block updates', () => {
+  const { planEnemyWind } = require('../src/combat/enemy-wind') as typeof import('../src/combat/enemy-wind')
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const fixed = new clock.GameClock({ manual: true, epoch: 0 })
+  clock.activate(fixed)
+  try {
+    for (const unknown of [false, true]) {
+      const f = fixture(), read = f.bot.blockAt, cells = new Set<string>(); let reads = 0
+      f.bot.blockAt = (p: Vec3) => {
+        reads++; cells.add(p.floored().toString())
+        return unknown && (p.x >= 5 || p.y >= 5) ? null : read(p)
+      }
+      const before = planEnemyWind(f.bot, f.foe, f.throwers, f.options)
+      assert.ok(before)
+      assert.ok(reads < cells.size * 2, `shared raw LOS reads: ${reads} reads / ${cells.size} cells`)
+      const firstReads = reads
+      f.cells.clear()
+      const after = planEnemyWind(f.bot, f.foe, f.throwers, f.options)
+      assert.notDeepEqual(after, before, 'cache must end with the synchronous call, even without a game tick')
+      assert.ok(reads > firstReads, 'new forecast must reread terrain')
+    }
+  } finally { clock.activate(null); fixed.dispose() }
+})

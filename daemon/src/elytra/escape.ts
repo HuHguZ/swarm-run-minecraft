@@ -92,7 +92,7 @@ async function escape (bot, ctl, e, { heal, enough = () => (bot.health ?? 0) >= 
   const floorRef = () => arena ? arena.y : foe().y
   const onField = (x, z) => !arena || (Math.abs(x - arena.x) <= arena.r - 1 && Math.abs(z - arena.z) <= arena.r - 1)
   if (allow) allow()
-  const to = await takeoff(bot, ctl, { pitch: 1.05, yaw: away, stats, arena })
+  const to = await takeoff(bot, ctl, { pitch: 1.05, yaw: away, stats, arena, useReserve: true })
   if (!to.ok) { out.note = 'уход на элитрах: не взлетел — ' + to.why; await chestDown(bot, ctl, { stats, arena }); return out }
   stats.escapes = (stats.escapes || 0) + 1
   used('элитры: взлёт — ухожу лечиться в воздух')
@@ -105,7 +105,7 @@ async function escape (bot, ctl, e, { heal, enough = () => (bot.health ?? 0) >= 
   const onHp = () => { const h = bot.health ?? 20; if (h < hpPrev) hurtAir += hpPrev - h; hpPrev = h }
   bot.on('health', onHp)
   const alt = () => cruiseAlt(bot, W, foe())
-  const r: any = await fly(bot, ctl, { arena,
+  const r: any = await fly(bot, ctl, { arena, useReserve: true,
     maxMs, phase: 'уход',
     stats,
     goal: () => {

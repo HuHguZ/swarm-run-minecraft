@@ -13,7 +13,15 @@ const yawTo = (a: Point, b: Point) => Math.atan2(-(b.x - a.x), -(b.z - a.z))
 const positionKey = (p: Point) => `${p.x},${p.y},${p.z}`
 export interface WindReport { id: string; position: Point; velocity: Point; onGround: boolean; eyeHeight?: number; yaw?: number; gameTick?: number; attributes?: Record<string, any>; effects?: Record<string, any>; control?: Record<string, boolean> }
 export interface WindShot { from: Vec3; aim: Vec3; yaw: number; pitch: number; velocity: Vec3; ticks: number; impact: Vec3; burst: Vec3; normal: Vec3; block: Point }
-export interface WindArena { x: number; z: number; r: number; killY?: number }
+// ellipse — Колизей: край — внешняя стена, эллипс a×b (77×65), а не квадрат r (у него на малой оси до края 17 бл., на диагонали 25).
+export interface WindArena { x: number; z: number; r: number; killY?: number; ellipse?: { a: number; b: number } }
+/** Distance from p to the arena edge along the ray from the centre: by the ellipse when given, by the square otherwise. */
+export function arenaRoom(arena: WindArena, p: { x: number; z: number }) {
+  const dx = p.x - arena.x, dz = p.z - arena.z, e = arena.ellipse
+  if (!e) return arena.r - Math.max(Math.abs(dx), Math.abs(dz))
+  const d = Math.hypot(dx, dz); if (d < 1e-6) return Math.min(e.a, e.b)
+  return 1 / Math.hypot(dx / d / e.a, dz / d / e.b) - d
+}
 interface WindStep { yaw: number; control: Record<string, boolean>; pos: Point; vel: Point; onGround: boolean }
 export interface WindPairPlan {
   target: Point

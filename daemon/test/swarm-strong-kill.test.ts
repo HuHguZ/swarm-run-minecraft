@@ -26,7 +26,7 @@ function scene(members: SwarmMember[], foe = CHAMP) {
 const STRONG = { foesLeft: 1, quorum: 2, killsBy: { champ: 2 } }
 const onHim = (plan: Map<string, any>) => [...plan.values()].filter(t => t.kind === 'fight' && t.data?.target === 'champ')
 
-test('strong foe: two swords take every invulnerability window, the rest of the melee stays off; mace and harming always go', () => {
+test('known last strong foe: all swords finish, mace and harming retain their attacks; middle battle keeps two swords', () => {
   assert.equal(MELEE_CAP, 2, 'a sword charges in 12 ticks, the window is 10: two swords fill it')
   const team = [...Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k, k < MELEE_CAP ? { ench: { sharpness: 5 } } : {})),
     blue('mace', 6, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 4 } }),
@@ -35,11 +35,18 @@ test('strong foe: two swords take every invulnerability window, the rest of the 
   const plan = planPvp(f.board, team, STRONG)
   const fight = onHim(plan)
   const melee = fight.filter(t => !['pvp:mace', 'pvp:harm'].includes(t.id))
-  assert.equal(melee.length, MELEE_CAP, `swords on him: ${fight.map(t => t.id).join(',')}`)
-  assert.deepEqual(melee.map(t => t.id).sort(), ['pvp:s0', 'pvp:s1'], 'the two strongest swords')
+  assert.equal(melee.length, 6, `all surviving swords finish: ${fight.map(t => t.id).join(',')}`)
+  assert.ok(fight.every(t => t.data!.finishing))
   assert.ok(plan.get('mace')!.kind === 'fight' && plan.get('mace')!.data!.smash, 'the mace with a wind charge strikes from the air')
   assert.equal(plan.get('harm')!.kind, 'fight', 'harming potions go past his armour')
-  for (const id of ['s2', 's3', 's4', 's5']) assert.notEqual(plan.get(id)!.kind, 'fight', `${id}: a third sword adds nothing but thorns`)
+  const middle = new SwarmBoard('blue', () => 10000, 3000)
+  middle.setMembers(team)
+  middle.observe('s0', 10000, { id: 'champ', position: p(), visible: true, ...CHAMP, hpEstimate: 20,
+    hitProof: { healed: 1.6, hits: Array.from({ length: 8 }, (_, i) => ({ ago: (8 - i) * 500, damage: .2, lowDamage: .2, healed: i * .2 })) } })
+  const ordinary = onHim(planPvp(middle, team, { aggressive: true, quorum: 2 }))
+  const limited = ordinary.filter(t => !['pvp:mace', 'pvp:harm'].includes(t.id))
+  assert.equal(limited.length, MELEE_CAP, 'unknown enemy count: confirmed ineffective hits still cap the ordinary melee')
+  assert.deepEqual(limited.map(t => t.id).sort(), ['pvp:s0', 'pvp:s1'], 'the two strongest swords in the middle battle')
 })
 
 test('strong foe at a void edge: swords and wind lead him to the void, including a chain of hits from afar', () => {
@@ -99,7 +106,7 @@ test('undermining the strong foe: the hole over the void goes first, obsidian wa
   assert.notEqual(planPvp(g.board, iron, { ...STRONG, digSites: () => [voidHole] }).get('iron')!.data?.dig, '2,63,1', 'iron does not cut obsidian in time')
 })
 
-test('web, axe, mace: with a mace on the team the axes go in to break his shield; without one they stay capped', () => {
+test('web, axe, mace: combo flags survive finishing; axes without a mace finish only in a known endgame', () => {
   const swords = () => Array.from({ length: 6 }, (_, k) => blue(`s${k}`, k))
   const axes = () => [7, 8].map(k => blue(`axe${k}`, k, { inventory: { diamond_sword: 1, diamond_axe: 1 } }))
   const combo = [...swords(), blue('mace', 6, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 4 } }), ...axes()]
@@ -109,7 +116,13 @@ test('web, axe, mace: with a mace on the team the axes go in to break his shield
   const alone = [...swords(), ...axes()]
   const g = scene(alone)
   const solo = planPvp(g.board, alone, STRONG)
-  for (const id of ['axe7', 'axe8']) assert.notEqual(solo.get(id)!.kind, 'fight', `${id}: no mace to follow up — a third blade adds thorns only`)
+  for (const id of ['axe7', 'axe8']) assert.ok(solo.get(id)!.kind === 'fight' && solo.get(id)!.data!.finishing, `${id}: known final foe is still finished`)
+  const middle = new SwarmBoard('blue', () => 10000, 3000)
+  middle.setMembers(alone)
+  middle.observe('s0', 10000, { id: 'champ', position: p(), visible: true, ...CHAMP, hpEstimate: 20,
+    hitProof: { healed: 1.6, hits: Array.from({ length: 8 }, (_, i) => ({ ago: (8 - i) * 500, damage: .2, lowDamage: .2, healed: i * .2 })) } })
+  const ordinary = planPvp(middle, alone, { aggressive: true, quorum: 2 })
+  for (const id of ['axe7', 'axe8']) assert.notEqual(ordinary.get(id)!.kind, 'fight', `${id}: unknown enemy count retains melee cap/rearming without a mace`)
 })
 
 test('harming in invulnerability windows: the cloud lands after the window of the last hit on him', () => {

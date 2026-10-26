@@ -57,6 +57,7 @@ interface GotoRun {
   bx?: number
   bz?: number
   goal?: any
+  arrival?: () => boolean
   resolvedTo?: any
   surfaceWalk?: boolean
   waterRoute?: ReturnType<typeof startWaterRoute>
@@ -67,6 +68,35 @@ interface GotoRun {
   descentWatch?: any
   // попытка ставит, сторож спуска зовёт
   failDescent?: ((err: any) => void) | null
+}
+
+// Native A* uses the cell above a fractional solid in the feet cell (index.js:80–85),
+// then postProcessPath mutates that same node to the physical shape top.
+function supportedNearGoal(bot, x: number, y: number, z: number, range: number) {
+  const physical = new goals.GoalNear(x, y, z, range)
+  const empty = bot.pathfinder.movements.emptyBlocks
+  const nodeAt = (at, grounded: boolean) => {
+    const p = at.floored(), block = bot.blockAt(p, false)
+    if (at.y - p.y > .001 && grounded && block && !empty.has(block.type)) p.y++
+    return p
+  }
+  const target = nodeAt(new Vec3(x + .5, y, z + .5), true)
+  const goal = new goals.GoalNear(x, target.y, z, range), end = goal.isEnd.bind(goal)
+  if (goal.y !== physical.y) {
+    // gotoGoal floors postprocessed nodes. Recover only an actual sub-block solid;
+    // an air cell or a full block never gains a level through this bridge.
+    goal.isEnd = node => {
+      const p = new Vec3(node.x, node.y, node.z).floored()
+      if (p.y === physical.y) {
+        const block = bot.blockAt(p, false)
+        const h = Math.max(0, ...(block?.shapes ?? []).map(shape => shape[4]))
+        if (block && !empty.has(block.type) && h > 0 && h < 1) p.y++
+      }
+      return end(p)
+    }
+  }
+  return { goal, arrival: () => physical.isEnd(bot.entity.position.floored()) &&
+    end(nodeAt(bot.entity.position, !!bot.entity.onGround)) }
 }
 
 // runIntent's clock ran out, and on an abort it throws — so the report was
@@ -186,6 +216,32 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   const waitPartial = avoiding || (typeof pathWait === 'boolean' ? pathWait : (gotoWaitOn() || !!(this.bridgeWanted ?? blockmoves.on())))
   if (this.bridgeWanted) blockmoves.install(this)
   this.updateMovements()
+  // Native A* misses a fractional floor held only by the side of the body's footprint.
+  const from = bot.entity.position.clone(), feet = bot.blockAt(from.floored(), false)
+  if (bot.entity.onGround && from.y - Math.floor(from.y) > .001 && feet && bot.pathfinder.movements.emptyBlocks.has(feet.type)) {
+    const geometry: typeof import('../navigation/geometry') = require('../navigation/geometry')
+    const support = geometry.supportAt(bot, from, .04), maxTicks = Math.min(24, Math.floor((deadline - gameClock.now()) / 50) - 6)
+    if (support && Math.abs(support.top - from.y) < .04 && maxTicks > 0) {
+      const parkour = lazyParkour(), { PlayerState } = (require('../tick-plugins') as typeof import('../tick-plugins')).getPhysics()
+      const nativeKey = () => JSON.stringify([new PlayerState(bot, { ...parkour.IDLE }), bot.health, bot.food])
+      const before = nativeKey(), target = new Vec3((support.box.minX + support.box.maxX) / 2, support.top, (support.box.minZ + support.box.maxZ) / 2)
+      const planningBot = Object.assign(Object.create(bot), { entity: { ...bot.entity, attributes: structuredClone(bot.entity.attributes) } })
+      const plan = await parkour.planJumpAsync(planningBot, ctl, target, { allowWalk: true, sprint: false, maxFallDamage: 0,
+        arena: boundedArena, tolerance: .08, maxTicks, maxFrames: parkour.ROUTE_FRAMES })
+      if (ctl.aborted) throw new Error('прервано')
+      if (run.bounds.error) throw run.bounds.error
+      if (plan && before === nativeKey() && plan.steps.length * 50 <= deadline - gameClock.now() && !plan.fall && !plan.allowDamage &&
+          plan.steps.every(step => !step.control.jump) && plan.states.every((st, i) => st.onGround && Math.abs(st.pos.y - from.y) < .04 &&
+            geometry.supportAt(bot, st.pos, .04) && geometry.bodyClear(bot, st.pos) && geometry.groundedHazardClear(bot, st.pos, st.vel.y, st.onGround) &&
+            parkour.withinArena(bot, st.pos, boundedArena, i ? plan.states[i - 1].pos : from))) {
+        bot.pathfinder.setGoal(null)
+        const centered = await parkour.executePlan(bot, ctl, { ...plan, arena: boundedArena }, st => parkour.settledLanding(bot, st, target, .12))
+        console.log('[goto-center]', JSON.stringify({ from, to: target, ok: centered.ok, ticks: centered.ticks }))
+        if (ctl.aborted) throw new Error('прервано')
+        if (run.bounds.error) throw run.bounds.error
+      }
+    }
+  }
   // Лестница выхода из застреваний (unstuck.js): ND_UNSTUCK или goto { unstuck }; только в новом goto (gotoGoal).
   const un = !strict && waitPartial && lazyUnstuck().on(unstuckWanted) ? lazyUnstuck().watch(this, ctl, { deadline }) : null
   console.log('[goto]', JSON.stringify({ to: [x, y ?? null, z], from: bot.entity ? [Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)] : null,
@@ -205,6 +261,7 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   const bz = Math.floor(z)
   if (strict && !boundedArena && !walkOnly) await lazyFortify().leaveSealedCell(this, ctl, { x: bx + 0.5, z: bz + 0.5 })
   let goal
+  let arrival: (() => boolean) | undefined
   let resolvedTo
   if (y === undefined || y === null) {
     goal = new goals.GoalNearXZ(bx, bz, Math.max(1, range))
@@ -217,7 +274,7 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
       goal = new goals.GoalNearXZ(bx, bz, Math.max(2, range))
       resolvedTo = { x: bx, y: null, z: bz, mode: 'xz (нет места встать на заданной высоте)' }
     } else {
-      goal = new goals.GoalNear(bx, yy, bz, range)
+      ;({ goal, arrival } = supportedNearGoal(bot, bx, yy, bz, range))
       resolvedTo = { x: bx, y: yy, z: bz, mode: 'near' }
     }
   }
@@ -235,7 +292,7 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
     (surfaceWalkOn(bot) && surface === 'strict' && !boundedArena))
 
   ctl.onAbort.push(() => { try { bot.pathfinder.setGoal(null) } catch {} })
-  Object.assign(run, { deadline, strict, waitPartial, un, goalBelow, pit, bx, bz, goal, resolvedTo, surfaceWalk })
+  Object.assign(run, { deadline, strict, waitPartial, un, goalBelow, pit, bx, bz, goal, arrival, resolvedTo, surfaceWalk })
 }
 
 // Ходы до pathfinder'а: жемчуг, быстрый спуск, подъём на лодке; сторож края обрыва на время попыток.
@@ -323,7 +380,7 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
     if (bounds.error) throw bounds.error
     // goto резолвит и пустой partial-путь. Достигнутая цель определяется
     // координатами тела, включая высоту для 3D-плана.
-    if (!g.isEnd(bot.entity.position.floored())) {
+    if (!(g === run.goal && run.arrival ? run.arrival() : g.isEnd(bot.entity.position.floored()))) {
       throw Object.assign(new Error('pathfinder закончил путь, но не достиг цели — не дошёл'), { noStep: true })
     }
   } finally {
@@ -373,6 +430,7 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
   let descentChecks = 0
   let stuckOut = false
   let strictEscaped = false
+  let arenaDropTried = false
   ctl.onAbort.push(() => descentWatch && descentWatch.stop())
   try {
   for (const step of plan) {
@@ -436,6 +494,25 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
         // отдельный план XZ; последнюю такую попытку прекращаем сразу.
         if (err.noStep) {
           try { bot.pathfinder.setGoal(null) } catch {}
+          // Изолированный насест: A* не видит шаг, но q12 уже умеет оплаченный нативный спуск к дальнейшей цели.
+          const lowerY = resolvedTo.y ?? y
+          if (boundedArena && !walkOnly && y != null && !outOfTime() && !arenaDropTried && lazyDescent().on(run.descent) && lowerY != null && Number.isFinite(Number(lowerY)) && Number(lowerY) < bot.entity.position.y - 3) {
+            arenaDropTried = true
+            const drops: typeof import('../flee-drop') = require('../flee-drop')
+            const hp = (bot.health ?? 0) + (require('../read') as typeof import('../read')).absorptionOf(bot, bot.entity)
+            const to = new Vec3(bx + .5, Number(lowerY), bz + .5)
+            const options = drops.dropOptions(bot, boundedArena, (end, hurt, ticks) =>
+              end.distanceTo(to) / 5.6 + ticks / 20 + 60 * hurt / (hp - hurt))
+              .filter(o => !o.drop.inspect && !o.drop.exit && o.end.y < bot.entity.position.y - 3).sort((a, b) => a.cost - b.cost)
+            if (options.length) {
+              const guard = (require('../edges') as typeof import('../edges')).guard(bot)
+              let landed
+              try { landed = await drops.runDrop(bot, ctl, options[0], guard, boundedArena) } finally { guard.stop() }
+              if (ctl.aborted) throw new Error('прервано')
+              if (bounds.error) throw bounds.error
+              if (landed) { tried.push(`спуск с яруса: ${options[0].drop.technique || 'шаг'} → ${bot.entity.position.y}`); retry--; continue }
+            }
+          }
           // Поверху без копки из кармана ни шагу (своя лестница под крышей, верх своего столба — cl-l/cl-n 14.10: 5–35 мин
           // «pathfinder закончил путь» на месте, потом смерть): один короткий отрезок к цели с копкой, дальше снова поверху.
           if (strict && !boundedArena && !walkOnly && !strictEscaped && away0 - away() < 1 && !outOfTime()) {

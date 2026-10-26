@@ -603,6 +603,43 @@ test('stall valve: without time packets the clock runs on at the vanilla 20 tick
   assert.equal(c.ticks, at, 'a frozen world is not a stall')
 })
 
+for (const lockstep of [false, true]) test(`duplicate capped age preserves the stall wakeup and pending continuation (lockstep=${lockstep})`, async t => {
+  const time = driver(t)
+  const c = new GameClock({ epoch: 0, ...(lockstep ? { lockstep: true, predictionTicks: 2 } : {}) })
+  t.after(() => c.dispose())
+  c.syncAge(1000n)
+  c.start()
+  await time.advanceTo(1500)
+  assert.equal(c.ticks, lockstep ? 2 : 20)
+  let resumed = false
+  const waiting = c.sleep(25).then(() => { resumed = true })
+  c.syncAge(1000n)
+  await time.advanceTo(4499)
+  assert.equal(resumed, false, 'the valve waits 3000 ms after the latest packet')
+  await time.advanceTo(4551)
+  assert.equal(resumed, true, 'an unchanged age cannot orphan a pending game timer')
+  await waiting
+  assert.equal(c.ticks, lockstep ? 3 : 21, 'the valve resumes one vanilla physical turn')
+})
+
+for (const mode of ['frozen', 'manual', 'disposed', 'follower', 'disabled']) test(`duplicate capped age does not auto-resume a ${mode} clock`, async t => {
+  const time = driver(t)
+  const c = new GameClock({ epoch: 0, ...(mode === 'manual' ? { manual: true } :
+    mode === 'follower' ? { predictionTicks: 0 } : mode === 'disabled' ? { stallMs: 0 } : {}) })
+  t.after(() => c.dispose())
+  c.syncAge(1000n)
+  c.start()
+  if (mode === 'manual') c.advanceTicks(20)
+  await time.advanceTo(1500)
+  if (mode === 'frozen') c.setState({ is_frozen: true })
+  if (mode === 'disposed') c.dispose()
+  const before = c.ticks
+  c.syncAge(1000n)
+  await time.advanceTo(10000)
+  assert.equal(c.ticks, before, 'duplicate ages preserve the existing pause policy')
+  assert.equal(time.pending(), 0)
+})
+
 test('duplicate frozen follower snapshots do not postpone confirmed step grants', async t => {
   const time = driver(t)
   const source: Record<string, any> = { id: 'frozen-regression', ticks: 0, gameMs: 0, tickRate: 20, frozen: true, running: true }

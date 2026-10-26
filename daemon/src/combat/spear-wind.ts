@@ -7,7 +7,7 @@ import { observePlayerGear, seesPlayer } from '../pvp/last-seen'
 import { leadTarget, observedVelocity } from '../bow/track'
 import { bodyClear, supportAt } from '../navigation/geometry'
 import edges = require('../edges')
-import { lanceHits, lanceDamage, ownSpearHit } from './aerial-lance'
+import { lanceHits, lanceDamage, lanceCollider, ownSpearHit } from './aerial-lance'
 import { allyWorld, allyOnSegment, visibleAllies, isAlly } from './ally-safety'
 import { teamWindPlan, worldTick, type WindPairPlan, type WindReport, type WindArena } from './team-wind'
 
@@ -34,10 +34,8 @@ function contact(bot, e, q, tick, foot, name, sharpness, defense) {
   if (!lanceHits(eye, direction, v, at, box.h, box.w)) return null
   const raw = lanceDamage(name, direction, v, hisV)
   if (!raw.dmg) return null
-  const distance = Math.min(4.5 + Math.max(0, direction.dot(v)), delta.norm())
   const seen = allyWorld(bot)
-  for (let d = 0; d <= distance; d += .25) if (!seen.blockAt(eye.plus(direction.scaled(d)))) return null
-  if (pick.blockOnRay(seen, eye, direction, distance)) return null
+  if (!lanceHits(eye, direction, v, at, box.h, box.w, lanceCollider(seen))) return null
   if (allyOnSegment(bot, visibleAllies(bot), eye.plus(direction.scaled(2)), eye.plus(direction.scaled(4.5 + Math.max(0, direction.dot(v)))), tick, 0, .125)) return null
   return { damage: dm.afterDefense(raw.dmg + dm.sharpBonus(sharpness), 'melee', defense), tick, pitch, rel: raw.rel }
 }

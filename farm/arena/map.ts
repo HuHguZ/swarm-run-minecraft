@@ -112,14 +112,20 @@ export function guardFalls (ctx: ArenaContext) {
   // Упал с Колизея — сразу смерть (12.10: «упал — лень подниматься наверх»): ниже нижнего яруса постройки на 3 бл., раз в секунду,
   // кроме зрителей; дальше обычный ход смерти (боец — в зрители, человек — набор и на свою сторону).
   // Спасение из пропасти (тело: rescue_config) — куда лететь и где смерть; раз в 20 с всем (переподключённым тоже).
-  const rescueT = arms ? setInterval(() => { for (const b of bots) b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: Y + L.y0 - 3, arena: { x: X, z: Z, r: L.half } }).catch(() => {}) }, 20000) : null
+  const rescueT = arms ? setInterval(() => { for (const b of bots) b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: Y + L.y0 - 3, arena: { x: X, z: Z, r: L.half, ellipse: L.ellipse } }).catch(() => {}) }, 20000) : null
   // Улетел за Колизей (элитры, заряд, жемчуг) дальше 8 бл. за границу арены — как упавший: оттуда путь в арену не строится
   // (стенд 15.10, 31ad на x 370: «точка подъёма вне арены» по кругу).
   const fallT = arms ? setInterval(() => {
     if (ctx.between) return
     rcon(i, `kill @a[gamemode=survival,x=${X - 200},z=${Z - 200},dx=400,dz=400,y=-64,dy=${Y + L.y0 - 3 + 64}]`).catch(() => {})
     for (const b of bots) {
-      const p = ctx.pos?.[b.name]?.p
+      const m = ctx.pos?.[b.name], p = m?.p
+      // Упал под Колизей (пользователь 25.10: «падают в обрыв — умирают, а можно на элитрах улететь») — с чем падал и откуда.
+      if (p && ctx.alive?.(b.name) && p.y < Y + L.y0 + .5 && (b.fellAt || 0) < Date.now() - 10000) {
+        b.fellAt = Date.now()
+        const inv = m.inv || {}, room = (require('../../daemon/src/combat/team-wind') as typeof import('../../daemon/src/combat/team-wind')).arenaRoom({ x: X + .5, z: Z + .5, r: L.half, ellipse: L.ellipse }, p)
+        ctx.log?.(`🕳☠ ${b.name}: падаю под Колизей у ${Math.round(p.x)},${p.y.toFixed(1)},${Math.round(p.z)} (до стены ${room.toFixed(1)} бл.), элитры ${inv.elytra || (m.armor?.torso === 'elytra' ? 'на теле' : 0)}, ракет ${inv.firework_rocket || 0}${m.offHand?.item === 'firework_rocket' ? ' (с левой рукой)' : ''}, жемчуг ${inv.ender_pearl || 0}, ветер ${inv.wind_charge || 0}, хп ${m.hp ?? '?'}${m.gliding ? ', лечу' : ''}${m.rescuing ? ', спасаюсь' : ''}, дело ${b.last?.m || '?'}`)
+      }
       if (!p || !ctx.alive?.(b.name) || (Math.abs(p.x - X) <= L.half + 8 && Math.abs(p.z - Z) <= L.half + 8)) { b.outSince = 0; continue }
       // 4 с на возврат (летит на элитрах над краем — ещё вернётся); дальше — как упавший.
       b.outSince = b.outSince || Date.now()

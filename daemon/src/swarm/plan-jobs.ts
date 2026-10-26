@@ -3,7 +3,7 @@
 import { aimingAt } from '../pvp/crowd'
 import type { SwarmPosition, SwarmMember, SharedEnemy, DigSite } from './types'
 import type { PvpPlan } from './plan-frame'
-import { distance, cellKey, count } from './common'
+import { distance, cellKey, count, ratio } from './common'
 import { shoveValue, SHOVE, type Edge } from './shove'
 import { MELEE_CAP } from './race'
 import { attackSeconds, digSeconds, dislodgeSeconds } from './dislodge'
@@ -75,7 +75,10 @@ export function pvpGather(S: PvpPlan): void {
 
 export function coverHurt(S: PvpPlan): void {
   const { board, team, enemies, plan, aggressive, hurt, untouchable, meanStrength, spots, loads, put, weak } = S
-  for (const ally of hurt) {
+  // Прижатый (враг в 4 бл., хп < 80 %) — тоже под прикрытие: в натиске раненым он не считается, и в углу его забивали в
+  // одиночку (пользователь 25.10: «союзники прикрывать должны»).
+  const pinned = S.doctrine === 'line' ? [] : team.filter(m => !hurt.includes(m) && ratio(m) < .8 && enemies.some(e => !untouchable.has(e.id) && distance(e.position, m.position) <= 4))
+  for (const ally of [...hurt, ...pinned]) {
     const foe = enemies.filter(e => !untouchable.has(e.id) && (aimingAt({ name: e.id, p: e.position, v: e.velocity }, { name: ally.id, p: ally.position }) || distance(e.position, ally.position) < 12)).sort((a, b) => distance(a.position, ally.position) - distance(b.position, ally.position))[0]
     const guard = foe && team.filter(m => !plan.has(m.id) && !(aggressive && weak(m))).sort((a, b) => (b.strength / meanStrength) * 6 - distance(b.position, ally.position) - ((a.strength / meanStrength) * 6 - distance(a.position, ally.position)))[0]
     if (guard && foe) {

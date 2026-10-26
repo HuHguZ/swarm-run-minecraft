@@ -110,3 +110,61 @@ export function createEmergencyEscape(bot: any, { away = null }: { away?: (() =>
   }
   return { snapshot, run }
 }
+
+// Жемчуг из пропасти (пользователь 25.10: «бот без элитр падает в обрыв под Колизеем — бросок жемчуга обратно, обязательно»;
+// «кидать высоко, на другой уровень Колизея, подальше от врага, чтобы тот не достал»): в падении — броски на верхнюю грань
+// опоры выше линии смерти внутри арены. Из тех, что перенесут раньше, чем тело пройдёт линию смерти, — выше и дальше от
+// врагов; не успевает ни один — самый быстрый.
+export function pitPearlScore(land: { tp: { x: number; y: number; z: number }; ticks: number }, { budget, foes, edge }: { budget: number; foes: { x: number; y: number; z: number }[]; edge?: boolean }) {
+  const far = foes.length ? Math.min(...foes.map(f => Math.hypot(land.tp.x - f.x, land.tp.y - f.y, land.tp.z - f.z))) : 30
+  return land.ticks <= budget ? 1000 + land.tp.y + Math.min(far, 30) * .7 - (edge ? 8 : 0) : -land.ticks
+}
+
+/** Ticks until a falling body (gravity .08, drag .98) drops below y. */
+export function ticksToY(y0: number, vy0: number, y: number) {
+  let p = y0, v = vy0
+  for (let t = 0; t < 200; t++) { if (p < y) return t; v = (v - .08) * .98; p += v }
+  return 200
+}
+
+export async function pitPearl(bot: any, ctl: { aborted: boolean }, { killY, arena, foes = [] }: { killY: number; arena?: any; foes?: { x: number; y: number; z: number }[] }) {
+  const item = bot.inventory.items().find((i: any) => i.name === 'ender_pearl') ||
+    (bot.inventory.slots[45]?.name === 'ender_pearl' ? bot.inventory.slots[45] : null)
+  if (!item) return { ok: false, why: 'нет жемчуга' }
+  const inside = (p: any) => !arena || (require('./team-wind') as typeof import('./team-wind')).windInside(p, arena)
+  const rejected: Record<string, number> = {}
+  const reject = (why: string) => { rejected[why] = (rejected[why] ?? 0) + 1 }
+  const from = bot.entity.position.clone()
+  const budget = ticksToY(from.y, bot.entity.velocity.y, killY)
+  const result = await projectiles.throwAt(bot, null, { item, preferOffhand: true,
+    pick: (ctx: any) => {
+      let best: any = null
+      for (let i = 0; i < 16; i++) for (const degrees of [-30, -10, 5, 15, 25, 35, 45, 55, 65, 75, 85]) {
+        const yaw = i * Math.PI / 8, pitch = degrees * Math.PI / 180
+        const land = ctx.landing(yaw, pitch)
+        if (!land?.tp || land.void) { reject(land?.void ? 'void' : 'unloaded'); continue }
+        // Только верхняя грань: попал в стену сбоку — перенос к стене, и тело падает дальше (стенд 25.10: «перенос не подтверждён»).
+        // Грань сам: raycast с фильтром её не отдаёт — точка перед попаданием на верху блока или выше — значит, сверху.
+        if (!land.block?.position || land.tp.y < land.block.position.y + .9) { reject('не на верх блока'); continue }
+        if (land.tp.y < killY + 1) { reject('ниже линии смерти'); continue }
+        if (!inside(land.tp)) { reject('вне арены'); continue }
+        const settled = pearls.settle(pearls.worldOf(bot), land.tp)
+        if (!settled?.ok) { reject(settled?.why ?? 'нет опоры'); continue }
+        const score = pitPearlScore(land, { budget, foes, edge: !!settled.edge1 })
+        if (!best || score > best.score) best = { yaw, pitch, score, at: land.tp, ticks: land.ticks }
+      }
+      return best
+    },
+    onAim: (shot: any) => !ctl.aborted && !!shot.land?.tp && !shot.land.void })
+  if (!result.thrown) return { ok: false, why: `${result.why ?? 'не бросил'}: ${JSON.stringify(rejected)}`, budget }
+  // Перенос — скачок тела (больше 3 бл. за тик) на высоту выше линии смерти: точка переноса расходится с расчётной на несколько бл.
+  const at = result.land?.tp, began = clock.now(), deadline = ((result.ticks ?? 60) + 20) * 50
+  let last = bot.entity.position.clone()
+  while (!ctl.aborted && bot.health > 0 && clock.now() - began < deadline) {
+    const p = bot.entity.position
+    if (p.distanceTo(last) > 3 && p.y >= killY + 1) return { ok: true, pearl: true, at: p.clone(), y: Math.round(p.y), ticks: result.ticks, budget, error: at ? +p.distanceTo(at).toFixed(1) : null }
+    last = p.clone()
+    await clock.sleep(50)
+  }
+  return { ok: false, why: ctl.aborted ? 'прервано' : bot.health <= 0 ? 'death' : 'перенос не подтверждён', ticks: result.ticks, budget, at }
+}

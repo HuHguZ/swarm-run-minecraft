@@ -181,6 +181,43 @@ function onDanger (dz: DangerCtx, b, m) {
   // webTurn (резка/вода/жемчуг/щит по цене). Игра пользователя 24.10: «застревают в паутине» — clear_web отказывал
   // direct_threat 25 раз подряд, а боя никто не начинал.
   const webFoe = webFoes.filter(e => !e.mob && e.d <= 8).sort((a, c) => a.d - c.d)[0]
+  // Резать нечем (рукой — 20 с) или резку срывает враг — позвать ближайшего свободного своего с мечом или ножницами: подойдёт
+  // и срежет паутину на мне (пользователь 25.10: «научи просить союзников с оружием вытащить из паутины, особенно если рядом»).
+  if (wb && (!/_sword|shears/.test(webTools) || (wbE.refused || 0) >= 1) && !(b.webHelper && ctx.alive?.(b.webHelper.name) !== false)) {
+    const helper = dz.bots.filter(o => o !== b && o.team === b.team && ctx.alive?.(o.name) !== false && !dz.busy.has(o.name) && !reactions.has(o) && !o.webRescue && !o.swarmReserved && pos[o.name]?.p &&
+        !pos[o.name].rescuing && !pos[o.name].gliding && !pos[o.name].combo && !(o.last?.pending !== false && /^(fight|wind_receive|wind_boost)$/.test(o.last?.m || '')) &&
+        Object.keys(pos[o.name].inv || {}).some(k => /_sword$|^shears$/.test(k) && pos[o.name].inv[k] > 0) &&
+        ![...(dz.observations.get(o)?.episodes?.values() || [])].some((e: any) => e.kind === 'wb') && !wbE.helpFailed?.has(o.name) && !o.climbing && distance(pos[o.name].p, m.pos) <= 24)
+      .sort((x, y) => distance(pos[x.name].p, m.pos) - distance(pos[y.name].p, m.pos))[0]
+    if (helper) {
+      const rescue = { target: b.name, round: ctx.round }
+      const token = dz.beginReaction(helper)
+      b.webHelper = helper; helper.webRescue = rescue
+      const at = { ...m.pos }
+      const helping = () => rescue.round === ctx.round && !ctx.between && ctx.alive?.(b.name) !== false && ctx.alive?.(helper.name) !== false &&
+        !out.has(b.name) && !deadNow.has(b.name) && !out.has(helper.name) && !deadNow.has(helper.name) &&
+        observations.get(b)?.episodes.get(wbE.key) === wbE && b.webHelper === helper && helper.webRescue === rescue && dz.ownsReaction(helper, token)
+      log(`🕸🤝 ${b.name}: застрял в паутине${/_sword|shears/.test(webTools) ? '' : ' без меча'} — зову ${helper.name} (${distance(pos[helper.name].p, at).toFixed(0)} бл.)`)
+      ;(async () => {
+        if (helper.swarmExecuting) {
+          await helper.c.call('stop').catch(() => {})
+          const until = Date.now() + 3000
+          while (helper.swarmExecuting && helping() && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50))
+          if (!helping()) return
+          if (helper.swarmExecuting) { (wbE.helpFailed ||= new Set()).add(helper.name); return }
+        }
+        if (!helping()) return
+        // Не дошёл или не достал — в этой паутине его больше не звать (игра 25.10: f 4 раза подряд «не достаю», пока j резали).
+        const g = distance(pos[helper.name].p, at) > 3 ? await helper.c.call('goto', { x: at.x, y: at.y, z: at.z, range: 2.5, timeoutSeconds: 6 }).catch(e => ({ status: e.message })) : null
+        if (!helping()) return
+        const r = await helper.c.call('cut_ally_web', { target: b.name }).catch(e => ({ detail: { why: e.message } }))
+        if (!helping()) return
+        const x = r?.detail || r
+        if (!x?.ok) (wbE.helpFailed ||= new Set()).add(helper.name)
+        log(`🕸🤝 ${helper.name} → ${b.name}: ${x?.ok ? `вырезал (${x.cut})` : `не вырезал — ${x?.why || r?.status || '?'}${g ? `, подход: ${g.detail?.reason || g.status || '?'}` : ''}`}`)
+      })().finally(() => { dz.endReaction(helper, token); if (helper.webRescue === rescue) helper.webRescue = null; if (b.webHelper === helper && helper.webRescue?.target !== b.name) b.webHelper = null })
+    }
+  }
   // Режет паутину, а человек подошёл на удар — резку бросить и драться из паутины: бот 12 с «срезал» силой под булавой и не
   // отвечал (игра пользователя 24.10).
   if (wb && webFoe && webFoe.d <= 4.5 && b.last?.m === 'clear_web' && b.last.pending !== false) wbE.handled = false
@@ -243,7 +280,10 @@ function onDanger (dz: DangerCtx, b, m) {
   // уйти на 4 бл. от точки. Некуда или не вышло — щит, если удар ещё летит. Поздно (< 10 т) или щит уже поднят — щит, как было.
   const away0 = sm?.at ? Math.hypot(m.pos.x - sm.at.x, m.pos.z - sm.at.z) : 0
   if (sm && sm.ticks >= 10 && sm.at && away0 + sm.ticks * .25 >= 4 && !(b.shieldHold && reactions.get(b) === b.shieldHold)) {
-    const late = () => { if (b.maceDefense?.until > Date.now() && ctx.alive?.(b.name) !== false && (shieldNow || inv.cobweb > 0)) dangerShieldSmash(dz, b, sm, shieldNow) }
+    // Рывок не вышел — щит, пока удар ещё не сел (стенд 25.10: «некуда отскочить на 3 бл.», а щит ждал maceDefense, которую ставит
+    // сам щит, — удар в открытого, −9…13 хп).
+    const lands = Date.now() + sm.ticks * 50
+    const late = () => { if (Date.now() < lands && ctx.alive?.(b.name) !== false && (shieldNow || inv.cobweb > 0)) dangerShieldSmash(dz, b, sm, shieldNow) }
     ctx.dodgeAway(b, m.pos, sm.at, 5, late, null, false, false, 0, 3)
     return
   }

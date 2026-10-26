@@ -19,7 +19,8 @@ const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import * as sky from '../elytra'
 import * as spear from '../spear'
 import { leadTarget } from '../bow/track'
-import { hitboxOf } from '../pick'
+import { hitboxOf, rayBox } from '../pick'
+import { observedCollision } from '../pvp/search'
 import { ROCKET_MAX_TICKS } from '../elytra/consts'
 import { damageTypeName } from '../gamedata'
 
@@ -39,11 +40,37 @@ function lancePoint (p: any, arena: any) {
 }
 
 type V = { x: number; y: number; z: number }
+type LanceClip = (eye: V, direction: V, range: number) => number
 
-// Геометрия ProjectileUtil без блоков: contains bare(start), bare.clip, затем grown.clip.
+// Native cell traversal, observed COLLIDER shapes; packet-only terrain stays solid.
+export function lanceCollider (world: { blockAt: (p: any) => any }): LanceClip {
+  const { RaycastIterator } = require('prismarine-world').iterators
+  return (eye, direction, range) => {
+    const from = new Vec3(eye.x, eye.y, eye.z), dir = new Vec3(direction.x, direction.y, direction.z)
+    const iterator = new RaycastIterator(from, dir, range)
+    try {
+      for (let cell = from.floored(); cell; cell = iterator.next()) {
+        const p = new Vec3(cell.x, cell.y, cell.z), block = world.blockAt(p)
+        const shapes = block?.shapes ?? (!block || block.boundingBox === 'block' ? [[0, 0, 0, 1, 1, 1]] : [])
+        let nearest = range
+        for (const s of shapes) {
+          const t = rayBox(from, dir, { x: p.x + s[0], y: p.y + s[1], z: p.z + s[2] },
+            { x: p.x + s[3], y: p.y + s[4], z: p.z + s[5] }, range)
+          if (t != null) nearest = Math.min(nearest, t)
+        }
+        if (nearest < range) return nearest
+      }
+      return range
+    } catch { return 0 }
+  }
+}
+
+// ProjectileUtil: clip eyes→end, contains bare(start), bare.clip, then grown→bare through COLLIDER.
 // AABB.clip ищет вход из-за границы: start внутри одного margin не даёт попадания.
-export function lanceHits (eye: V, L: V, v: V, foot: V, h = 1.8, w = 0.6): boolean {
-  const tMax = MAX_R + Math.max(0, L.x * v.x + L.y * v.y + L.z * v.z)
+export function lanceHits (eye: V, L: V, v: V, foot: V, h = 1.8, w = 0.6, clip: LanceClip = null): boolean {
+  const range = MAX_R + Math.max(0, L.x * v.x + L.y * v.y + L.z * v.z)
+  const tMax = clip ? Math.min(range, clip(eye, L, range)) : range
+  if (!(tMax >= MIN_R)) return false
   const start = { x: eye.x + L.x * MIN_R, y: eye.y + L.y * MIN_R, z: eye.z + L.z * MIN_R }
   const hw = w / 2
   if (start.x >= foot.x - hw && start.x < foot.x + hw &&
@@ -53,7 +80,13 @@ export function lanceHits (eye: V, L: V, v: V, foot: V, h = 1.8, w = 0.6): boole
   const bare = spear.rayBox(eye, L, target, 0)
   if (bare && bare.tIn > MIN_R && bare.tIn < tMax) return true
   const grown = spear.rayBox(eye, L, target, MARGIN)
-  return !!grown && grown.tIn > MIN_R && grown.tIn < tMax
+  if (!grown || !(grown.tIn > MIN_R && grown.tIn < tMax)) return false
+  if (!clip) return true
+  const entry = new Vec3(eye.x + L.x * grown.tIn, eye.y + L.y * grown.tIn, eye.z + L.z * grown.tIn)
+  const toCenter = new Vec3(foot.x, foot.y + h / 2, foot.z).minus(entry), distance = toCenter.norm()
+  const direction = toCenter.scaled(1 / distance)
+  const inner = spear.rayBox(entry, direction, target, 0)
+  return !!inner && inner.tIn > 0 && inner.tIn < Math.min(distance, clip(entry, direction, distance))
 }
 
 // Базовый урон KineticWeapon до чар и брони; damage condition также требует mine >= 0.
@@ -73,7 +106,7 @@ const PITCHES = [-1.0, -0.8, -0.62, -0.48, -0.36, -0.26, -0.17, -0.09, 0, 0.09, 
 // копья, и после касания есть выход вверх без пола/стены. foot(t) — его ноги через t тиков, h — его рамка.
 // hitT — тики до касания: 0 — следующий отправленный шаг (сервер проверяет копьё в позиции после хода с новым взглядом;
 // c40–c41: отсчёт «от текущего, уже отправленного» давал ложное «касание сейчас» — попаданий на заход 0.42 → 0.17).
-export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number }, foot: (t: number) => V, { h = 1.8, hisV = { x: 0, y: 0, z: 0 }, name = 'iron_spear', H = 16, readyIn = 0, arena = null }: any = {}) {
+export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number }, foot: (t: number) => V, { h = 1.8, hisV = { x: 0, y: 0, z: 0 }, name = 'iron_spear', H = 16, readyIn = 0, arena = null, clip = null }: any = {}) {
   const feet = Array.from({ length: H + 1 }, (_, t) => foot(t))
   const f0 = feet[0]
   const bearing = yawTo(st.p, f0)
@@ -112,6 +145,7 @@ export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number
         const hitV = pair ? { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z } : hisV
         const dm = lanceDamage(name, L, v, hitV)
         if (dm.dmg > 0) {
+          if (clip && !lanceHits({ x: q.x, y: q.y + EYE_FLY, z: q.z }, L, v, feet[t + 1], h, .6, clip)) continue
           const contact = { t, q, ...dm }
           if (t + 1 >= readyIn) hit = contact
           else if (!early) early = contact
@@ -289,7 +323,7 @@ interface LanceCtx {
   arena: any; telemetryHp: (e: any) => number | null; W: any; S: any; t0: number; out: any; hp0: number; hisHp0: number | null
   valid: () => any; sp: any; name: string; spec: any; delayMs: number
   foe: () => any; hisH: () => number; hv: () => any; footAt: (t: number) => any; ceilY: () => number; cruiseY: () => number
-  using: boolean; useAt: number; hitAt: number; onHurt: (pk: any) => void; stopUse: () => void
+  using: boolean; useAt: number; hitAt: number; onHurt: (pk: any) => void; stopUse: () => void; clip: LanceClip
 }
 
 function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats, used, allow, maxMs, passes, arena, telemetryHp }: any): LanceCtx {
@@ -311,7 +345,8 @@ function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats
   const ceilY = () => sky.arenaAround(bot, W, bot.entity.position).ceilY - 1.8 - 1.4
   const cruiseY = () => Math.min(ceilY(), foe().y + 7)
   const ln: LanceCtx = { bot, ctl, e, vel, stats, used, allow, maxMs, passes, arena, telemetryHp, W, S, t0, out, hp0, hisHp0, valid, sp,
-    name: null, spec: null, delayMs: 0, foe, hisH, hv, footAt, ceilY, cruiseY, using: false, useAt: 0, hitAt: 0, onHurt: null, stopUse: null }
+    name: null, spec: null, delayMs: 0, foe, hisH, hv, footAt, ceilY, cruiseY, using: false, useAt: 0, hitAt: 0, onHurt: null, stopUse: null,
+    clip: lanceCollider(observedCollision(bot)) }
   // Попадание — его damage_event, причина которого — я (sourceCauseId = мой id + 1), пока копьё «в деле».
   // entityHurt без источника (падение, кинетическая, его кристалл) касанием не считается (замечание проверки S7b в).
   const onHurt = (pk: any) => {
@@ -451,7 +486,7 @@ async function lanceApproach (ln: LanceCtx) {
         }
         const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
         const readyIn = ln.using ? Math.max(0, Math.round(spec.delay * 20) + 1 - Math.round((clock.now() - ln.useAt) / 50)) : Math.round(spec.delay * 20) + 1
-        const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name, readyIn, arena })
+        const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name, readyIn, arena, clip: ln.clip })
         if (closest) Object.assign(close, {
           plan: pl?.hitT ?? null, ready: pl?.ready ?? null, prel: pl?.rel ?? null,
           readyIn, planAt: sampleAt, planHitAt: pl ? sampleAt + pl.hitT * 50 : null,

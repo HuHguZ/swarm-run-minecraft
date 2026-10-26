@@ -7,7 +7,8 @@ test('allocation log reports changed roles and targets without delaying plans or
   let now = 1000
   const logs: string[] = [], bots = Array.from({ length: 8 }, (_, k) => ({ name: 'B' + k, team: 'blue' }))
   const pos = Object.fromEntries(bots.map(b => [b.name, { p: { x: 0, y: 64, z: 0 }, hp: 20, inv: {}, armor: {} }]))
-  const sw = createDriverState({ bots, pos, alive: () => true, now: () => now, log: text => logs.push(text) })
+  const sw = createDriverState({ bots, pos, alive: () => true, now: () => now,
+    log: text => { if (text.startsWith('🐜 blue: распределение —')) logs.push(text) } })
   Object.assign(sw, swarmTeam(sw))
   const tasks = new Map<string, any>([
     ['B0', { kind: 'fight', data: { target: 'E', role: 'fighter' } }],

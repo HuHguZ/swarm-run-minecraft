@@ -306,6 +306,27 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
       .replace('      setTimeout(() => {\n        sendPacketPositionAndLook(delayedPos',
         '      scopedWall.setTimeout(() => {\n        sendPacketPositionAndLook(delayedPos')
   }
+  if (name === 'digging') {
+    // Rounded digTime gives conservative per-tick progress when landing, water or effects change mid-dig.
+    source = source.replace('    waitTimeout = setTimeout(finishDigging, waitTime)', `    let progress = 0, creditedAt = Date.now(), previousDigTime = bot.digTime(block)
+    const diggingItem = bot.heldItem
+    const advanceDigging = () => {
+      const item = bot.heldItem
+      if (diggingItem !== item && (diggingItem?.type !== item?.type || diggingItem?.metadata !== item?.metadata ||
+        !require('node:util').isDeepStrictEqual([diggingItem?.nbt, diggingItem?.components, diggingItem?.removedComponents], [item?.nbt, item?.components, item?.removedComponents]))) {
+        bot.stopDigging()
+        return
+      }
+      const now = Date.now(), digTime = bot.digTime(block), ticks = Math.floor((now - creditedAt) / 50)
+      const delta = Math.fround(50 / Math.max(previousDigTime, digTime))
+      for (let tick = 0; tick < ticks && delta > 0 && progress < 1; tick++) progress = Math.fround(progress + delta)
+      creditedAt += ticks * 50
+      previousDigTime = digTime
+      if (progress >= 1) finishDigging()
+      else waitTimeout = setTimeout(advanceDigging, 50)
+    }
+    waitTimeout = setTimeout(waitTime <= 0 ? finishDigging : advanceDigging, Math.min(50, waitTime))`)
+  }
   if (name === 'inventory') source = source.replace('new Date() - bot.lastDigTime', 'Date.now() - bot.lastDigTime')
   if (name === 'bed') {
     source = source.replace(/  async function waitUntilSleep \(\) \{[\s\S]*?\n  bot\._client\.on/,

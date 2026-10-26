@@ -310,6 +310,7 @@ class GameClock extends EventEmitter {
     this.serverAt = at
     if (reanchor) this.observationAt = null
     if (this.serverTicks !== previousTarget) this.schedule(reanchor || this.predictionTicks === 0 || this.frozen)
+    else if (this.capped()) this.armStall()
   }
   attach (bot) {
     bot.ndClock = this

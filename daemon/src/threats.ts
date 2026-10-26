@@ -421,18 +421,24 @@ function dangers (bot, opts: { radius?: number, foes?: string[] | null } = {}) {
   return { ...value }
 }
 // Лёгкий прогноз для тела: без сканирования лавы, пола, паутины и чужих прыжков.
-const projectileMemo = new WeakMap<object, { key: string, value: any }>()
+const projectileMemo = new WeakMap<object, { key: string, boostFrom: Set<string> | null | undefined, value: any }>()
 function projectileDangers (bot, { foes = null as string[] | null } = {}) {
   if (!bot?.entity) return { potions: [], arrows: [], aims: [] }
   foes = foes === null ? null : [...new Set(Array.isArray(foes) ? foes.filter(name => typeof name === 'string') : [])].sort()
   const scope = foes === null ? null : JSON.stringify(foes)
   const sight = playerSights.get(bot)
   if (sight && sight.scope !== scope) { sight.vision?.close(); sight.vision = null; sight.scope = scope }
-  const tick = bot.ndClock?.ticks, key = `${tick}|${scope}`
+  const tick = bot.ndClock?.ticks, key = `${tick}|${scope}`, boostFrom = bot._ndBoostFrom
   const memo = projectileMemo.get(bot)
-  if (Number.isSafeInteger(tick) && memo?.key === key) return { ...memo.value }
+  if (Number.isSafeInteger(tick) && memo?.key === key && memo.boostFrom === boostFrom) return { ...memo.value }
   const value = { ...projectileThreats(bot, foes, true), aims: aims(bot, foes, scope, true) }
-  if (Number.isSafeInteger(tick)) projectileMemo.set(bot, { key, value })
+  if (boostFrom) {
+    // rawOwner also identifies an expected boost archer behind us; all other shots stay threats.
+    value.arrows = value.arrows.filter(shot => !/^(arrow|spectral_arrow)$/.test(shot.name) ||
+      !boostFrom.has(bot.entities[bot._ndThrown?.get(shot.id)?.rawOwner]?.username))
+    value.aims = value.aims.filter(aim => aim.weapon !== 'bow' || !boostFrom.has(aim.name))
+  }
+  if (Number.isSafeInteger(tick)) projectileMemo.set(bot, { key, boostFrom, value })
   return { ...value }
 }
 

@@ -16,7 +16,7 @@ function aerialMethods ({ session }: RpcContext) {
       const Vec3 = require('vec3')
       if (!p.at) throw new Error('нужна точка at')
       const k = sky.kit(bot)
-      if (!k.elytra || (!p.rescue && k.rockets < 2)) return { ok: false, why: 'нет элитр или ракет' }
+      if (!k.elytra || (!p.rescue && k.rockets < 2 + sky.RESCUE_ROCKETS)) return { ok: false, why: k.elytra && k.rockets ? `ракет ${k.rockets} — запас на спасение` : 'нет элитр или ракет' }
       const W = sky.worldOf(bot, { observed: !!p.arena })
       const t = new Vec3(p.at.x, p.at.y, p.at.z)
       const inside = at => require('../combat/team-wind').windInside(at, p.arena)
@@ -56,7 +56,7 @@ function aerialMethods ({ session }: RpcContext) {
         let probes = 0
         const flight = await sky.fly(bot, rescueCtl, {
           arena: p.arena, maxMs: (p.timeoutSeconds ?? 15) * 1000,
-          phase: 'спасение', noRocket: () => false,
+          phase: 'спасение', noRocket: () => false, useReserve: true,
           goal: () => {
             if (!landing && ++probes % 20 === 0) landing = pickLanding()
             const me = bot.entity.position
@@ -71,12 +71,15 @@ function aerialMethods ({ session }: RpcContext) {
           until: () => landing && bot.entity.position.y >= landing.y && bot.entity.velocity.y > -0.5 &&
             Math.hypot(bot.entity.position.x - landing.x, bot.entity.position.z - landing.z) < 2 ? 'над площадкой' : null
         })
+        const { supportAt, containsWater } = require('../navigation/geometry') as typeof import('../navigation/geometry')
+        const touchWorld = p.arena ? require('../pvp/search').observedCollision(bot) : bot
         const inspectTouch = at => {
           const inArena = !!at && inside(at)
           const minY = !!at && at.y >= minFloorY
-          const f = inArena && minY ? W.floorBelow(at.x, at.y + 0.5, at.z, 2) : null
-          const dry = !!f && !f.lava && !f.water
-          const support = !!f && Math.abs(f.top - at.y) <= 1
+          const shape = inArena && minY ? supportAt(touchWorld, at, .04) : null
+          const f = shape ? { top: shape.top } : null
+          const dry = !!shape && !containsWater(shape.block) && W.landingSafe(at)
+          const support = !!shape
           return { ok: inArena && minY && dry && support, at: at ? { x: at.x, y: at.y, z: at.z } : null,
             inside: inArena, minY, minFloorY, floor: f || null, dry, support }
         }
@@ -262,6 +265,16 @@ function aerialMethods ({ session }: RpcContext) {
           const damage = Math.max(0, Math.floor(fall + 1e-6 - 3))
           if (!b.elytraFlying && f && f.top >= cfg.killY + 1 && !f.lava && (f.water || damage < bot.health)) return
           const k = sky.kit(bot)
+          // Без элитр с ракетами планер до линии смерти не дотянет — жемчуг обратно на Колизей (пользователь 25.10).
+          const hasPearl = bot.inventory.items().some(i => i.name === 'ender_pearl') || bot.inventory.slots[45]?.name === 'ender_pearl'
+          if (!(k.elytra && k.rockets > 0) && hasPearl && !b.elytraFlying) {
+            busyRescue = true
+            console.log('[rescue] падаю в пропасть — жемчуг', JSON.stringify({ at: require('../game-clock').now(), y: Math.round(b.position.y), vy: b.velocity.y, hp: bot.health, elytra: !!k.elytra, rockets: k.rockets, killY: cfg.killY }))
+            session.runIntent('pearl_to', ctl => require('../combat/emergency-escape').pitPearl(bot, ctl, { killY: cfg.killY, arena: cfg.arena, foes: (session._ndFoes || []).map(n => bot.players?.[n]?.entity?.position).filter(Boolean) }),
+              { timeoutMs: 8000, interruptOn: ['death', 'kicked', 'disconnected'], params: { rescue: true } })
+              .then(r => console.log('[rescue]', JSON.stringify(r?.detail || r))).catch(() => {}).finally(() => { busyRescue = false })
+            return
+          }
           if (!k.elytra) return
           busyRescue = true
           console.log('[rescue] падаю в пропасть — элитры', JSON.stringify({ at: require('../game-clock').now(), wallAt: require('../game-clock').wall.now(), y: Math.round(b.position.y), vy: b.velocity.y, fd, hp: bot.health, rockets: k.rockets, floor: f ? f.top : null, killY: cfg.killY }))

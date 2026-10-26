@@ -10,11 +10,10 @@ L=codex-lab/auto; mkdir -p $L
 OPTS="--skip-git-repo-check -m gpt-6.1-sol --color never --dangerously-bypass-approvals-and-sandbox -C $P"
 OPTS="$OPTS -c model_reasoning_effort=ultra --enable multi_agent"
 log () { echo "$(date '+%m-%d %H:%M:%S') $*" >> $L/driver.log; }
-# в конце работы драйвера — ферма не должна оставаться поднятой
+# в конце работы драйвера — закрыть только свой стенд слота 31
 farmdown () {
-  for s in $(node -e "console.log(Object.keys(require('./farm/slots.json').slots).join(' '))"); do
-    node dist/farm/crystal/bside.js down $s >> $L/driver.log 2>&1; node dist/farm/farm.js down $s >> $L/driver.log 2>&1
-  done
+  case " ${CODEX_KEEP_SLOTS:-} " in *" 31 "*) return ;; esac
+  node dist/farm/farm.js down 31 >> $L/driver.log 2>&1
 }
 echo $$ > $L/driver.pid
 id=$(cat $L/session 2>/dev/null); fails=0

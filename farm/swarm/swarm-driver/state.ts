@@ -3,7 +3,7 @@
 import { SwarmBoard } from '../../../daemon/src/swarm'
 import type { SwarmDriverCtx } from './common'
 
-export function createDriverState ({ bots, pos, alive, arena, home, hostile, log, arms = false, aggressive = false, hideouts = [], chestTops = [], perches = [], drops = () => [], announce = null, sandSpot = null, edgeOf = null, digSites = null, surfaceY = null, ladderSites = [], now = () => Date.now() }: any): SwarmDriverCtx {
+export function createDriverState ({ bots, pos, alive, arena, home, hostile, humanNames, log, arms = false, aggressive = false, hideouts = [], chestTops = [], perches = [], drops = () => [], announce = null, sandSpot = null, edgeOf = null, digSites = null, surfaceY = null, ladderSites = [], now = () => Date.now() }: any): SwarmDriverCtx {
   const boards = new Map<string, SwarmBoard>()
   // Ямы-ловушки раунда (dig): вскрытые клетки пола; край у врага — и обрыв модели, и своя дыра в 3.5 бл. от него.
   const holes: any[] = []
@@ -50,6 +50,6 @@ export function createDriverState ({ bots, pos, alive, arena, home, hostile, log
   const knownChests = new Map<string, any>()
   // Оценка «не вытяну» — симуляция боя на 600 тиков; на каждый ответ статуса (40 тел — ~160/с) её не пересчитывать: 250 мс.
   const unsafeCache = new Map<string, { at: number; v: boolean }>()
-  return { bots, pos, alive, arena, home, hostile, log, arms, aggressive, hideouts, chestTops, perches, drops, announce, sandSpot, edgeOf, digSites, surfaceY, ladderSites, now,
+  return { bots, pos, alive, arena, home, hostile, humanNames, log, arms, aggressive, hideouts, chestTops, perches, drops, announce, sandSpot, edgeOf, digSites, surfaceY, ladderSites, now,
     boards, holes, walls, ladderRoutes, boxed, boxTries, blueprints, transfers, planned, plannedAt, plannedFoes, pastKills, visited, cooldown, telemetry, generation, positionQueries, saidAt, placed, toured, tourBad, blockedRoutes, emptyChests, fullFor, knownChests, unsafeCache }
 }

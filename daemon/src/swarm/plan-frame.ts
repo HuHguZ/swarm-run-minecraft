@@ -37,7 +37,7 @@ export interface PvpPlan {
   futile: Set<string>
   outnumbered: Set<string>
   hopeless: Set<string>
-  // Добивание (рой на рой): живых врагов по ленте смертей втрое меньше нас — все на них, с подъёмом и прокопом к цели.
+  // Добивание по живым из ленты смертей: последние 1–3 с любой стороны или прежнее тройное превосходство.
   endgame: boolean
   // штурм (pvpAssault)
   assault: SwarmBoard['assault']
@@ -103,10 +103,12 @@ export function pvpFrame(S: PvpPlan): PvpPlan {
   if (d < 2 && kept && Math.hypot(kept.position.x, kept.position.z) > .5) forward = { x: kept.position.x, y: 0, z: kept.position.z }
   else if (d >= 2 && enemies.length && team.length) board.recordFact(team[0].id, board.now(), { id: 'forward', kind: 'mark', position: { ...forward } }, 10000)
   const observers = new Set(enemies.flatMap(e => e.sources.filter(id => board.alive(id))))
+  const endgame = options.foesLeft !== undefined && options.foesLeft > 0 &&
+    (options.foesLeft <= 3 || team.length <= 3 || team.length >= 3 * options.foesLeft)
   const quorum = options.quorum ?? Math.ceil(team.length / 2)
   if (!Number.isInteger(quorum) || quorum < 1) throw new Error('Invalid swarm quorum')
   // Натиск: цель, которую видит хоть один свой, — общая (доска), ждать второго наблюдателя незачем.
-  const committed = observers.size >= quorum || team.length < 3 || !!options.aggressive
+  const committed = observers.size >= quorum || team.length < 3 || !!options.aggressive || endgame
   const formationCenter = doctrine === 'cocoon' && enemies[0] ? enemies[0].position : center
   // Ранг на смене — в памяти раунда; меняется по усталости рангов (doctrine.lineDuty), не по часам.
   const lineDutyNow = doctrine === 'line' && enemies.length && team.length ? (S.state.lineDuty = lineDuty(team, S.state.lineDuty ?? 0)) : S.state.lineDuty ?? 0
@@ -135,9 +137,7 @@ export function pvpFrame(S: PvpPlan): PvpPlan {
     for (const a of group) if (verdict.futile) futile.add(a.id); else if (verdict.outnumbered) outnumbered.add(a.id)
   }
   const hopeless = new Set([...futile, ...outnumbered])
-  // Добивание — по силе, а не по числу: навалиться всей командой против сильного меньшинства — пустой размен (race.ts
-  // strongFew, он же натиск): «втрое больше» гнало голых на одного в незерите (пользователь 21.10: 13 смертей за 4 мин).
-  const endgame = !aggressive && options.foesLeft !== undefined && options.foesLeft > 0 && team.length >= 3 * options.foesLeft
+  // В финале цель — полный вайп: strongFew/натиск не отменяют добивание последних живых (пользователь 25.10).
   Object.assign(S, { endgame, center, foeCenter, forward, committed, lineDuty: lineDutyNow, spots, put, perched, hidden, groups, groupVictories, futile, outnumbered, hopeless })
   return S
 }

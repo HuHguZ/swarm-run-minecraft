@@ -15,7 +15,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       const r = detail(await b.c.call('jump_down', { from: close.position, arena }).catch(e => ({ why: e.message })))
       if (round !== sw.generation || !alive(b.name)) return
       let how = r.ok ? `спрыгнул ${r.drop} бл.${r.mlg ? ' (ведро)' : ''}, хп ${r.hp}` : r.why || r.error || '?'
-      if (!r.ok && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 2) {
+      if (!r.ok && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 5) {
         const d = Math.hypot(m.p.x - close.position.x, m.p.z - close.position.z) || 1
         const at = bounded({ x: m.p.x + (m.p.x - close.position.x) / d * 14, y: arena.y, z: m.p.z + (m.p.z - close.position.z) / d * 14 })
         const f = detail(await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message })))
@@ -30,7 +30,8 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     // «убил, хотя у него элитры и фейерверки» — пешком от «Скорости II» не уйти). С этого места не вышло — пешком, как раньше.
     const chaser = enemies.filter(e => now() - e.seenAt < 1000 && distance(e.position, m.p) <= 12)
       .sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
-    if (chaser && !task.data?.perch && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 2 && sw.blocked && !sw.blocked(b, `airflee:${b.name}`)) {
+    // Уже на насесте — только если он поднялся ко мне на 6 бл.: дальше насест держит лук (игра 25.10: на насесте 30 с стоял под ним, убит).
+    if (chaser && (!task.data?.perch || distance(m.p, task.position) <= 3 && distance(chaser.position, m.p) <= 6) && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 5 && sw.blocked && !sw.blocked(b, `airflee:${b.name}`)) {
       const d = Math.hypot(m.p.x - chaser.position.x, m.p.z - chaser.position.z) || 1
       const at = bounded({ x: m.p.x + (m.p.x - chaser.position.x) / d * 30, y: arena.y, z: m.p.z + (m.p.z - chaser.position.z) / d * 30 })
       const f = detail(await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message })))
@@ -38,6 +39,22 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       log(`🪽↩ ${b.name}: ${chaser.id} в ${distance(chaser.position, m.p).toFixed(1)} бл. — улетаю на 30 бл. — ${f.ok ? 'сел' : f.why || f.error || '?'}`)
       if (f.ok) return
       sw.failed(b, `airflee:${b.name}`)
+    }
+    // Догоняет (8 бл.), а элитр нет или не вышло — прыжок на заряде ветра прочь от него (пользователь 25.10: «пусть кидают ветер
+    // себе под ноги, чтобы убегать, если догоняю»): разбег от него, заряд под ноги — толчок вперёд и вверх, до 2 подряд.
+    if (chaser && distance(chaser.position, m.p) <= 8 && (m.inv?.wind_charge || 0) > 0 && sw.blocked && !sw.blocked(b, `windflee:${b.name}`)) {
+      // Прочь от него, а упёрлось в стену — под углом 45° и 90° (стенд 25.10: «стена впереди в 1 бл.» — прыжка не было).
+      const base = Math.atan2(m.p.z - chaser.position.z, m.p.x - chaser.position.x)
+      let w: any = null
+      for (const a of [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2]) {
+        const toward = bounded({ x: m.p.x + Math.cos(base + a) * 12, y: m.p.y, z: m.p.z + Math.sin(base + a) * 12 })
+        w = detail(await b.c.call('wind_jump', { toward, times: 2 }).catch(e => ({ why: e.message })))
+        if (round !== sw.generation || !alive(b.name)) return
+        if (w.used || !/^стена впереди/.test(w.why || '')) break
+      }
+      log(`🌬↩ ${b.name}: ${chaser.id} в ${distance(chaser.position, m.p).toFixed(1)} бл. — прыжок на ветре прочь — ${w.used ? `зарядов ${w.used}, подъём ${(+w.rise || 0).toFixed(1)}` : w.why || w.error || '?'}`)
+      if (w.used) return
+      sw.failed(b, `windflee:${b.name}`)
     }
     // Колонна в двух секундах хода дешевле далёкого насеста; луч и путь проверяет само тело.
     const archer = !enemies.some(e => now() - e.seenAt < 1000 && distance(e.position, m.p) <= 6) && enemies.filter(e => e.threat === 'bow' && now() - e.seenAt < 1000)
@@ -47,6 +64,13 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       if (round !== sw.generation || !alive(b.name)) return
       if (reply?.status === 'interrupted') { b.swarmFightReply = reply; cooldown.set(`fight:${b.name}`, now() + 500); return }
       if (detail(reply)?.ok) return
+      // Прятаться не за что — стенка из блоков на месте, в его сторону.
+      if (blockCount(m.inv) >= 2) {
+        const wall = detail(await b.c.call('take_cover', { from: archer.id, wall: true, arena }).catch(e => ({ why: e.message })))
+        if (round !== sw.generation || !alive(b.name)) return
+        log(`🧱🏹 ${b.name}: от лучника ${archer.id} (${distance(archer.position, m.p).toFixed(0)} бл.) — ${wall.ok ? wall.how : wall.why || wall.error || '?'}`)
+        if (wall.ok) return
+      }
     }
     // Насест на элитрах (perch, пользователь 14.10: «могут наверх улетать и там сидеть, кемперить или с лука палить»):
     // далеко — долететь (fly_to: над гребнем, посадка с открытым небом; не вышло — бежать, как обычно); на месте — лук
@@ -57,7 +81,9 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       if (distance(m.p, task.position) > 3 && !landed) {
         // Не долетел — к тому же насесту с того же места снова не лететь (повтор по причине, а не через 8 с).
         const perch = cellKey({ x: Math.floor(task.position.x), y: Math.floor(task.position.y), z: Math.floor(task.position.z) })
-        if (!sw.blocked(b, `fly:${b.name}`, perch)) {
+        // Отказ «не перелететь / негде сесть / над головой блок» — про место взлёта, а не про насест: с этого места не лететь ни к
+        // какому (игра 25.10: 26 попыток к соседним насестам подряд, бот висел).
+        if (!sw.blocked(b, `fly:${b.name}`, perch) && !sw.blocked(b, `flyfrom:${b.name}`)) {
           const reply = await b.c.call('fly_to', { at: task.position, timeoutSeconds: 15, arena }), r = detail(reply)
           if (round !== sw.generation || !alive(b.name)) return
           if (reply?.code === 'RESCUE_BUSY') return
@@ -77,11 +103,23 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
           // Коротко запоминаем отказ полёта в плане: зигзаг на 2 бл. не делает тот же насест достижимым.
           board.recordFact(b.name, now(), { id: `perch-failed:${b.name}:${perch}`, kind: 'mark', position: task.position }, 15000)
           sw.failed(b, `fly:${b.name}`, perch)
+          if (/перелететь|негде сесть|над головой/.test(r.why || '')) sw.failed(b, `flyfrom:${b.name}`)
         }
       } else {
+        const rescue = b.webRescue
+        const owns = (action, reply) => round === sw.generation && alive(b.name) && b.last === action && b.webRescue === rescue && (!b.swarmTask || b.swarmTask === task) &&
+          (!reply?.status || reply.status === 'done') && reply?.code !== 'RESCUE_BUSY' && !reply?.state?.tactics?.action && !reply?.state?.tactics?.requireObservation &&
+          !['Tactical', 'Emergency'].includes(reply?.state?.tactics?.owner)
         const foe = enemies.find(e => e.id === task.data.target)
-        if (foe && now() - foe.seenAt < 1000 && m.inv?.bow && (m.attackArrows ?? (m.inv?.arrow || 0) + (m.inv?.spectral_arrow || 0))) { await b.c.call('peek_shot', { target: foe.id, shots: 3 }); return }
-        await b.c.call('eat', { timeoutSeconds: 2 }).catch(() => {})
+        if (foe && now() - foe.seenAt < 1000 && m.inv?.bow && (m.attackArrows ?? (m.inv?.arrow || 0) + (m.inv?.spectral_arrow || 0))) {
+          const before = { ...(pos[b.name]?.p || m.p) }, pending = b.c.call('peek_shot', { target: foe.id, shots: 3 }), action = b.last
+          const reply = await pending, r = detail(reply)
+          // Союзник видит далёкого врага, а стрелять с этого насеста нечем: отказ не заменяет еду и безопасную стойку.
+          if (!owns(action, reply) || reply?.status !== 'done' || r?.ok !== false || r.fired || r.hits || r.wall || distance(pos[b.name]?.p || m.p, before) > .1) return
+        }
+        const meal = b.c.call('eat', { timeoutSeconds: 2 }).catch(() => null), action = b.last
+        const reply = await meal
+        if (!reply || !owns(action, reply)) return
         await b.c.call('swarm_hold', { sneak: true, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 2, arena })
         return
       }

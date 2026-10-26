@@ -16,7 +16,13 @@ function fixture(p: any = {}) {
   bot.waitForTicks = async () => {}
   const pad = new Vec3(69, 120, 0)
   const W = { solid: () => { throw new Error('rescue must not scan ridge') },
-    floorBelow: () => p.noFloor ? null : { top: p.floor ?? 120, water: !!p.water } }
+    floorBelow: () => p.noFloor ? null : { top: p.floor ?? 120, water: !!p.water },
+    landingSafe: () => !p.water }
+  bot.blockAt = pos => {
+    const at = pos.floored(), floor = !p.noFloor && at.y === (p.floor ?? 120) - 1
+    return { position: at, name: floor ? p.water ? 'water' : 'stone' : 'air', boundingBox: floor && !p.water ? 'block' : 'empty',
+      shapes: floor && !p.water ? [[0, 0, 0, 1, 1, 1]] : [] }
+  }
   const S = { fd: p.fd ?? 0, lastY: bot.entity.position.y }
   let probes = 0
   const sky: any = {

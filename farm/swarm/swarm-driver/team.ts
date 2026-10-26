@@ -64,6 +64,9 @@ export function swarmTeam (sw: SwarmDriverCtx) {
       for (const n of packed) reserve[n] = rating(n) === owned && owned > rating(worn, true) ? rating(n) > powerOf([{ name: n }]).armor ? inv[n] : 1 : 0
     }
     if (inv.bow || inv.crossbow) needs.arrow = 16
+    // Ракеты (пользователь 25.10: «между собой ракетами должны делиться»): у кого элитры — держит 8 и просит до 8 (3 из них —
+    // запас на спасение из пропасти, elytra/consts RESCUE_ROCKETS), у кого элитр нет — отдаёт все.
+    if (inv.elytra || m.armor?.torso === 'elytra') { needs.firework_rocket = 8; reserve.firework_rocket = Math.min(inv.firework_rocket || 0, 8) } else reserve.firework_rocket = 0
     if (role === 'miner-builder') needs[[...blueprints].find(([key]) => key.startsWith(teamOf(b) + ':'))?.[1]?.material || 'cobblestone'] = 16
     if (m.hp < 16 && !names.some(n => FOOD.test(n))) needs.cooked_beef = 4
     healExchange(m.hp, inv, reserve, needs)
@@ -175,12 +178,13 @@ export function swarmTeam (sw: SwarmDriverCtx) {
       const spare = members.reduce((s, a) => s + Object.entries(a.inventory || {}).filter(([n]) => n === 'sand' && !a.needs?.[n]).reduce((t, [n, c]: any) => t + Math.max(0, c - (a.reserve?.[n] ?? 16)), 0), 0)
       const onslaughtNow = aggressive || !!pvpState(board).strongFew
       const gather = onslaughtNow && sandSpot && need > spare ? { item: 'sand', deficit: need - spare, spot: sandSpot } : undefined
-      // Живые враги — по ленте смертей (открытое знание); против людей (соло) их среди ботов нет — неизвестно.
+      // Боты — по ленте смертей; люди — по публичному списку и отношениям команд, без списка их число неизвестно.
       const rivals = bots.filter(o => teamOf(o) !== team && (!hostile || hostile(b, o.name)))
+      const humans = [...new Set<string>(sw.humanNames?.() || [])].filter(name => !bots.some(o => o.name === name) && hostile?.(b, name))
       // Лента смертей раунда (открытое знание): кто сколько наших убил — рой учится, что навалом его не взять (race.ts strongFew).
       const killsBy: Record<string, number> = { ...sw.pastKills.get(team) }
       for (const d of sw.drops()) if (d.team === team && d.by) killsBy[d.by] = (killsBy[d.by] || 0) + 1
-      planned.set(team, planPvp(board, members, { foesLeft: rivals.length ? rivals.filter(o => alive(o.name)).length : undefined, killsBy, quorum: Math.min(2, Math.max(1, members.length)), doctrine: process.env.SWARM_DOCTRINE as any || undefined, aggressive, hideouts, perches, gather, edgeOf: edgeNear,
+      planned.set(team, planPvp(board, members, { foesLeft: rivals.length || humans.length ? rivals.filter(o => alive(o.name)).length + humans.length : undefined, killsBy, quorum: Math.min(2, Math.max(1, members.length)), doctrine: process.env.SWARM_DOCTRINE as any || undefined, aggressive, hideouts, perches, gather, edgeOf: edgeNear,
         // Лестницы — выключены, пока столбы берутся из перемещения, а не подтверждённой кладки (арена 36: «стена кончилась»,
         // крафт рвут рефлексы — трое ботов вне боя впустую). ARENA_LADDERS=1 — включить.
         // Точки (стена лестницы, яма, засада) — закрыты, пока споткнувшийся на них стоит там же или у раскрытой засады враг

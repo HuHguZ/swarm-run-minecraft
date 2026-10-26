@@ -43,7 +43,9 @@ function seesPlayer (bot, e) {
       const point = new Vec3(box.lo.x + box.w * x, box.lo.y + box.h * y, box.lo.z + box.w * z)
       const delta = point.minus(eye)
       const d = delta.norm()
-      if (d > 64) continue
+      // Глаза — до 128 бл. (трекинг игроков сервера): на открытом его видно издали (пользователь 25.10: «видели меня на максимальном
+      // расстоянии»).
+      if (d > 128) continue
       if (d < 1e-6 || !pick.blockOnRay(world, eye, delta.scaled(1 / d), d, SEE_THROUGH)) return true
     }
   } catch {}

@@ -76,27 +76,46 @@ async function swapChest (bot, want, { hand = 'main', waitMs = 400, ctl = null }
   if (isWanted(chestName(bot))) return { ok: true, already: true }
   const item = want === 'elytra' ? (offName(bot) === 'elytra' ? bot.inventory.slots[45] : findItem(bot, 'elytra')) : (/_chestplate$/.test(offName(bot) || '') ? bot.inventory.slots[45] : bestChest(bot))
   if (!item) return { ok: false, why: want === 'elytra' ? 'элитр нет' : 'нагрудника нет' }
+  const producer = bot.ndClock
+  let respawned = false
+  const onRespawn = () => { respawned = true }
+  const interrupted = () => !!ctl?.aborted || respawned || bot.ndClock !== producer
+  const interruption = () => ({ ok: false, why: ctl?.aborted ? 'flight_superseded' : 'world_changed' })
+  const observedNow = () => producer?.observationNow?.() ?? gameClock.observationNow()
+  const withinBudget = since => { const elapsed = observedNow() - since; return Number.isFinite(elapsed) && elapsed >= 0 && elapsed < waitMs }
+  bot.on?.('respawn', onRespawn)
   try {
     if (hand === 'off') {
       if (bot.inventory.slots[45] !== item) await bot.equip(item, 'off-hand')
-      if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
+      if (interrupted()) return interruption()
+      if (bot.inventory.slots[45]?.name !== item.name) return { ok: false, why: 'нужный предмет не в руке' }
       trace('use')
       bot.activateItem(true)
     } else {
       const idx = await toHotbar(bot, (it) => !!it && it.name === item.name)
-      if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
+      if (interrupted()) return interruption()
+      // MLG may still own the main hand just after landing. Its slot/use
+      // wrappers intentionally do nothing while locked; do not wait for an unsent use's ack.
+      const handAt = observedNow()
+      while (bot._ndHandLock?.on() && !interrupted() && withinBudget(handAt)) await sleep(25)
+      if (interrupted()) return interruption()
+      if (bot._ndHandLock?.on()) return { ok: false, why: 'рука занята спасением' }
       if (idx < 0) { await bot.equip(item, 'hand') } else if (bot.quickBarSlot !== idx) bot.setQuickBarSlot(idx)
-      if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
+      if (interrupted()) return interruption()
+      if (bot._ndHandLock?.on()) return { ok: false, why: 'рука занята спасением' }
+      if (bot.heldItem?.name !== item.name) return { ok: false, why: 'нужный предмет не в руке' }
       trace('use')
       bot.activateItem()
     }
     bot.usingHeldItem = false
-  } catch (e) { return { ok: false, why: e.message } }
-  const t0 = gameClock.now()
-  while (gameClock.now() - t0 < waitMs && !ctl?.aborted && !isWanted(chestName(bot))) await sleep(25)
-  if (ctl?.aborted) return { ok: false, why: 'flight_superseded' }
-  trace(isWanted(chestName(bot)) ? 'ack' : 'timeout')
-  return isWanted(chestName(bot)) ? { ok: true, ms: gameClock.now() - t0 } : { ok: false, why: 'сервер не надел' }
+    // A new use must not spend its ack budget on an old world-age catchup.
+    // Continuous observation time retains 400 nominal ms at the confirmed TPS.
+    const t0 = observedNow()
+    while (withinBudget(t0) && !interrupted() && !isWanted(chestName(bot))) await sleep(25)
+    if (interrupted()) return interruption()
+    trace(isWanted(chestName(bot)) ? 'ack' : 'timeout')
+    return isWanted(chestName(bot)) ? { ok: true, ms: observedNow() - t0 } : { ok: false, why: 'сервер не надел' }
+  } catch (e) { return { ok: false, why: e.message } } finally { bot.removeListener?.('respawn', onRespawn) }
 }
 
 export {

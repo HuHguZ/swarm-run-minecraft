@@ -106,7 +106,7 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     // Он на столбе или уступе прямо над нами (по горизонтали ≤ 4, выше на 3–14): динамит под его опору — взрыв ломает
     // столб/песчаник, он падает к нам.
     if (dy <= 4 && Math.hypot(foe.position.x - m.p.x, foe.position.z - m.p.z) <= 4 && await blast(b, foe.position, `под ${foe.id}`)) return true
-    if ((inv.elytra || m.armor?.torso === 'elytra') && (inv.firework_rocket || 0) >= 3 && !blocked(b, `fly:${b.name}`, coarse(at))) {
+    if ((inv.elytra || m.armor?.torso === 'elytra') && (inv.firework_rocket || 0) >= 5 && !blocked(b, `fly:${b.name}`, coarse(at))) {
       const raw = await ascend(b, at, 'fly_to', { at, timeoutSeconds: 15, arena }), r = detail(raw)
       if (waitTactics(b, raw)) return true
       if (!r.ok) failed(b, `fly:${b.name}`, coarse(at))

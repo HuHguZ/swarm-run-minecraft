@@ -42,3 +42,25 @@ test('arena flight collision treats packet-only terrain as blocked and rechecks 
   await new Promise(resolve => setTimeout(resolve, 2))
   assert.equal(observed.at(4, 10, 0), 0)
 })
+
+test('takeoff under a roof finds the nearest open-sky cell on the floor beside it', () => {
+  // Пол y=0 везде, крыша y=3 над x ≤ 4: x = 5.5 — вплотную к навесу (рамка задевает), ближайшая открытая — x = 6.5.
+  const solid = (x: number, y: number) => y === -1 || y === 3 && x <= 4
+  const W: any = {
+    boxHit: (x: number, y: number, z: number, h = 1.8) => { for (let Y = Math.floor(y); Y <= Math.floor(y + h - 1e-9); Y++) for (const X of [Math.floor(x - .3), Math.floor(x + .3 - 1e-9)]) if (solid(X, Y)) return true; return false },
+    floorBelow: (x: number, y: number) => { for (let Y = Math.floor(y); Y >= Math.floor(y) - 4; Y--) if (solid(Math.floor(x), Y)) return { top: Y + 1 }; return null }
+  }
+  const c = sky.skyCell(W, new Vec3(.5, 0, .5), null)
+  assert.ok(c)
+  assert.equal(c.x, 6.5)
+  assert.equal(c.y, 0)
+  assert.equal(sky.skyCell(W, new Vec3(.5, 0, .5), { x: 0, z: 0, r: 3 }), null, 'open sky only outside the arena — no step out of it')
+})
+
+test('headroom on a bottom slab counts from the slab top: the model treats the slab cell as solid', () => {
+  // Плита в клетке y=0 (модель — целый блок), ноги на 0.5; потолок на y=6.
+  const solid = (y: number) => y === 0 || y === 6
+  const W: any = { solid: (_x: number, y: number) => solid(y), boxHit: (_x: number, y: number, _z: number, h = 1.8) => { for (let Y = Math.floor(y); Y <= Math.floor(y + h - 1e-9); Y++) if (solid(Y)) return true; return false } }
+  assert.equal(sky.headroom(W, new Vec3(.5, .5, .5), 10), 4)
+  assert.equal(sky.headroom(W, new Vec3(.5, 1, .5), 10), 4, 'standing on a full block is unchanged')
+})

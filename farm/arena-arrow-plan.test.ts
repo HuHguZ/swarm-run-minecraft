@@ -48,7 +48,7 @@ test('натянутый лук и снаряды не ставят отдель
 
 test('щит к булаве владеет реакцией, а прицел и снаряд его не заменяют', async t => {
   const f = scene(t, true)
-  f.report({ smashes: [{ name: 'Mace', at: f.foe, ticks: 12, dbg: '' }] })
+  f.report({ smashes: [{ name: 'Mace', at: f.foe, ticks: 8, dbg: '' }] })
   const owner = f.b.shieldHold
   assert.equal(f.calls[0].params.whileSmash, 'Mace')
   f.report({ aims: [f.aim] }); f.flush()

@@ -204,12 +204,12 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
 }
 
 export { create }
-export { ON, EYE_FLY, FLY_H, nextTick } from './elytra/consts'
+export { ON, EYE_FLY, FLY_H, RESCUE_ROCKETS, nextTick } from './elytra/consts'
 export { lookVec, glideStep, fallStep, worldOf, rollout, headroom, reachFromBox } from './elytra/physics'
 export { kit, hasElytra, wearingElytra, rocketCount, plainRocket, bestChest, toHotbar, swapChest } from './elytra/kit'
 export { choose } from './elytra/control'
 export { flightControl, install, steer, startGlide, fireRocket, arenaAround } from './elytra/install'
-export { rocketChoice, fly, launchLook, takeoff, lavaLaunchClear, landingSpot, land, chestDown } from './elytra/flight'
+export { rocketChoice, fly, launchLook, takeoff, lavaLaunchClear, landingSpot, land, chestDown, skyCell } from './elytra/flight'
 export { gliding, predictGlider, track } from './elytra/track'
 export { consumeAir, escape } from './elytra/escape'
 export { smashBonus, divePlan, diveSmash } from './elytra/dive'

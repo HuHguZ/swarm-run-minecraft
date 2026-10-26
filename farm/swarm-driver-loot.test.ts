@@ -98,7 +98,7 @@ test('a chest found empty is skipped until refilled; a naked bot then picks up a
   const takes = () => calls.filter(c => c.method === 'chest_take').length
   const pickups = () => calls.filter(c => c.method === 'assist' && c.params.mode === 'pickup').length
   try {
-    pile.at = Infinity // кучи ещё нет
+    pile.at = -Infinity // кучи ещё нет (слабый в броне идёт к куче раньше сундука)
     for (const b of bots) driver.observe(b, [])
     await driver.turn(bots[0]); assert.equal(takes(), 1)
     driver.refill({ x: 3, y: 64, z: 0 })

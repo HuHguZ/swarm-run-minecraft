@@ -220,8 +220,10 @@ const throwAt = async (item, what, { minLand = 4.5, frac = 0.5, lead = null, cle
 const placeAt = async (item, point, what, ctl = ctx.ctl) => {
     if (ctl.aborted) return false
     const cell = point.floored()
+    // Запас на шаг и отдачу: паутина вплотную ловит меня следующим тиком (игра пользователя 25.10: «в своей же паутине застрял»).
+    const m = item.name === 'cobweb' ? 0.7 : 0
     if (item.name === 'cobweb' && intersects(bodyBox(ctx.bot, ctx.bot.entity.position), {
-      minX: cell.x, minY: cell.y, minZ: cell.z, maxX: cell.x + 1, maxY: cell.y + 1, maxZ: cell.z + 1
+      minX: cell.x - m, minY: cell.y, minZ: cell.z - m, maxX: cell.x + 1 + m, maxY: cell.y + 1, maxZ: cell.z + 1 + m
     })) return false
     const below = ctx.bot.blockAt(cell.offset(0, -1, 0))
     const here = ctx.bot.blockAt(cell)

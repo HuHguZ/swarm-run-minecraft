@@ -12,6 +12,8 @@ test('stone mining uses eight game ticks at both rates and freezes its finish an
   for (const rate of [20, 200]) {
     const clock = testClock(rate)
     const bot = install(clock, { digging: true })
+    await clock.advanceGame(100)
+    assert.equal(bot.entity.onGround, true, 'settle native ground contact before measuring steady mining')
     const stone = block('stone', new Vec3(1, 1, 0))
     assert.equal(bot.digTime(stone), 400)
     const digging = bot.dig(stone, 'ignore')

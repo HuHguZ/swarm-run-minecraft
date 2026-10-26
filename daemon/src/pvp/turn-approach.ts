@@ -347,6 +347,14 @@ export async function spearTurn (ctx: DuelCtx, turn: TurnFrame) {
     const wantR = sReady < 250 ? 3.8 : 4.2
     const fwdS = r > wantR && stepSafe(bot, keyDir(bot, 'forward'))
     const backS = r < 3.4 && stepSafe(bot, keyDir(bot, 'back'))
+    // Он ближе 3.4, а отойти некуда (угол, стена, край) и укол не готов — мечом, а не стоять с копьём под его мечом (игра
+    // пользователя 25.10: «в углу мечом забиваю — не бьют в ответ»).
+    if (r < 3.4 && !backS && !(sj.ok && sReady === 0) && bestWeapon(bot)) {
+      ctx.spearOffUntil = now + 3000
+      await holdWeapon()
+      used('копьё в сторону: зажат, отойти некуда — мечом')
+      return NEXT
+    }
     strafeStep()
     set('forward', fwdS)
     set('back', backS && !fwdS)

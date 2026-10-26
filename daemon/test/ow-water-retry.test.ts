@@ -22,6 +22,7 @@ function fixture({ enabled = true, mode = 'tactical', wet = true, refusal = null
     entity: { position: new Vec3(3.5, 61, 4.5), isInWater: wet, onGround: !wet },
     game: { dimension: 'overworld' }, inventory: { slots: [], items: () => [] },
     health: 20, food: 20, entities: {},
+    blockAt: () => null,
     clearControlStates() { calls.clears++ },
     pathfinder: { goal: null, movements: { canDig: true, scafoldingBlocks: [] }, thinkTimeout: 40,
       setGoal(goal) { this.goal = goal },

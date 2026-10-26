@@ -14,6 +14,10 @@ const SAFE_FALL = 3
 const LAND_FD = Number(process.env.ND_LAND_FD ?? 2)
 const ROCKET_BOOST = 1.5
 const ROCKET_MAX_TICKS = 40
+// Запас ракет на спасение из пропасти (пользователь 25.10: «падают в обрыв под Колизеем — умирают, а на элитрах можно улететь»;
+// падения на арене: элитры есть, ракет 0 — все ушли на перелёты за лутом; без ракеты планер до линии смерти не дотягивает).
+// Обычный полёт и взлёт этот запас не тратят; тратят спасение (fly_to rescue) и уход от врага (escape).
+const RESCUE_ROCKETS = 3
 const KEYS = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']
 const DEBUG = !!process.env.ND_DEBUG_ELYTRA
 // ND_ELYTRA=0 — не летать в бою (прогон «до»); защита от летуна остаётся.
@@ -34,5 +38,5 @@ const nextTick = (bot) => new Promise<any>(resolve => {
 })
 
 export {
-  TICK_MS, G, EYE, EYE_FLY, HALF, BODY_H, FLY_H, REACH, SAFE_FALL, LAND_FD, ROCKET_BOOST, ROCKET_MAX_TICKS, KEYS, DEBUG, ON, GUARD, clamp, sleep, yawTo, wrap, r2, nextTick
+  TICK_MS, G, EYE, EYE_FLY, HALF, BODY_H, FLY_H, REACH, SAFE_FALL, LAND_FD, ROCKET_BOOST, ROCKET_MAX_TICKS, RESCUE_ROCKETS, KEYS, DEBUG, ON, GUARD, clamp, sleep, yawTo, wrap, r2, nextTick
 }

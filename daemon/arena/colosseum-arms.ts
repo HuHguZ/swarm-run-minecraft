@@ -37,7 +37,7 @@ function generate (seed = 'colos') {
   const spawnRooms = armsSpawnRooms(ac)
 
   return {
-    seed: String(seed), version: 1, map: 'colosseum', half: Math.ceil(p.outA + 3), y0: -4, y1: 40, R,
+    seed: String(seed), version: 1, map: 'colosseum', half: Math.ceil(p.outA + 3), ellipse: { a: p.outA, b: p.outB }, y0: -4, y1: 40, R,
     chests: out.chests, rooms: out.rooms, secret: out.secret, areas: out.areas, set: out.set, field: out.field,
     spawns: [{ x: -36, y: 0, z: 0, yaw: -90 }, { x: 36, y: 0, z: 0, yaw: 90 }], spawnRooms,
     lab, facade: FACADE, under: UNDER

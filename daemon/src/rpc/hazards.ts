@@ -130,6 +130,30 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
       const left = webs().length
       return { ok: left === 0, cut, left, how: 'cut', why: ctl.aborted ? 'interrupted' : why }
     }, { timeoutMs: 45000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    // Срезать паутину на союзнике (пользователь 25.10: «пусть просят союзников с оружием вытащить из паутины, это же рой»):
+    // мечом или ножницами, только видимые прицелом клетки в 4.5 бл. Подходит к нему драйвер.
+    cut_ally_web: async (p: any = {}) => session.runIntent('cut_ally_web', async (ctl) => {
+      const bot = session.require()
+      const { webCells } = require('../hazards') as typeof import('../hazards')
+      const pick = require('../pick') as typeof import('../pick')
+      const tools = require('../tools') as typeof import('../tools')
+      const ally = bot.players?.[String(p.target || '')]?.entity
+      if (!ally) return { ok: false, cut: 0, why: 'не вижу его' }
+      if (!bot.inventory.items().some(i => /_sword$|^shears$/.test(i.name))) return { ok: false, cut: 0, why: 'нечем резать' }
+      bot.pathfinder?.setGoal(null); bot.clearControlStates()
+      let cut = 0, why = ''
+      while (!ctl.aborted && webCells(bot, ally).length) {
+        const at = webCells(bot, ally).find(c => pick.blockAim(bot, c, { range: 4.5, seeThrough: null }))
+        if (!at) { why = 'не достаю'; break }
+        const block = bot.blockAt(at)
+        await tools.equipFastest(bot, block).catch(() => {})
+        await bot.lookAt(pick.blockAim(bot, at, { range: 4.5, seeThrough: null }), true)
+        try { await bot.dig(block, false, null, ctl) } catch (e) { why = String(e?.message || e); break }
+        if (bot.blockAt(at)?.name === 'cobweb') { why = 'не срезалась'; break }
+        cut++
+      }
+      return { ok: !webCells(bot, ally).length, cut, why: ctl.aborted ? 'interrupted' : why }
+    }, { timeoutMs: 8000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Рывок уворота (12.10: «уворачиваясь — бегать и прыгать, а не шагать»): развернуться в сторону ухода, спринт и прыжки
     // ticks тиков, без поиска пути. Перед рывком — 3 клетки по ходу: без лавы/огня и с полом не глубже 4 бл.; опасно —
     // назад или вбок.

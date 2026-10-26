@@ -6,7 +6,7 @@ import { SPRINT, power, MOB_SPD, worthOf } from './gear'
 import { teamOfHuman } from './humans'
 import type { ArenaContext } from './context'
 import { ascentActive } from '../swarm/swarm-driver/ascent'
-import { underArrowFire } from '../swarm/swarm-driver/common'
+import { underArrowFire, withOffHand } from '../swarm/swarm-driver/common'
 import * as fs from 'fs'
 import path = require('path')
 
@@ -62,7 +62,7 @@ export function watchAlarm (ctx: ArenaContext) {
 
 export function installSight (ctx: ArenaContext) {
   const { i, arms, bots, names, pos, humans, X, Y, Z, R, L, rcon, log } = ctx
-  const arena = { x: X + .5, y: Y, z: Z + .5, r: R, killY: arms ? Y + L.y0 - 3 : undefined }
+  const arena = { x: X + .5, y: Y, z: Z + .5, r: R, killY: arms ? Y + L.y0 - 3 : undefined, ellipse: L?.ellipse }
   // Соло (люди против роя): натиск — бегут только на хилку, без обманок, голые сперва лутаются (14.10: «не атакуют»).
   // Укрытия для слабых (натиск): закрытые места колизея — камеры, галереи, лаборатория, оружейная, комнаты спавна.
   const hideouts = arms && L?.map === 'colosseum' ? [...L.areas.filter(a => /^(камера|галерея|лаборатория|оружейная)/.test(a.id)), ...(L.spawnRooms || []).filter(r => r.team !== (ctx.HUMAN_TEAM || 'red')).map(r => r.spot)]
@@ -209,10 +209,11 @@ export function installSight (ctx: ArenaContext) {
     surfaceY = (x, z, top) => { const rx = Math.floor(x - X), rz = Math.floor(z - Z); for (let y = Math.floor(top - Y); y >= -2; y--) if (solid(rx, y - 1, rz) && !solid(rx, y, rz) && !solid(rx, y + 1, rz)) return Y + y; return null }
   }
   ctx.swarmDriver = (require('../swarm/swarm-driver') as typeof import('../swarm/swarm-driver')).createSwarmDriver({ bots, pos, alive: ctx.alive, arms, arena, hideouts, chestTops, perches: ctx.perches, drops: () => Object.values(ctx.deathAt), aggressive: SOLO && process.env.SWARM_AGGRO !== '0',
+    humanNames: () => ctx.humanNames || [],
     sandSpot: arms && L?.map === 'colosseum' ? { x: X + 0.5, y: Y, z: Z + 10.5 } : null, edgeOf, digSites, surfaceY, ladderSites,
     announce: SOLO ? (text, color) => rcon(i, `tellraw @a ${JSON.stringify([{ text: '[рой] ', color: 'dark_aqua' }, { text, color }])}`) : null,
     home: b => { if (arms) return ctx.armsHome(b, 0); const [x, z] = ctx.home(b, 0).split(/\s+/).map(Number); return { x, y: Y, z } }, log,
-    hostile: ctx.hostile
+    hostile: (b, name) => ctx.hostile(b, name) && (!names.includes(name) || !ctx.deadNow.has(name) && !ctx.out.has(name))
   })
   ctx.enemiesOf = (b, at) => [
     ...ctx.swarmDriver.enemies(b).map(e => ({ n: e.id, p: e.position, spd: Math.hypot(e.velocity?.x || 0, e.velocity?.z || 0) * 20,
@@ -232,7 +233,9 @@ export function installSight (ctx: ArenaContext) {
   const humanClose = (b) => { const p = pos[b.name]?.p; return !!p && !!ctx.swarmDriver && ctx.swarmDriver.enemies(b).some(e => Date.now() - e.seenAt < 1500 && !names.includes(e.id) && Math.abs(e.position.y - p.y) < 2.5 && Math.hypot(e.position.x - p.x, e.position.y - p.y, e.position.z - p.z) < 6) }
   // Выход из лавы, уход от динамита и срез паутины — тоже ответ на угрозу: «лезу к цели» глушил их (стенд 22.10: «от динамита не
   // ушёл — skipped» у пятерых лезущих разом).
-  const CLIMB_OK = /^(status|fight_guard|wind_report|enemy_wind_plan|emote|look_at|armor|team_hint|mobs|rescue_config|wind_leap|dig_to|undercut|watch_dangers|evade|juke|take_cover|douse_lava|lava_escape|dodge_blast|clear_web|wind_jump|pearl_to|fly_to|mine|cache_scan)$/
+  // Реакции на жемчуг человека — тоже: он уже не там, куда лезут (стенд 25.10: засадчики в 14–20 бл. — «не взлетел — лезу к цели»,
+  // встречено 0 из 15 жемчугов).
+  const CLIMB_OK = /^(status|fight_guard|wind_report|enemy_wind_plan|emote|look_at|armor|team_hint|mobs|rescue_config|wind_leap|dig_to|undercut|watch_dangers|evade|juke|take_cover|douse_lava|lava_escape|dodge_blast|clear_web|wind_jump|pearl_to|fly_to|mine|cache_scan|pearl_ambush|pearl_trap|pearl_pop|pearl_potion|boost_lance|boost_shot)$/
   // Открытый сундук — в opened: по нему таймер пополнения (ARMS_LOOT_X) знает, что пополнять. Раньше его отмечал старый
   // лут ffa, после роя — никто, и пополнение не работало вовсе (14.10). Ключ — как у L.chests (от центра карты), вторая
   // половина двойного — по pair.
@@ -401,9 +404,12 @@ export function watchStatus (ctx: ArenaContext) {
         // оборванный бой стенда 15×15 был «расходимся» (21.10: 24 из 94).
         // Идущий бой — тоже: человек держит зелье в руке не бросая, и «расходимся» рвал подход каждые 1–2 с (игра пользователя
         // 24.10: 61 из 65 боёв прерваны, 9 попаданий). От брошенного уходит рывок по точке падения выше.
-        const melee = b.last?.m === 'fight' && b.last.pending !== false ||
+        // Толпа (вплотную двое своих и больше) — расходиться и в идущем бою: на крыше колизея кучу накрывало одно зелье (игра
+        // пользователя 25.10: «толпятся сверху — зельями херачу, подыхают»). Рукопашная в 3.5 бл. — по-прежнему стоять.
+        const close = holder ? names.filter(n => n !== b.name && teamOf(n) === b.team && ctx.alive(n) && pos[n]?.p && Math.hypot(pos[n].p.x - p.x, pos[n].p.z - p.z) <= 2.5) : []
+        const melee = (b.last?.m === 'fight' && b.last.pending !== false && close.length < 2) ||
           (s.detail?.sightings || []).some(e => e.id !== b.name && teamOf(e.id) !== b.team && dist3(e.position, p) <= 3.5)
-        const mate = holder && !melee && names.find(n => n !== b.name && teamOf(n) === b.team && ctx.alive(n) && pos[n]?.p && Math.hypot(pos[n].p.x - p.x, pos[n].p.z - p.z) <= 2.5)
+        const mate = holder && !melee && close[0]
         const old = spreading.get(b)
         if (!holder || old && (!pos[old.mate]?.p || dist3(pos[old.mate].p, p) >= 4)) spreading.delete(b)
         if (mate && !busy.has(b.name) && !(b.last?.pending !== false && /^(evade|juke|flee)$/.test(b.last?.m || '')) && (!spreading.has(b) || old.round !== ctx.round || old.holder !== holder.name || old.mate !== mate || old.action !== b.last)) {
@@ -439,13 +445,14 @@ export function watchStatus (ctx: ArenaContext) {
       }
       const now = Date.now(), frame = s.state.physicsTicks ?? tick, clockId = s.state.clock?.id
       const frameAt = was?.frame === frame && was?.clockId === clockId ? (was.frameAt ?? now) : now
-      pos[b.name] = { p, v, hp: s.state.health, gliding: !!s.state.gliding, rescuing: !!s.detail?.rescuing, combo: s.detail?.combo || null, lance: s.state.lance || null, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: s.state.inventory || {}, attackArrows: s.state.attackArrows, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
+      pos[b.name] = { p, v, hp: s.state.health, gliding: !!s.state.gliding, rescuing: !!s.detail?.rescuing, combo: s.detail?.combo || null, lance: s.state.lance || null, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: withOffHand(s.state.inventory, s.state.offHand), attackArrows: s.state.attackArrows, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
       if (dz && !pos[b.name].rescuing) b.c.onDanger?.({ pos: p, dangers: dz, observedAt: asked, status: true })
       // Реактивный сброс ветром (тело: combat/wind-out): попытки — в журнал, бросок — метка на цели для учёта смерти.
       for (const w of s.detail?.windOut || []) {
+        if (w.kind === 'shield') { log(`🛡⬇ ${b.name}: ${w.target} падает с булавой (через ${w.ticks} т.) — щит к нему`); continue }
         if (w.kind === 'descend') { log(`🔨 ${b.name}: подброшен с булавой — удар сверху по ${w.target}: ${w.hit ? 'попал' : 'мимо'}`); continue }
         if (w.ally) { log(`🤸 ${b.name} → ${w.ally}: ${w.kind === 'volley' ? 'волейбол' : 'батут'} на ${w.target}, подброс ${w.kick} бл./т — ${w.fired ? (w.hit ? 'бросил, враг ранен в 2 с' : 'бросил, враг не ранен') : 'не бросил'}`); continue }
-        log(`🌬↗ ${b.name} → ${w.target}: ${w.kind}, до края ${w.edge} бл.${w.air ? ', в воздухе' : ''}, прогноз +${w.progress} бл.${w.airGain ? `, в воздухе +${w.airGain} т.` : ''} — ${w.fired ? 'бросил' + (w.burst ? ', взрыв виден' : '') + (w.edgeAfter !== undefined ? `, через 8 т. до края ${w.edgeAfter} бл., y ${w.yAfter}` : '') : 'отказ: ' + (w.why || '?')} (план ${w.planMs} мс)${w.dbg ? ' | ' + w.dbg : ''}`)
+        log(`🌬↗ ${b.name} → ${w.target}: ${w.kind}, до края ${w.edge} бл.${w.air ? ', в воздухе' : ''}, прогноз +${w.progress} бл.${w.airGain ? `, в воздухе +${w.airGain} т.` : ''} — ${w.fired ? 'бросил' + (w.burst ? ', взрыв виден' : '') + (w.edgeAfter !== undefined ? `, через 8 т. до края ${w.edgeAfter} бл., y ${w.yAfter}` : '') : 'отказ: ' + (w.why || '?')} (план ${w.planMs} мс), я: до края ${L?.ellipse ? require('../../daemon/src/combat/team-wind').arenaRoom({ x: X + .5, z: Z + .5, r: 0, ellipse: L.ellipse }, p).toFixed(1) : '?'} бл., y ${p.y.toFixed(1)}${w.dbg ? ' | ' + w.dbg : ''}`)
         if (w.fired) (ctx.windOutAt ||= {})[w.target] = { by: b.name, at: Date.now(), kind: w.kind }
       }
       if (s.detail?.pearls?.length) ctx.swarmDriver.pearlObserve?.(b, s.detail.pearls)

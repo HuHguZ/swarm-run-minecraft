@@ -5,7 +5,7 @@ import edges = require('../edges')
 import pick = require('../pick')
 import { observedCollision } from '../pvp/search'
 import { seesPlayer, visiblePlayerItem, observePlayerGear } from '../pvp/last-seen'
-import { WIND, windLaunch, windImpulse, windInside, worldTick, type WindArena, type WindReport } from './team-wind'
+import { WIND, windLaunch, windImpulse, windInside, worldTick, arenaRoom, type WindArena, type WindReport } from './team-wind'
 
 const vec = (p: Point) => new Vec3(p.x, p.y, p.z)
 const finite = (p: Point) => !!p && [p.x, p.y, p.z].every(Number.isFinite)
@@ -91,13 +91,14 @@ export function enemyWindShot(bot: any, foe: any, report: WindReport, frames: Fr
   }
   for (let age = 1; age <= Math.min(30, frames.length - fireDelay - 1); age++) {
     const at = frames[fireDelay + age], hit = segment(bot, foe, at.pos, from, launch.velocity, age, report.id, fireDelay + age)
-    if (hit.blocked) return null
+    if (hit.blocked) { planTrace('none:blocked'); return null }
     if (hit.burst) {
-      if (age > 5 && (require('../mace') as typeof import('../mace')).shieldAtUs(bot, foe, report.position)) return null
+      if (age > 5 && (require('../mace') as typeof import('../mace')).shieldAtUs(bot, foe, report.position)) { planTrace('none:shield'); return null }
       return { thrower: report.id, fireDelay, ticks: age, from, aim: aim!, yaw: launch.yaw, pitch: launch.pitch,
         velocity: launch.velocity, burst: hit.burst, feet: at.pos.clone() }
     }
   }
+  planTrace('none:miss')
   return null
 }
 
@@ -166,7 +167,8 @@ function rollout(bot: any, foe: any, shots: EnemyWindShot[], arena: WindArena, r
     if (!foe.reactAfterHit || impacts.length) {
       state.yaw = Math.atan2(state.pos.x - arena.x, state.pos.z - arena.z)
       state.control = { ...edges.IDLE, forward: true, sprint: true }
-    } else state.control = { ...edges.IDLE }
+    } else if (foe.run) { state.yaw = foe.run.yaw; state.control = { ...edges.IDLE, forward: true, sprint: true } }
+    else state.control = { ...edges.IDLE }
     simulate(state, world)
     for (let i = 0; i < shots.length; i++) {
       const shot = shots[i], age = tick - shot.fireDelay
@@ -186,7 +188,7 @@ function rollout(bot: any, foe: any, shots: EnemyWindShot[], arena: WindArena, r
     // Air time until the first landing: how long the swarm can keep juggling him.
     if (!landed && state.onGround) landed = true; else if (!landed) air++
     progress = Math.max(progress, Math.max(Math.abs(state.pos.x - arena.x), Math.abs(state.pos.z - arena.z)) - initial)
-    if (!out && (Math.abs(state.pos.x - arena.x) - .3 > arena.r || Math.abs(state.pos.z - arena.z) - .3 > arena.r)) { out = true; outTick = tick }
+    if (!out && arenaRoom(arena, state.pos) < -.3) { out = true; outTick = tick }
     // Below the arena's death line (dug hole, off the outer wall onto the far terrain) is the same result as leaving the square.
     if (state.pos.y < (arena.killY ?? -64) - 1) { if (!out) { out = true; outTick = tick } break }
   }
@@ -211,7 +213,14 @@ function enemyView(bot: any, raw: any) {
   // живёт, пока не придёт новый (стенд 24.10: сырая 0.49 вверх, на деле −0.17 — ждали ноги на 129.2, он был на 124;
   // заряды по летящему не попадали ни разу).
   const observedV = (require('../bow/track') as typeof import('../bow/track')).observedVelocity(raw)
-  return { id: raw.id, username: raw.username, position: vec(raw.position), velocity: vec(observedV || raw.velocity || { x: 0, y: 0, z: 0 }),
+  const velocity = vec(observedV || raw.velocity || { x: 0, y: 0, z: 0 }), h = Math.hypot(velocity.x, velocity.z)
+  // Бежит — до попадания бежит дальше туда же и с той же скоростью: IDLE гасил его бег за пару тиков, и заряд летел туда, где
+  // его уже нет (пользователь 25.10: «довести до идеала попадание ветром»). Скорость зелья чужому не видна — уровень «Скорости»
+  // по наблюдённому бегу (спринт 0.2806 бл/т, ×(1 + 0.2·(ур.+1))).
+  const run = h > .12 ? { yaw: Math.atan2(-velocity.x, -velocity.z) } : null
+  const amp = Math.min(4, Math.round((h / .2806 - 1) / .2) - 1), speedId = bot.registry?.effectsByName?.Speed?.id ?? bot.registry?.effectsByName?.speed?.id
+  const effects = run && raw.onGround && amp >= 0 && speedId != null ? { [speedId]: { id: speedId, amplifier: amp, duration: 200 } } : {}
+  return { id: raw.id, username: raw.username, position: vec(raw.position), velocity, run, effects,
     onGround: !!raw.onGround, width: raw.width || .6, height: raw.height || 1.8, yaw: raw.yaw, metadata,
     equipment: (gear?.equipment || raw.equipment || []).map(visiblePlayerItem), _ndUnknownArmorSlots: gear?.unknownArmorSlots ?? raw._ndUnknownArmorSlots ?? 0 }
 }
@@ -224,13 +233,19 @@ export function enemyWindFrames(bot: any, raw: any, arena: WindArena, shots: Ene
   return rollout({ ...bot, blockAt: p => world.getBlock(p) }, enemyView(bot, raw), active, arena, Math.max(0, Math.min(1, resistance))).frames
 }
 
+// Отказы выстрела по причине (ND_WIND_TRACE=1), сливаются в [wind-trace] рефлекса.
+export const planTraceCounts: Record<string, number> = {}
+const planTrace = (k: string) => { if (process.env.ND_WIND_TRACE === '1') planTraceCounts[k] = (planTraceCounts[k] || 0) + 1 }
+
 /** One small receding chain: different ready throwers, distinct arrivals, exact native projectile/body forecasts. */
 export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options: EnemyWindOptions) {
   const now = worldTick(bot), arena = options?.arena
   if (now === null || !arena || !raw?.position || !seesPlayer(bot, raw)) return null
   const foe: any = enemyView(bot, raw)
   foe.reactAfterHit = !!options.reactAfterHit
-  const resistance = windResistance(foe), observed = observedCollision(bot), world = edges.worldOf(observed)
+  // A synchronous plan revisits the same raw LOS cells from many observed-cell rays; keep full Blocks, including unknowns, only for this call.
+  const rawWorld = edges.worldOf(bot)
+  const resistance = windResistance(foe), observed = observedCollision(bot, p => rawWorld.getBlock(p)), world = edges.worldOf(observed)
   const allReports = [...new Map([...(options.allies || []), ...reports].map(r => [r.id, r])).values()]
   const team = allReports.map(report => windReportAt(bot, report, now))
   if (team.some(report => report === null)) return null
@@ -251,13 +266,15 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
       for (const delay of options.delays ?? [0, 2]) for (const height of [.4, 1.6]) {
         const shot = enemyWindShot(snapshot, foe, report, nominal.frames, { fireDelay: start - now + delay, height })
         tried++
-        if (!shot || shots.some(s => s.fireDelay + s.ticks === shot.fireDelay + shot.ticks)) continue
+        if (!shot) { planTrace('shot:none'); continue }
+        if (shots.some(s => s.fireDelay + s.ticks === shot.fireDelay + shot.ticks)) continue
         const trial = [...shots, shot]
         const run = bounds(snapshot, foe, trial, arena, resistance.lo, team, allyTracks)
-        if (!run) continue
+        if (!run) { planTrace('shot:ally_unsafe'); continue }
         // juggle: keeping him airborne longer is worth as much as a little outward progress — the next ally throws again.
         const value = (r: ReturnType<typeof rollout>) => Number(r.out) * 1000 + r.progress + (options.juggle ? .05 * r.air : 0)
         const score = value(run)
+        if (!(score > value(nominal) + .01)) planTrace('shot:no_gain')
         if (score > value(nominal) + .01 && (!best || score > best.score)) best = { shot, run, score }
       }
     }

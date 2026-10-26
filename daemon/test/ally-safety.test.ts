@@ -82,6 +82,73 @@ test('shared spear guard cancels an already braced aerial or ground charge befor
   assert.equal(cancelled, 1, 'a spear in the other hand must not release our active shield')
 })
 
+function observedStrafe(ally, age: number, z = 0) {
+  ally.position = new Vec3(4, 100, z)
+  ally._ndPositionReceipts = [
+    { x: 4, y: 100, z: z - .5, t: 950, grounded: true, kind: 'rel_entity_move' },
+    { x: 4, y: 100, z, t: 1000, grounded: true, kind: 'rel_entity_move' }
+  ]
+  ally._ndObservationNow = () => 1000 + age * 50
+}
+
+for (const age of [0, 4]) test(`spear keeps the actual visible ally on its beam at observation age ${age}`, t => {
+  const { bot, ally } = scene(), sent: any[] = []
+  const registry = require('prismarine-registry')('1.21.11'), data = require('minecraft-data')('1.21.11')
+  Object.assign(bot, { registry, version: '1.21.11', QUICK_BAR_START: 36, _client: new EventEmitter(),
+    supportFeature: name => data.supportFeature(name), health: 20, food: 20,
+    physics: { simulatePlayer() {} }, setControlState() {}, getControlState() { return false } })
+  bot.entity.metadata = []
+  bot._client.write = (name, packet) => sent.push({ name, packet })
+  require('mineflayer/lib/plugins/inventory')(bot, {})
+  bot.quickBarSlot = 0
+  bot.inventory.slots[36] = { name: 'diamond_spear', type: registry.itemsByName.diamond_spear.id, count: 1 }
+  require('../src/itemuse').install(bot); spear.install(bot)
+  observedStrafe(ally, age)
+  assert.equal(allyAt(bot, ally, 0).z, age * .5, 'real receipt age shifts both forecast endpoints')
+  assert.equal(allyAt(bot, ally, 1).z, (age + 1) * .5)
+  bot.activateItem(); bot.entity.metadata[8] = 1; bot.emit('entityUpdate', bot.entity)
+  assert.equal(bot._ndUse.cur?.confirmed, true)
+  const safe = spear.teamSafe(bot)
+  bot.emit('physicTick'); bot._client.write('flying', { onGround: true })
+  const release = sent.findIndex(p => p.name === 'block_dig' && p.packet.status === 5)
+  t.diagnostic(JSON.stringify({ age, visibleZ: ally.position.z, forecastZ: [allyAt(bot, ally, 0).z, allyAt(bot, ally, 1).z], safe, release, movement: sent.findIndex(p => p.name === 'flying') }))
+  assert.equal(safe, false, 'the forecast cannot erase the last visible body on the native piercing ray')
+  assert.ok(release >= 0 && release < sent.findIndex(p => p.name === 'flying'), 'the existing late guard releases the real mainhand use before movement')
+  assert.equal(bot._ndUse.cur, null)
+  bot.emit('physicTick')
+  assert.equal(sent.filter(p => p.name === 'block_dig' && p.packet.status === 5).length, 1)
+  bot.emit('end')
+})
+
+test('an aged ally whose observed body and entire forecast stay outside the spear beam remains safe', () => {
+  const { bot, ally } = scene()
+  observedStrafe(ally, 4, 3)
+  assert.equal(allyAt(bot, ally, 0).z, 5)
+  assert.equal(spear.teamSafe(bot), true)
+})
+
+test('spear safety never reads the known-hidden ally position or motion', () => {
+  const { bot, ally } = scene()
+  ally._ndVisible = false
+  for (const name of ['position', 'velocity', '_ndPositionReceipts']) Object.defineProperty(ally, name, { get() { throw new Error('hidden geometry read') } })
+  assert.equal(spear.teamSafe(bot), true)
+})
+
+test('an ally behind an actual opaque wall contributes no hidden forecast to spear safety', () => {
+  const { bot, ally } = scene(), read = bot.blockAt
+  bot.blockAt = p => p.x >= 2 && p.x < 3 && p.y >= 100 && p.y < 103
+    ? { name: 'stone', position: p.floored(), boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : read(p)
+  Object.defineProperty(ally, '_ndPositionReceipts', { get() { throw new Error('hidden motion read') } })
+  assert.equal(spear.teamSafe(bot), true)
+})
+
+test('unknown future strafe terrain cannot erase the visible ally from a spear beam', () => {
+  const { bot, ally } = scene(), read = bot.blockAt
+  observedStrafe(ally, 4)
+  bot.blockAt = p => p.z >= 1 ? null : read(p)
+  assert.equal(spear.teamSafe(bot), false)
+})
+
 test('rocket rejects a teammate in the explosion and on a side multishot ray', () => {
   const { bot, ally, foe } = scene(), from = new Vec3(0, 101.47, 0)
   foe.position.x = 12

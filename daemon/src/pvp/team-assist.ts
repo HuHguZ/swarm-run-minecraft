@@ -138,7 +138,8 @@ export async function tossTo (bot: any, ally: any, name: string, count = 1, aren
 // (брошенное игроком — 40 тиков). Без этого бросок «ложился рядом»: гонка 10.10 — 7 передач каптёра, подобрано 0.
 export async function pickup (bot: any, name: string | null, maxD = 6, arena?: any, ctl = { aborted: false }) {
   const me = bot.entity.position
-  const count = () => bot.inventory.items().filter((i: any) => !name || i.name === name).reduce((a: number, i: any) => a + i.count, 0)
+  // Со второй рукой: подобранная ракета ложится в стопку в левой руке (25.10: «firework_rocket — не подобрал» при полученной).
+  const count = () => [...bot.inventory.items(), bot.inventory.slots[45]].filter((i: any) => i && (!name || i.name === name)).reduce((a: number, i: any) => a + i.count, 0)
   let before = count()
   // Брошенное союзником у ног (передача роя, 14.10: «бросил, не подобрал» 46 из 59): предмет мал, и луч прицела его часто
   // не видит — в 3 бл. хватает близости; тип вещи приходит метаданными позже самой сущности — без типа тоже берём.

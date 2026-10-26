@@ -18,6 +18,8 @@ export function pvpFlee(S: PvpPlan): void {
   const hunting = (m: SwarmMember) => !!prey && distance(m.position, prey.position) <= 32 && Object.keys(m.inventory || {}).some(n => count(m.inventory, n) > 0 && (damage.isMeleeWeapon(n) || /^(bow|crossbow|trident)$/.test(n)))
   const retreats = pvpState(board).retreats
   for (const [i, m] of team.entries()) {
+    // Финал — последний бой, не сохранение команды в укрытии. Рана остаётся фазе pvpRecover; аварии — телу.
+    if (S.endgame) { retreats.delete(m.id); continue }
     const risk = assessSwarmFight(m, enemies, team)
     // Ракеты разрывают и ближний контакт: смертельный размен (его ближний удар добьёт до моего) — на безопасный насест, даже без
     // хилки. Только смертельный: «проигранный» (выжить < убить) против человека в незерите — почти любой контакт с полным хп, и рой
@@ -50,7 +52,18 @@ export function pvpFlee(S: PvpPlan): void {
     // гистерезис 16/22 — «лут ↔ бегство» на 17–22 бл.).
     const far = near ? threatReach(near) : 16
     // Скорость погони не исключает спуск и прокоп: последний бой решает тело после реальной проверки выходов.
-    if (near && gap <= (prevKind === 'loot' ? far : far + 6) && pursuing && !(prevKind === 'fight' && gap <= 6) && !assault?.voters.includes(m.id) && (weak(m) || outclassed(m, near))) {
+    // Он быстрее (Скорость: > 0.3 бл/т, спринт без зелья — 0.28) и уже в 6 бл. — пешком не уйти, только спиной под меч: драться
+    // (игра пользователя 25.10: «ухожу от погони (враг в 5 бл.)» — убит через 2 с, не ударив).
+    // Безоружному — уходить, как прежде (спуск, прорыв тела); есть чем уйти (жемчуг, элитры с ракетами, заряд ветра) — уходить им
+    // сразу (отход ниже), а не ждать, пока догонит.
+    const inv = m.inventory || {}
+    const escapes = (inv.ender_pearl || 0) > 0 || (inv.wind_charge || 0) > 0 || (inv.chorus_fruit || 0) > 0 || (!!inv.elytra || Object.values(m.armor || {}).includes('elytra')) && (inv.firework_rocket || 0) >= 5
+    // Когда догонит — по его скорости на меня против моего спринта (0.28 бл/т): до удара (3 бл.) за t = (gap − 3)/(vк − 0.28).
+    // Меньше 3 с — бегом не уйти (пользователь 25.10: «по вектору скорости моему и своему считать, когда догоню»).
+    const closing = near ? ((m.position.x - near.position.x) * (v?.x || 0) + (m.position.z - near.position.z) * (v?.z || 0)) / (gap || 1) : 0
+    const catchS = closing > .28 ? Math.max(0, gap - 3) / (closing - .28) / 20 : Infinity
+    const outrun = catchS < 3 && !escapes && Object.keys(inv).some(k => /_sword$|_axe$|^mace$|_spear$/.test(k))
+    if (near && gap <= (prevKind === 'loot' ? far : far + 6) && pursuing && !outrun && !(prevKind === 'fight' && gap <= 6) && !assault?.voters.includes(m.id) && (weak(m) || outclassed(m, near))) {
       // От лучника — за укрытие (стена ломает линию выстрела), иначе к своим или в отрыв.
       const perch = perchFor(m), cover = !perch && ranged && hideoutFor(m), group = !perch && !cover && rallyFor(m, near)
       markFled(board, m.id)
@@ -105,7 +118,9 @@ export function pvpFlee(S: PvpPlan): void {
     const away = { x: m.position.x + x * 12, y: m.position.y, z: m.position.z + z * 12 }
     // Причина отхода — в журнал драйвера; «держу» — начатый отход, который мир ещё не кончил.
     const cause = held ? 'держу ' + why : why
-    const perch = perchFor(m)
+    // Один — к своим, а не на насест: отход «один» кончается, когда дошёл до группы (retreatStep), а с насеста он к ним не
+    // подходит и держится вечно (Codex 26.10, AA-N-HOLD-NEXT: здоровый n 196 с на насесте до конца раунда, вайпа нет).
+    const perch = why === 'один' && home ? null : perchFor(m)
     put(m, 'flee', { target: threat.id, enemyPosition: threat.position, panic: true, risk, reason: cause + ', ' + risk.reason, ...(perch ? { perch: true } : home ? { regroup: true } : {}) },
       perch ?? (home ? middle(home) : away))
   }
@@ -117,7 +132,9 @@ export function pvpRecover(S: PvpPlan): void {
   const hurt = team.filter(m => {
     if (plan.has(m.id)) return false
     // Натиск: у врага под носом не есть и не отходить — добьёт в спину; лечиться — оторвавшись (дальше 8 бл.).
-    if (aggressive && (assault || hunting(m) || enemies.some(e => distance(e.position, m.position) <= 8))) return false
+    // Но если его один ближний удар меня убивает — сперва лечиться и при натиске (игра пользователя 25.10: h с 7 хп по голосу
+    // штурма полетел к нему на элитрах и умер за 1 с; NeuroFarm30 так же с 2 хп).
+    if ((aggressive || S.endgame) && (enemies.some(e => distance(e.position, m.position) <= 8) || (assault || hunting(m)) && !assessSwarmFight(m, enemies, team).burst)) return false
     // Врагов не видно — отход только от настоящей раны (< 70 %): царапина от падения не срывает лут (ревью 13.10).
     if (!enemies.length) return ratio(m) < .7
     const nearby = enemies.filter(e => distance(m.position, e.position) < 12).length

@@ -37,28 +37,40 @@ export function assignFighters(S: PvpPlan): void {
     const work = (wind || (edge.at ?? 0) <= SHOVE_REACH ? damage.IFRAME_TICKS / 20 : chain * damage.IFRAME_TICKS / 20) + (wind ? 0 : walk)
     return dislodgeSeconds(S, foe, 'shove', work, attack + walk) < attack + walk
   }
+  // Враг у смертельного края, у меня заряды, до него не дальше полёта заряда и подъёма фланга — не прятаться и не «переигран»:
+  // на сброс (стенд 25.10: Tester в незерите в 1 бл. от края гребня, у всех по 128 зарядов — «бой 0, сброс 0, лут/укрытие 8»,
+  // 18 раз «проигрываем — прячусь»; пользователь: «не выкидывают с колизея ветром»).
+  const edgeWind = (m: SwarmMember, foe?: SharedEnemy) => !!foe && !!S.edgeAt(foe) && shoveOf(foe) >= SHOVE && count(m.inventory, 'wind_charge') >= 2 && distance(m.position, foe.position) <= 48
   for (const m of [...team].sort((a, b) => b.strength - a.strength || a.id.localeCompare(b.id))) {
+    const covering = S.endgame && plan.get(m.id)?.kind === 'fight' && plan.get(m.id)?.data?.cover ? plan.get(m.id) : undefined
+    if (S.endgame) {
+      // Короткая хилка остаётся; резерв, стройка, лут и укрытие больше не отводят здоровых от последнего боя.
+      const assigned = plan.get(m.id)
+      if (assigned?.kind === 'recover' || assigned?.kind === 'heal') continue
+      plan.delete(m.id)
+    }
     const near = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
     const personal = near && memberFight(m, near), kit = killMeans(m)
     const shoveUseful = near && worthShove(m, near, attackSeconds(m, near, personal!.attackSeconds))
     // Не пробивающий и проигрывающий размен получает другое дело; кирка нужна лишь у назначенной живой ямы.
-    const rearm = aggressive && personal?.rearm && !kit.smash && !kit.harm && !(kit.axe && comboMace) && !shoveUseful && !diggers.has(m.id)
+    const rearm = aggressive && !S.endgame && personal?.rearm && !kit.smash && !kit.harm && !(kit.axe && comboMace) && !shoveUseful && !diggers.has(m.id)
     if (rearm) rearming.add(m.id)
     if (plan.has(m.id)) continue
     if (diggers.has(m.id)) { const { site: s, foe } = diggers.get(m.id)!; put(m, 'goto', { dig: cellKey(s), undermine: !!(s as any).undermine, blocks: (s as any).blocks, stands: (s as any).stands, drop: (s as any).drop, target: foe.id, enemyPosition: foe.position, reason: (s as any).drop === Infinity ? 'подкоп: под ним пустота' : 'копаю яму-ловушку' }, s); continue }
     if (ladderers.has(m.id)) { const s = ladderers.get(m.id)!; put(m, 'goto', { ladder: s.key, reason: 'ставлю лестницу для своих' }, { x: s.x, y: s.y, z: s.z }); continue }
-    if (campers.has(m.id)) { put(m, 'goto', { hold: 'ambush', camp: cellKey(campers.get(m.id)!), reason: 'засада в углу' }, campers.get(m.id)!); continue }
+    if (!S.endgame && campers.has(m.id)) { put(m, 'goto', { hold: 'ambush', camp: cellKey(campers.get(m.id)!), reason: 'засада в углу' }, campers.get(m.id)!); continue }
     // Цель держится, пока жива и видна, а новая не дешевле с запасом (4 — как 4 бл. пути): иначе цель менялась почти
     // каждую секунду, и бот носился между врагами (стенд 15×15, 21.10: d → t → f → ad за 4 с).
-    const best = [...enemies].filter(e => !untouchable.has(e.id)).sort((a, b) => targetCost(m, a) - targetCost(m, b) || a.id.localeCompare(b.id))[0]
+    const best = [...enemies].filter(e => S.endgame || !untouchable.has(e.id)).sort((a, b) => targetCost(m, a) - targetCost(m, b) || a.id.localeCompare(b.id))[0]
     const prevId = board.tasks().find(t => t.id === `pvp:${m.id}`)?.data?.target
     const prev = prevId && best && prevId !== best.id ? enemies.find(e => e.id === prevId && !untouchable.has(e.id)) : undefined
-    const foe = hunting(m) && !untouchable.has(prey!.id) ? prey! : prev && targetCost(m, prev) <= targetCost(m, best!) + 4 ? prev : best
+    const covered = covering && enemies.find(e => e.id === covering.data?.target)
+    const foe = covered || (hunting(m) && !untouchable.has(prey!.id) ? prey! : prev && targetCost(m, prev) <= targetCost(m, best!) + 4 ? prev : best)
     if (!foe && untouchable.size) { put(m, 'goto', { reserve: true, sentry: true }, m.position); continue }
     const nearGap = enemies.length ? Math.min(...enemies.map(e => distance(e.position, m.position))) : Infinity
     // Уже на насесте (элитры) — сидеть на нём, а не перелетать.
     const onPerch = (options.perches || []).some(q => distance(q, m.position) < 2)
-    if (losing && !hunting(m) && nearGap > 6) {
+    if (!S.endgame && losing && !hunting(m) && nearGap > 6 && !edgeWind(m, foe)) {
       const den = onPerch ? m.position : perchFor(m) ?? hideoutFor(m)
       if (den) { put(m, 'flee', { target: foe?.id, enemyPosition: foe?.position, ...(onPerch || options.perches?.includes(den) ? { perch: true } : { hide: true }), panic: true, reason: 'проигрываем — прячусь' }, den); continue }
     }
@@ -66,11 +78,11 @@ export function assignFighters(S: PvpPlan): void {
       // Прятался, а враг пропал из виду (за стеной, вне прорисовки) — сидеть в укрытии, пока последнее место врага в 22 бл.
       // (арена 40: прятался → не видно → лут → снова виден → прятался, каждые 3–7 с).
       const was = board.tasks().find(t => t.id === `pvp:${m.id}` && t.kind === 'flee' && t.position)
-      if (was && lastEnemy && board.now() - lastEnemy.seenAt < 6000 && distance(lastEnemy.position, m.position) < 22) { put(m, 'flee', was.data || {}, was.position); continue }
+      if (!S.endgame && was && lastEnemy && board.now() - lastEnemy.seenAt < 6000 && distance(lastEnemy.position, m.position) < 22) { put(m, 'flee', was.data || {}, was.position); continue }
       const improvement = improvementOf(m)
       // Врага не видели (или забыли) — недобор снаряжения добирать лутом (сундуки наверху тоже); видели — охота (Codex 15.10).
       // Слабее типичного врага раунда (память снаряжения, race.ts) — лут; раньше — метка «переигран» на 30 с (21.10: по миру).
-      if (weak(m) || improvement > 0 && (!lastEnemy || behindRace(S, m))) { put(m, 'loot', { improvement, reason: 'лут: врага не видно' }); continue }
+      if (!S.endgame && (weak(m) || improvement > 0 && (!lastEnemy || behindRace(S, m)))) { put(m, 'loot', { improvement, reason: 'лут: врага не видно' }); continue }
       // Врага не видели вовсе — прочёсывать, без прокопа: «охота» на своё место копала под себя (ночь 15.10: 1686 прокопов
       // в пустом раунде, ~100 ботов провалились под арену).
       // Поиск веером (21.10: двенадцать красных 4 мин искали двоих синих у одного места): каждому своя точка на кольце вокруг
@@ -93,14 +105,14 @@ export function assignFighters(S: PvpPlan): void {
     const wind = count(m.inventory, 'wind_charge')
     const edge = S.edgeAt(foe)
     // Дальняя цепь оплачивается окнами удара: сравниваем с гонкой урона, а не запрещаем дальше трёх блоков.
-    const deadly = foe === near ? !!shoveUseful : worthShove(m, foe, attackSeconds(m, foe))
+    const deadly = (foe === near ? !!shoveUseful : worthShove(m, foe, attackSeconds(m, foe))) || edgeWind(m, foe)
     // Против сильного (race.ts strongFew): в упор — двое лучших (MELEE_CAP: больше окно неуязвимости не пропустит) и те, кто
     // бьёт иначе — булава с взлёта, зелья вреда; у края — все, кто достаёт. Остальные — как переигранные: лут, укрытие, к своим
     // (вплотную — бой). Стенд 21.10: оба убийства чемпиона — булава с падения и сброс; ближним боем — ни одного.
     const means = aggressive && (S.state.strongFew || S.state.dislodge) ? killMeans(m) : null
     const melee = !!means && !means.smash && !means.harm && !(means.axe && comboMace)
     const surplus = melee && !deadly && !(foe === prey && hunting(m)) && (meleeOn.get(foe.id) || 0) >= MELEE_CAP
-    if (aggressive && !deadly && !(foe === prey && hunting(m)) && (rearm || weak(m) || surplus || outclassed(m, [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]) || regroup && !assault)) {
+    if (aggressive && !S.endgame && !deadly && !(foe === prey && hunting(m)) && (rearm || weak(m) || surplus || outclassed(m, [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]) || regroup && !assault)) {
       const near = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0], gap = distance(m.position, near.position)
       if (gatherers.has(m.id)) { put(m, 'goto', { gather: options.gather!.item, count: 32, reason: 'добываю блоки для подъёма' }, options.gather!.spot); continue }
       // На насесте — сидеть, пока враг в 28 бл.: оттуда лук и еда; ушёл дальше — вниз за лутом.
@@ -134,6 +146,12 @@ export function assignFighters(S: PvpPlan): void {
       if (gap > edge) { markFled(board, m.id); put(m, 'loot', { improvement: improvementOf(m), weak: true, reason: `лут: отхожу, укрыться негде (враг в ${Math.round(gap)} бл.)` }); continue }
     }
     const nearby = distance(m.position, foe.position) <= 4.5
+    // Окно на сундуки и при натиске (пользователь 25.10: «в железке ходят, хотя в сундуках броня лучше, — могли бы выделить время»):
+    // враг дальше своей досягаемости с запасом — успею к сундуку раньше, чем он ко мне; ближе — бой, как прежде.
+    const closest = aggressive ? [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0] : undefined
+    if (!S.endgame && closest && !deadly && !(foe === prey && hunting(m)) && improvementOf(m) >= 2 && distance(m.position, closest.position) > threatReach(closest) + 6) {
+      put(m, 'loot', { improvement: improvementOf(m), reason: `лут: враг в ${Math.round(distance(m.position, closest.position))} бл., успею приодеться` }); continue
+    }
     // Гонка вооружений (race.ts): слабее типичного врага и враг не рядом — лут, а не бой (голым на любого видимого
     // врага шли 9 из 10: 30 задач лута за раунд 15×15 против 1300 походов к врагу, 21.10).
     if (!aggressive && !deadly && !S.endgame && !(foe === prey && hunting(m)) && !assault) {
@@ -141,14 +159,14 @@ export function assignFighters(S: PvpPlan): void {
       if (race.loot) { put(m, 'loot', { improvement: improvementOf(m), race: true, reason: `лут: слабее их (${Math.round(race.mine)} против ${Math.round(race.theirs!)})` }); continue }
     }
     // Смена линий: ранг не на смене уходит в тыл и из контакта — иначе старый фронт так и стоит в бою (лаборатория 13.10).
-    if (doctrine === 'line' && !deadly && lineRank(team.indexOf(m), team.length) !== lineDuty) {
+    if (!S.endgame && doctrine === 'line' && !deadly && lineRank(team.indexOf(m), team.length) !== lineDuty) {
       put(m, 'goto', { reserve: true, line: lineRank(team.indexOf(m), team.length), rotation: lineDuty }); continue
     }
     const demand = visibleForce(foe) * 1.2 / meanStrength
     const engageValue = (1 - (loads.get(foe.id) || 0) / demand) * 15 + 7 - distance(m.position, foe.position) * 0.25
     const reserveValue = (m.role === 'miner-builder' ? 8 : m.role === 'healer' ? 6 : 1) + (1 - ratio(m)) * 8
     // Натиск: резерва нет — на человека идут все (резерв «по модели нужно 2–3» оставлял одиночек без подмоги).
-    const finishing = outnumber && (runner(foe) || crushing)
+    const finishing = S.endgame || outnumber && (runner(foe) || crushing)
     if (!nearby && !aggressive && !finishing && !deadly && engageValue < reserveValue) {
       const i = team.indexOf(m); const across = (i - (team.length - 1) / 2) * 2
       const at = doctrine === 'ring' || doctrine === 'weak-center' ? spots.get(m.id) : { x: center.x - forward.x * 5 - forward.z * across, y: m.position.y, z: center.z - forward.z * 5 + forward.x * across }
@@ -162,7 +180,7 @@ export function assignFighters(S: PvpPlan): void {
     // больше всех готовых), цель ослабла (ва-банк) или сама идёт на него. Иначе — к ближним готовым своим (до трёх, не у
     // цели): собраться, а не кружить; своих нет — в бой.
     const gapFoe = distance(m.position, foe.position)
-    if (aggressive && !search && gapFoe > 8 && foe !== prey) {
+    if (aggressive && !S.endgame && !search && gapFoe > 8 && foe !== prey) {
       const ready = team.filter(a => a.id !== m.id && !weak(a) && !['flee', 'recover', 'heal'].includes(plan.get(a.id)?.kind ?? ''))
       const engaged = ready.some(a => distance(a.position, foe.position) <= 8)
       const staged = ready.filter(a => distance(a.position, foe.position) <= 16).length + (gapFoe <= 16 ? 1 : 0)
@@ -183,7 +201,7 @@ export function assignFighters(S: PvpPlan): void {
     const shove = !search && deadly
     const slot = (aggressive || finishing || shove) && !search ? sectorOf(m, foe) : undefined
     // Булавник толкает ветром только сверх двух зарядов: они — на взлёт (стенд 22.10: «нет заряда» — 59 отказов за 3 раунда).
-    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > (count(m.inventory, 'mace') ? 2 : 0) && (shove || doctrine === 'wave' && wind > 2 && !count(m.inventory, 'mace')), ...(shove ? { shove: true, shoveAt: { x: foe.position.x + edge!.x * (edge!.at ?? SHOVE_REACH), y: foe.position.y, z: foe.position.z + edge!.z * (edge!.at ?? SHOVE_REACH) } } : {}), ...(finishing ? { finishing: true } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
+    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > (count(m.inventory, 'mace') ? 2 : 0) && (shove || doctrine === 'wave' && wind > 2 && !count(m.inventory, 'mace')), ...(shove ? { shove: true, shoveAt: { x: foe.position.x + edge!.x * (edge!.at ?? SHOVE_REACH), y: foe.position.y, z: foe.position.z + edge!.z * (edge!.at ?? SHOVE_REACH) } } : {}), ...(finishing ? { finishing: true } : {}), ...(covering ? { cover: covering.data!.cover } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
     loads.set(foe.id, (loads.get(foe.id) || 0) + m.strength / meanStrength)
     if (melee) meleeOn.set(foe.id, (meleeOn.get(foe.id) || 0) + 1)
   }

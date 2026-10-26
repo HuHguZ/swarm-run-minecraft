@@ -890,31 +890,33 @@ test('endgame: against the last foe left (kill feed) everyone goes for him, up h
   assert.ok([...early.values()].every(t => !t.data?.finishing), 'fifteen left: not an endgame')
 })
 
-test('kill feed: the last foe who already killed two of ours is not rushed, whatever the gear model says', () => {
+test('kill feed: the last known foe is finished even after killing two of ours', () => {
   const team = ['a', 'b', 'c', 'd', 'e', 'f'].map((id, i) => member(id, { position: p(i * 2 - 5, 64, 6), weapon: 'stone_sword', armor: [], ench: {}, inventory: { stone_sword: 1 } }))
   const f = scene(team)
   f.see('last', p(0, 64, 0), { equipment: { weapon: 'diamond_sword', armor: ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'] } })
   const plan = planPvp(f.board, team, { foesLeft: 1, quorum: 2, killsBy: { last: 2 } })
-  assert.ok([...plan.values()].every(t => !t.data?.finishing), 'two of ours dead and he lives: the trade is already worse than three for one')
+  assert.ok([...plan.values()].every(t => t.kind === 'fight' && t.data?.finishing), 'known last foe: finish the round instead of preserving survivors')
 })
 
-test('endgame is strength, not count: twelve naked against one netherite champion do not rush him, they gear up', () => {
+test('endgame: twelve naked against the known last champion still finish instead of gearing up forever', () => {
   const team = Array.from({ length: 12 }, (_, i) => member(`n${i}`, { position: p(i * 2 - 11, 64, 30), strength: 20, weapon: null, armor: [], ench: {}, inventory: {} }))
   const f = scene(team)
   f.see('champ', p(0, 64, 0), { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } })
   const plan = planPvp(f.board, team, { foesLeft: 1, quorum: 2 })
-  assert.ok([...plan.values()].every(t => !t.data?.finishing), 'one netherite against twelve naked: no all-in')
-  assert.ok([...plan.values()].every(t => t.kind !== 'fight'), `nobody walks into him naked: ${[...plan.values()].map(t => t.kind).join(',')}`)
+  assert.ok([...plan.values()].every(t => t.data?.finishing), 'the public death feed confirms the last enemy')
+  assert.ok([...plan.values()].every(t => t.kind === 'fight'), `all finish: ${[...plan.values()].map(t => t.kind).join(',')}`)
 })
 
-test('strong few: against a champion with a bow the naked go behind cover, not across the open', () => {
+test('known last archer is finished; unknown enemy count retains middle battle cover policy', () => {
   const team = Array.from({ length: 12 }, (_, i) => member(`n${i}`, { position: p(i * 2 - 11, 64, 20), strength: 20, weapon: null, armor: [], ench: {}, inventory: {} }))
   const f = scene(team)
   f.see('champ', p(0, 64, 0), { threat: 'bow', equipment: { weapon: 'bow', armor: NETHERITE, enchanted: true } })
   const plan = planPvp(f.board, team, { foesLeft: 1, quorum: 2, hideouts: [p(0, 64, 50), p(30, 64, 40)] })
-  const hid = [...plan.values()].filter(t => t.kind === 'flee' && t.data!.hide)
-  assert.ok(hid.length >= 2, `behind cover from the archer: ${[...plan.values()].map(t => `${t.kind}:${t.data!.reason}`).join(' | ')}`)
-  assert.ok([...plan.values()].every(t => t.kind !== 'fight'), 'nobody walks into him naked')
+  assert.ok([...plan.values()].every(t => t.kind === 'fight' && t.data!.finishing), 'no indefinite hide against the last known archer')
+  const middle = scene(team)
+  middle.see('champ', p(0, 64, 0), { threat: 'bow', equipment: { weapon: 'bow', armor: NETHERITE, enchanted: true } })
+  const ordinary = planPvp(middle.board, team, { aggressive: true, quorum: 2, hideouts: [p(0, 64, 50), p(30, 64, 40)] })
+  assert.ok([...ordinary.values()].filter(t => t.kind === 'flee' && t.data!.hide).length >= 2, 'unknown enemy count retains the old cover policy')
 })
 
 test('blast: a crystal at arm length is run from, never fought, even when the trade looks safe', () => {
@@ -957,4 +959,16 @@ test('перегруппировка: цель к своим сохраняет 
   assert.equal(task.data!.regroup, true)
   assert.ok([low.position.y, high.position.y].includes(task.position!.y), 'на выбранной высоте есть свой; 124 между ярусами не цель')
   assert.ok(task.position!.x < low.position.x, 'по-прежнему за спины своих, прочь от человека')
+})
+
+test('отход «один» с элитрами — к своим, а не на насест: с насеста он к группе не подходит и держится до конца раунда', () => {
+  const IRON = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
+  const lone = member('a', { weapon: 'stone_sword', armor: [], ench: {}, inventory: { stone_sword: 1, elytra: 1, firework_rocket: 8 } })
+  const mates = ['b', 'c'].map((id, k) => member(id, { position: p(-40, 64, k * 2) }))
+  const f = scene([lone, ...mates], 1000)
+  f.see('foe', p(10), { equipment: { weapon: 'diamond_sword', armor: IRON } })
+  const t = planPvp(f.board, f.members, { perches: [p(-15, 82, 0)] }).get('a')!
+  assert.equal(t.kind, 'flee')
+  assert.match(String(t.data?.reason), /один/)
+  assert.ok(!t.data?.perch && t.data?.regroup && t.position.x < -30, `к группе, не на насест: ${JSON.stringify(t.position)}`)
 })

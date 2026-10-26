@@ -219,7 +219,7 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     if (task.data.fountain === 'close' && distance(m.p, task.position) > 1.5 && !contact) { await go(b, task.position, .8); return }
     const place = task.data.slot !== undefined ? slotAt : task.position
     if (!flyer && distance(m.p, place) > 6 && !contact && !rangedAdvantage(b)) { await go(b, place); return }
-    if (!flyer && foe.position.y - m.p.y > 4 && (m.inv.elytra || m.armor?.torso === 'elytra') && m.inv.firework_rocket >= 3 && !sw.blocked(b, `fly:${b.name}`, foeCell)) {
+    if (!flyer && foe.position.y - m.p.y > 4 && (m.inv.elytra || m.armor?.torso === 'elytra') && m.inv.firework_rocket >= 5 && !sw.blocked(b, `fly:${b.name}`, foeCell)) {
       const r = detail(await b.c.call('fly_to', { at: foe.position, timeoutSeconds: 15, arena }).catch(e => ({ why: e.message })))
       if (!r.ok) sw.failed(b, `fly:${b.name}`, foeCell)
       return

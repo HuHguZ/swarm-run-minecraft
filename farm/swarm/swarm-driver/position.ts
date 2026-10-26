@@ -1,8 +1,11 @@
 // Рой: передачи своим, поиск врага, ветер в паре, позиция (стрельба, стройка, отход), перевес лучника.
 import { ownedCount, assessSwarmFight } from '../../../daemon/src/swarm'
 import { powerOf } from '../../../daemon/src/pvp/arms-graph'
-import { WEAPON, distance, cellKey } from './common'
+import { WEAPON, distance, cellKey, withOffHand } from './common'
 import type { SwarmDriverCtx } from './common'
+
+// Своё у получателя — с ракетами и зарядами во второй руке (подобранная ракета ложится туда).
+const held = (state: any, item: string) => ownedCount({ ...(state || {}), inventory: withOffHand(state?.inventory, state?.offHand) }, item)
 
 export function swarmPosition (sw: SwarmDriverCtx) {
   const { now, bots, pos, arena, log, alive, transfers, telemetry, visited, teamOf, fighting, lootSafe, lootArena, go, renew, detail, execute, buildGo, buildStep, boardOf } = sw
@@ -69,7 +72,7 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       if (!await stopRecipient()) return false
       const fresh = await Promise.all([b.c.call('status'), recipient.c.call('status')])
       for (const [i, bot] of [b, recipient].entries()) if (fresh[i]?.state?.pos) pos[bot.name].p = fresh[i].state.pos
-      const before = ownedCount(fresh[1]?.state || {}, task.data.item)
+      const before = held(fresh[1]?.state, task.data.item)
       const have = fresh[0]?.state?.inventory?.[task.data.item] || 0
       if (have - task.data.reserve < task.data.count || !available()) return false
       // Доска запаздывает за физикой: после посадки доводим бросок по свежим координатам, не расширяем дальность tossTo.
@@ -90,7 +93,7 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       if (round !== sw.generation) return true
       const result = await recipient.c.call('status')
       if (round !== sw.generation) return true
-      const received = ownedCount(result?.state || {}, task.data.item) - before >= task.data.count
+      const received = held(result?.state, task.data.item) - before >= task.data.count
       if (result?.state?.inventory && pos[recipient.name]) pos[recipient.name].inv = result.state.inventory
       if (result?.state?.armor && pos[recipient.name]) pos[recipient.name].armor = result.state.armor
       const donor = await b.c.call('status')

@@ -4,6 +4,7 @@ import { keyDir } from './moves'
 import { stepSafe } from './pvp/body'
 import { projectileDangers } from './threats'
 import { observeCharge } from './bow/charge'
+import { shapeBoxes } from './navigation/geometry'
 
 export function install (session, free) {
   const bot = session.bot
@@ -11,13 +12,14 @@ export function install (session, free) {
   const keys = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak']
   const wanted = Object.fromEntries(keys.map(k => [k, !!bot.getControlState(k)]))
   const raw = bot.setControlState.bind(bot), activate = bot.activateItem?.bind(bot), deactivate = bot.deactivateItem?.bind(bot)
-  let mix: Record<string, boolean> = {}, closed = false, shield: any = null, memo: any = null, stamp = -Infinity, guard: any, ownUse = false
-  // Ждёт толчка стрелой своего (combat/arrow-boost) — сам встал под выстрел: шаг с линии сорвёт разгон.
-  const enabled = () => !closed && session.bot === bot && !!bot.entity && (bot.health ?? 20) > 0 && !session.current?.ctl?.aborted && !bot._ndBoostFrom && free()
+  let mix: Record<string, boolean> = {}, closed = false, shield: any = null, memo: any = null, memoBoost: any, stamp = -Infinity, guard: any, ownUse = false
+  // Прогноз исключает только ожидаемые стрелы своих; чужая угроза остаётся угрозой во время разгона.
+  const enabled = () => !closed && session.bot === bot && !!bot.entity && (bot.health ?? 20) > 0 && !session.current?.ctl?.aborted && free()
   const observe = () => {
     const now = clock.now()
-    if (stamp === now && memo) return memo
+    if (stamp === now && memo && memoBoost === bot._ndBoostFrom) return memo
     stamp = now
+    memoBoost = bot._ndBoostFrom
     guard = undefined
     const d = projectileDangers(bot, { foes: session._ndFoes ?? null })
     // Тот же наблюдаемый выстрел скелета до первого пакета стрелы; срок уже считает существующая баллистика.
@@ -58,7 +60,12 @@ export function install (session, free) {
     // Уворот не меняет этаж пути: даже разрешённый боем спуск на три блока здесь сорвал бы подъём.
     const p = bot.entity.position.offset(d.x * reach, 0, d.z * reach)
     const half = bot.physics?.playerHalfWidth || .3
-    return [-half, half].every(x => [-half, half].every(z => bot.blockAt(p.offset(x, -1, z).floored())?.boundingBox === 'block'))
+    // На нижней плите опора в клетке ног; целый блок ниже уже может быть воздух.
+    return [-half, half].every(x => [-half, half].every(z => {
+      const corner = p.offset(x, -1e-7, z), cell = corner.floored(), block = bot.blockAt(cell)
+      return block && shapeBoxes(block, cell).some(box => Math.abs(box.maxY - p.y) <= 1e-7 &&
+        corner.x >= box.minX && corner.x <= box.maxX && corner.z >= box.minZ && corner.z <= box.maxZ)
+    }))
   }
   const tick = () => {
     try {
@@ -101,14 +108,18 @@ export function install (session, free) {
           ? { x: away.x / Math.hypot(away.x, away.z), z: away.z / Math.hypot(away.x, away.z) } : { x: -dz / len, z: dx / len })
         const flip = shot ? 1 : Math.floor(now / 300) % 2 ? 1 : -1
         let best: any = null
-        for (const key of ['left', 'right']) {
-          const sideways = keyDir(bot, key), input = { ...wanted, left: key === 'left', right: key === 'right' }, dir = vector(input)
+        for (const key of ['left', 'right', ...(!wanted.forward && !wanted.back ? ['forward', 'back'] : [])]) {
+          const axis = key === 'left' || key === 'right' ? ['left', 'right'] : ['forward', 'back']
+          const sideways = keyDir(bot, key), input = { ...wanted, [axis[0]]: key === axis[0], [axis[1]]: key === axis[1] }, dir = vector(input)
           if (!safe(sideways) || !safe(dir)) continue
-          const score = (sideways.x * side.x + sideways.z * side.z) * flip
-          if (!best || score > best.score) best = { key, dir, score }
+          const actual = axis[0] === 'forward' ? dir : sideways
+          const score = (actual.x * side.x + actual.z * side.z) * flip
+          // Взгляд поперёк выстрела: left/right идут вдоль луча. Другую ось берём только полезнее прежнего шага.
+          if (axis[0] === 'forward' && score <= Math.max(0, best?.score ?? 0)) continue
+          if (!best || score > best.score) best = { key, dir, score, axis }
         }
         if (best) {
-          next.left = best.key === 'left'; next.right = best.key === 'right'
+          for (const key of best.axis) next[key] = key === best.key
           // Когда линия идёт поперёк пути, боковой ключ почти не помогает: безопасный рывок вдоль пути быстрее пересекает её.
           if (shot && Math.abs(best.score) < .25 && wanted.forward && !wanted.back && safe(best.dir, 1.5)) {
             next.sprint = true

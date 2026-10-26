@@ -30,7 +30,7 @@ function updateMovements (this: Session, force = false): void {
 
     const mlg = edges.mlgDrop(this)
     const free = freeDrop(bot)
-    const dropDown = mlg.ok ? Math.max(mlg.drop, free) : (bot.health ?? 20) <= 6 ? 3 : free
+    const dropDown = mlg.ok ? Math.max(mlg.drop, free) : (bot.health ?? 20) <= 6 ? edges.SAFE_FALL + 1 : free
     if (mlg.toBar && !bot.currentWindow && bot._ndFallGuard && bot._ndFallGuard.toHotbar) bot._ndFallGuard.toHotbar().catch(() => {})
     if (bot.pathfinder.movements) bot.pathfinder.movements.maxDropDown = dropDown
     if (this.dropSet !== dropDown || mlg.why !== this.dropWhy) console.log('[mlg] cap', JSON.stringify({ at: 'update', drop: dropDown, was: this.dropSet, why: mlg.why || null }))
@@ -246,7 +246,7 @@ function refreshDrop (this: Session): void {
     // разобрали) — вернуть, а готовность проверит следующее событие слота.
     if (mlg.toBar && !bot.currentWindow && bot._ndFallGuard && bot._ndFallGuard.toHotbar) bot._ndFallGuard.toHotbar().catch(() => {})
     const free = freeDrop(bot)
-    const drop = mlg.ok ? Math.max(mlg.drop, free) : (bot.health ?? 20) <= 6 ? 3 : free
+    const drop = mlg.ok ? Math.max(mlg.drop, free) : (bot.health ?? 20) <= 6 ? edges.SAFE_FALL + 1 : free
     const was = mv.maxDropDown
     if (drop === was && !this.dropRecheck) return
     const moving = bot.pathfinder.isMoving && bot.pathfinder.isMoving()

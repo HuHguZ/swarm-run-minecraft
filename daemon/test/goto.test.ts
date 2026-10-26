@@ -26,6 +26,7 @@ function fixture (move?: any, overrides: Record<string, any> = {}) {
   vm.runInNewContext(bodySource(file) + '\nmodule.exports.roofCost = underRoofCost;', cjsContext(context))
   const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(70.5, 63, -70.5), onGround: true }
+  bot.blockAt = () => null
   // goto ждёт события pathfinder'а (movement.gotoGoal, по умолчанию с 02.10): setGoal → шаг → path_update с пустым
   // путём (как pathfinder, когда идти некуда или уже пришёл); старый bot.pathfinder.goto — то же самое.
   const walk = goal => { counts.walks++; if (move) move(bot, goal) }

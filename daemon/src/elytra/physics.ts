@@ -180,7 +180,10 @@ function rollout (W, p0, v0, yaw, pitch, boost, n, { fd = 0, keepPath = false, a
 
 // Потолок над точкой: сколько блоков воздуха над головой (до n).
 function headroom (W, p, n = 30) {
-  for (let i = 0; i < n; i++) if (W.boxHit(p.x, p.y + 0.2 + i, p.z)) return i
+  // Ноги внутри твёрдой клетки — стоит на нижней плите (модель считает её целым блоком): от верха клетки, иначе с гребня
+  // Колизея (весь в плитах) потолок всегда 0 и взлёт не начинался (стенд 25.10: «над головой блок»).
+  const y = W.solid?.(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) && p.y - Math.floor(p.y) > .01 ? Math.floor(p.y) + 1 - 0.2 : p.y
+  for (let i = 0; i < n; i++) if (W.boxHit(p.x, y + 0.2 + i, p.z)) return i
   return n
 }
 

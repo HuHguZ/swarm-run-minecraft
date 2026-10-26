@@ -25,6 +25,9 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       return rayBox(at, { x: to.x - at.x, y: to.y - at.y, z: to.z - at.z },
         { x: s.x - .3, y: feet - .6, z: s.z - .3 }, { x: s.x + 1.3, y: feet + .6, z: s.z + 1.3 }, 1) != null
     }).map(cellKey).sort().join(';') : ''
+    // Ни ям на пути, ни стойки — то же, что без digAvoid: «vacate::» ↔ «» рвало бой каждую секунду (игра 25.10: 46 из 112
+    // боёв оборвал goto, бот под мечом стоял).
+    if (!cells && !stand) return ''
     return `vacate:${cells}:${standCell(stand)}`
   }
   const phase = (t, at = null, guard = true) => t ? [t.kind === 'recover' || t.kind === 'flee' || t.data?.panic ? 'retreat' : '', t.data?.hold, t.data?.fountain, t.data?.ambush && t.kind, t.data?.line !== undefined ? 'line' : '', t.data?.rotation, t.data?.dig ? `dig:${t.data.dig}:${!!t.data.undermine}` : '', guard && t.data?.shove ? `shove:${t.data.target}` : '', guard ? vacatePhase(t, at) : ''].join('|') : ''
@@ -36,7 +39,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
   // опускали щит за тики до удара, новый подъём не держит 5 т (игра пользователя 22.10: 14 из 18 смертей — «smashed», в журнале
   // «щит к нему» по 3 раза за секунду перед каждой).
   // Спасение держит тело до квитанции окончания, а не до отказа очередному приказу драйвера.
-  const burning = b => pos[b.name]?.rescuing || b.maceDefense?.until > now() ||
+  const burning = b => b.webRescue || pos[b.name]?.rescuing || b.maceDefense?.until > now() ||
     (/^(lava_escape|dodge_blast|clear_web)$/.test(b.last?.m || '') || !!b.shieldHold && b.last?.m === 'swarm_hold') && b.last.pending !== false
   const price = r => r && (r.duelKillSeconds ?? r.killSeconds) / Math.max(.05, r.duelSurvivalSeconds ?? r.survivalSeconds)
   // Цена отмены держит обе стороны смены: стройку не рвёт мелкий пересчёт, а отход не кончается тем же новым goto.
@@ -69,6 +72,8 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     return exposed || facing && (risk.lethal || risk.burst || !healed && after >= exit.price / 1.25) ? running : task
   }
   function stopForTask(b, running, task, before, after) {
+    // Смена цели при той же фазе — видна в журнале (15×15 26.10: «обычный бой → обычный бой» 108 раз, причина не видна).
+    if (running.data?.target !== task.data?.target && before === after) after = `${after}|цель ${running.data?.target ?? '—'}→${task.data?.target ?? '—'}`
     b.swarmTask = task; b.swarmTaskAt = now()
     if (b.swarmFight) b.swarmFight.stopping = true
     log(`↪ ${b.name}: смена фазы ${running.kind}${running.data?.fountain ? '/' + running.data.fountain : ''} → ${task.kind}${task.data?.fountain ? '/' + task.data.fountain : ''}${task.data?.hold ? '/' + task.data.hold : ''} (${before.split('|').filter(Boolean).join(', ') || 'обычный бой'} → ${after.split('|').filter(Boolean).join(', ') || 'обычный бой'}) — обрываю дело [${b.last?.m || '-'}]`)
@@ -130,6 +135,13 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       const foe = context.board?.enemies().find(e => e.id === running.data?.target), m = pos[b.name]?.p
       if (foe && m && now() - foe.seenAt < 1500 && distance(foe.position, m) <= 4.5) return false
     }
+    // Бой с ним идёт, а план зовёт к той же цели походом (open/cork/shield) — враг в 6 бл., бой не рвать: сильный бот за 40 с
+    // 8 раз менял fight ↔ goto, по удару за бой, и умер (игра пользователя 25.10).
+    if (running.kind === 'fight' && task.kind === 'goto' && !task.data?.commanded && !targetChanged && b.last?.m === 'fight' && !task.data?.rotation && task.data?.line === undefined &&
+        b.last.pending !== false && !/retreat|dig:/.test(after)) {
+      const foe = context.board?.enemies().find(e => e.id === running.data?.target), m = pos[b.name]?.p
+      if (foe && m && now() - foe.seenAt < 1500 && distance(foe.position, m) <= 6) return false
+    }
     // Тот же поход, стойка сдвинулась меньше чем на 0.5 бл. — не рвать: пересчёт сдвигал её на доли блока каждую секунду, и рой
     // топтался (игра пользователя 25.10: 240 обрывов goto → goto за 3 мин).
     const s0 = running.data?.swarmStand, s1 = task.data?.swarmStand
@@ -138,9 +150,16 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // Сменилась только стойка (тот же род дела, цель, отход/щит/копка/толчок): смена приёма переназначала стойки всем разом и
     // рвала 29 дел за секунду, человек бил стоящих (игра пользователя 25.10). Враг уже в 6 бл. — дело идёт, стойка подождёт.
     const noStand = (ph: string) => ph.replace(/vacate:[^|]*/, '')
-    if (running.kind === task.kind && /^(fight|goto)$/.test(task.kind) && !targetChanged && s0 && s1 && noStand(before) === noStand(after)) {
+        if (running.kind === task.kind && /^(fight|goto)$/.test(task.kind) && !targetChanged && s0 && s1 && noStand(before) === noStand(after)) {
       const foe = context.board?.enemies().find(e => e.id === task.data?.target), me = pos[b.name]?.p
       if (foe && me && now() - foe.seenAt < 1500 && distance(foe.position, me) <= 6) { b.swarmTask = task; return false }
+    }
+    // Смена цели при той же фазе: прежняя видна и не дальше новой на 6 бл. — подход к ней не рвать (15×15 26.10: 100 из 369 обрывов —
+    // цель y→u→w за секунду, до боя не доходили). Обрывают отход, щит, копка и далёкая/пропавшая цель, как прежде.
+    if (targetChanged && after === before) {
+      const foes = context.board?.enemies() || [], me = pos[b.name]?.p
+      const old = foes.find(e => e.id === running.data.target), next = foes.find(e => e.id === task.data.target)
+      if (old && next && me && now() - old.seenAt < 1500 && distance(old.position, me) <= distance(next.position, me) + 6) return false
     }
     if (after === before && !targetChanged) return false
     stopForTask(b, running, task, before, after)
@@ -186,7 +205,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // Свой горящий динамит рядом (факт tnt, 4.5 с): отойти на 7+ бл., всё остальное подождёт.
     const boom = board.facts().find(f => f.id.startsWith('tnt:') && f.position && distance(f.position, m.p) < 6)
     if (boom) { const d = Math.hypot(m.p.x - boom.position.x, m.p.z - boom.position.z) || 1; await go(b, { x: m.p.x + (m.p.x - boom.position.x) / d * 7, y: m.p.y, z: m.p.z + (m.p.z - boom.position.z) / d * 7 }, 1.5, 3); return }
-    if (!/^(flee|recover)$/.test(task.kind) && !task.data?.commanded && chestAtHand(b) && await loot(b, board, true)) return
+    if (!/^(flee|recover)$/.test(task.kind) && !task.data?.commanded && !task.data?.finishing && chestAtHand(b) && await loot(b, board, true)) return
     const onslaught = sw.onslaught(b)
     if (onslaught && task.kind !== 'flee' && !task.data?.commanded && !task.data?.dig && !task.data?.ladder && await grab(b, enemies)) return
     if (task.kind === 'flee') {
@@ -229,7 +248,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // Тайники в толще (поток «тайники», swarm-driver/caches.ts): копатель, выбранный числами (plan-jobs.cacheJobs: копка
     // дороже боя/лута/охоты), копает, если не в схватке и задача — не бой и не приём строя. false — обычный ход дальше.
     // Боец тоже может копать тайник, когда враг дальше 16 бл. — цену против боя считает cacheJobs, отказ — сам cacheTurn.
-    if (!contact && !exposed && !['flee', 'recover', 'heal'].includes(task.kind) && !task.data?.commanded && !task.data?.fountain && !task.data?.ambush && !task.data?.hold && task.data?.line === undefined && !task.data?.bait && !task.data?.cordon && !task.data?.buildKind && !task.data?.dig && !task.data?.ladder && await sw.cacheTurn(b, board)) return
+    if (!contact && !exposed && !['flee', 'recover', 'heal'].includes(task.kind) && !task.data?.commanded && !task.data?.finishing && !task.data?.fountain && !task.data?.ambush && !task.data?.hold && task.data?.line === undefined && !task.data?.bait && !task.data?.cordon && !task.data?.buildKind && !task.data?.dig && !task.data?.ladder && await sw.cacheTurn(b, board)) return
     // Манёвр приёма (линия, фонтан, засада, кольцо, приманка, оцепление, стройка) важнее ролевых привычек: обмен, сундуки,
     // поиск позиции, маяки и укрытия его не перебивают (разбор 13.10: строитель кокона уходил класть маяк, часовой без лука
     // по 10 с искал позицию для стрельбы).

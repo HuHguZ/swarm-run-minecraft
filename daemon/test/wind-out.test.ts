@@ -129,3 +129,94 @@ test('mace descent target: a visible foe below within 6 blocks; an ally or a foe
   bot._ndSwarmAllies = ['Enemy']
   assert.equal(maceTarget(bot, { x: 0, y: 7, z: .5 }), null)
 })
+
+test('wind out: release freshness follows observed game time and rechecks the queued release', async t => {
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const hands = require('../src/mace/hands') as typeof import('../src/mace/hands')
+  const enemy = require('../src/combat/enemy-wind') as typeof import('../src/combat/enemy-wind')
+  const execute = require('../src/combat/enemy-wind-execute') as typeof import('../src/combat/enemy-wind-execute')
+  const out = require('../src/combat/wind-out') as typeof import('../src/combat/wind-out')
+  const worldTick = require('../src/combat/team-wind').worldTick
+  const nativePlan = enemy.planEnemyWind, afterPacket = hands.afterPacket
+  for (const c of [
+    { name: '20 TPS fresh', rate: 20, elapsed: 60, fired: 1, lag: 1 },
+    { name: '20 TPS last accepted instant', rate: 20, elapsed: 125, fired: 1, lag: 1 },
+    { name: '20 TPS past the deadline', rate: 20, elapsed: 125.001, fired: 0, lag: 1 },
+    { name: '40 TPS passes the forecast window before 125 wall ms', rate: 40, elapsed: 100, fired: 0, lag: 2 },
+    { name: '5 TPS still fresh after 200 wall ms', rate: 5, elapsed: 200, fired: 1, lag: 0 },
+    { name: 'rate changes while queued', rate: 20, afterRate: 40, elapsed: 80, fired: 0, lag: 1 },
+    { name: 'next tick within the forecast lead', rate: 20, elapsed: 50, ticks: 1, fired: 1, lag: 1 },
+    { name: 'clock catches up after scheduling', rate: 20, elapsed: 40, ticks: 4, fired: 0, lag: 1 },
+    { name: 'clock rewinds after scheduling', rate: 20, elapsed: 40, ticks: -1, fired: 0, lag: 1 },
+    { name: 'clock unavailable after scheduling', rate: 20, elapsed: 40, missing: true, fired: 0, lag: 1 },
+    { name: 'clock replaced after scheduling', rate: 20, elapsed: 40, replaced: true, fired: 0, lag: 1 },
+    { name: 'same clock reanchors on respawn at the same world age', rate: 20, elapsed: 600, reanchor: true, fired: 0, lag: 1 }
+  ]) await t.test(c.name, async st => {
+    const { bot, own, arena } = fixture()
+    let wallMs = 0, fired = 0, lag: number | undefined, complete!: () => void
+    st.mock.method(clock.wall, 'monotonic', () => wallMs)
+    const producer = new clock.GameClock({ epoch: 0 })
+    producer.setState({ tick_rate: c.rate }); producer.syncAge(500n); bot.ndClock = producer
+    st.after(() => { producer.dispose(); bot.removeAllListeners() })
+    bot._client = new EventEmitter(); producer.attach(bot)
+    bot.getControlState = () => false; bot.activateItem = () => { fired++ }
+    st.mock.method(hands, 'windReady', () => true); st.mock.method(hands, 'offWind', () => true)
+    st.mock.method(hands, 'hotbarIndex', () => 0)
+    st.mock.method(execute, 'enemyWindReport', () => ({ ok: true, ready: true, report: { ...own, gameTick: worldTick(bot) } }))
+    st.mock.method(enemy, 'planEnemyWind', (...args: Parameters<typeof nativePlan>) => {
+      lag = args[3].delays![0]
+      const plan = nativePlan(...args); wallMs = 20; return plan
+    })
+    const released = new Promise<void>(resolve => { complete = resolve })
+    let queued = false
+    st.mock.method(hands, 'afterPacket', (b, fn) => { queued = true; afterPacket(b, () => { fn(); complete() }) })
+    const session: any = { bot, _rescue: { arena }, current: null }
+    out.installWindOut(session)
+    bot.emit('physicsTick'); bot.emit('physicsTick')
+    assert.ok(queued, 'the real native plan reached the actual afterPacket queue')
+    if (c.afterRate) producer.setState({ tick_rate: c.afterRate })
+    wallMs = c.elapsed
+    producer.ticks += c.ticks || 0
+    if (c.reanchor) { bot.emit('respawn'); producer.syncAge(500n) }
+    if (c.missing) producer.age = null
+    if (c.replaced) bot.ndClock = { age: 500n, serverTicks: 0, ticks: 0 }
+    await released
+    assert.equal(fired, c.fired, JSON.stringify(c))
+    assert.equal(lag, c.lag, 'wall planning cost is converted at the observed tick rate')
+    assert.equal(session._windOut.log[0]?.why, c.fired ? undefined : 'stale_release')
+  })
+})
+
+test('wind out: one native forecast blocked for 220 ms never releases its stale first trajectory', async t => {
+  const { bot, own, arena } = fixture()
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const hands = require('../src/mace/hands') as typeof import('../src/mace/hands')
+  const enemy = require('../src/combat/enemy-wind') as typeof import('../src/combat/enemy-wind')
+  const execute = require('../src/combat/enemy-wind-execute') as typeof import('../src/combat/enemy-wind-execute')
+  const out = require('../src/combat/wind-out') as typeof import('../src/combat/wind-out')
+  const worldTick = require('../src/combat/team-wind').worldTick
+  const nativePlan = enemy.planEnemyWind, afterPacket = hands.afterPacket
+  const producer = new clock.GameClock(); producer.syncAge(500n); bot.ndClock = producer
+  t.after(() => { producer.dispose(); bot.removeAllListeners() })
+  let plans = 0, fired = 0, before: number | null = null, after: number | null = null, lag: number | undefined, complete!: () => void
+  bot._client = new EventEmitter(); bot.getControlState = () => false; bot.activateItem = () => { fired++ }
+  t.mock.method(hands, 'windReady', () => plans === 0); t.mock.method(hands, 'offWind', () => true)
+  t.mock.method(hands, 'hotbarIndex', () => 0)
+  t.mock.method(execute, 'enemyWindReport', () => ({ ok: true, ready: true, report: { ...own, gameTick: worldTick(bot) } }))
+  t.mock.method(enemy, 'planEnemyWind', (...args: Parameters<typeof nativePlan>) => {
+    plans++; lag = args[3].delays![0]; before = worldTick(bot)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 220)
+    after = worldTick(bot); return nativePlan(...args)
+  })
+  const released = new Promise<void>(resolve => { complete = resolve })
+  t.mock.method(hands, 'afterPacket', (b, fn) => afterPacket(b, () => { fn(); complete() }))
+  const session: any = { bot, _rescue: { arena }, current: null }
+  out.installWindOut(session)
+  producer.on('tick', () => { bot.emit('physicsTick'); bot.emit('physicTick') }); producer.start()
+  await released
+  assert.equal(plans, 1, 'only the first forecast can affect this release receipt')
+  assert.equal(lag, 1)
+  assert.equal(after, before, 'the actual clock cannot process timer/time packets during the forecast')
+  assert.equal(fired, 0)
+  assert.equal(session._windOut.log[0]?.why, 'stale_release')
+})

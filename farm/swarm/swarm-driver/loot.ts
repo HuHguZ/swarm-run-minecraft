@@ -95,6 +95,10 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     return [...knownChests.entries(), ...tops].some(([id, at]) => Math.abs(at.y - me.y) < 3 && Math.hypot(at.x + .5 - me.x, at.z + .5 - me.z) < 5 &&
       !emptyChests.has(id) && fullFor.get(`${b.name}:${id}`) !== packOf(b) && !sameScene(b, blockedRoutes.get(`lootPath:${b.name}:${id}`)))
   }
+  function riskyFor(b, board) {
+    const naked = !Object.keys(pos[b.name]?.inv || {}).some(n => WEAPON.test(n)) || !!b.swarmTask?.data?.weak
+    return at => Math.abs(at.x + .5 - arena.x) + .3 >= arena.r || Math.abs(at.z + .5 - arena.z) + .3 >= arena.r || at.y <= (arena.killY ?? -64) || board.enemies().some(e => now() - e.seenAt < (naked ? 10000 : 3000) && distance(e.position, at) < (naked ? 22 : 14))
+  }
   async function loot(b, board, atHand = false) {
     if (underArrowFire(b, now())) return false
     const round = sw.generation
@@ -103,6 +107,9 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     // Под рукой — без паузы опроса: пауза 4 с от прошлого похода отпускала бота к приказу мимо сундука.
     if (!arms || !atHand && (cooldown.get(`loot:${b.name}`) || 0) > now() || chased(board, pos[b.name]?.p)) return false
     cooldown.set(`loot:${b.name}`, now() + 4000)
+    // Броня слабее алмазной — сперва вещи погибших: в куче незерит, а сундуки через полкарты (игра пользователя 25.10: «до конца
+    // в железке ходил, а лута вокруг полно»).
+    if (!/netherite|diamond/.test(pos[b.name]?.armor?.torso || '') && await scavenge(b, board, round)) return true
     const chests = detail(await b.c.call('blocks_around', { find: 'chest', seen: true, radius: 16, count: 8 })).found || []
     if (underArrowFire(b, now())) return false
     for (const at of chests) knownChests.set('chest:' + cellKey(at), at)
@@ -110,8 +117,7 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     // Угроза дороже лута (пользователь 14.10: «подбегают лутаться, даже если я рядом; у кого ничего нет — тем более»): голому
     // — сундук не ближе 20 бл. к врагу (видели за 10 с), остальным — 14 (за 3 с).
     // Слабый (лут из бегства) — как голый: сундук у врага ближе 22 бл. снова гнал к нему («лут ↔ бегство», поле s12).
-    const naked = !Object.keys(pos[b.name]?.inv || {}).some(n => WEAPON.test(n)) || !!b.swarmTask?.data?.weak
-    const risky = at => Math.abs(at.x + .5 - arena.x) + .3 >= arena.r || Math.abs(at.z + .5 - arena.z) + .3 >= arena.r || at.y <= (arena.killY ?? -64) || board.enemies().some(e => now() - e.seenAt < (naked ? 10000 : 3000) && distance(e.position, at) < (naked ? 22 : 14))
+    const risky = riskyFor(b, board)
     for (const at of chests) {
       if (risky(at) || !lootSafe(b, { x: at.x + .5, y: at.y, z: at.z + .5 }, true)) continue
       const id = 'chest:' + cellKey(at), routeKey = `lootPath:${b.name}:${id}`
@@ -126,7 +132,8 @@ export function swarmLoot (sw: SwarmDriverCtx) {
           if (round !== sw.generation || !alive(b.name) || approach?.status === 'interrupted') return false
           if (approach?.status !== 'done' || !detail(approach).arrived) { blockedRoutes.set(routeKey, sceneOf(b)); continue }
         }
-        if (underArrowFire(b, now()) || !renew(board, b, claim)) return false
+        // Пока шёл, враг подошёл — не открывать: стоять у сундука под ним (игра пользователя 25.10: «убил, пока он в сундуке был»).
+        if (underArrowFire(b, now()) || !lootSafe(b, { x: at.x + .5, y: at.y, z: at.z + .5 }) || !renew(board, b, claim)) return false
         const r = await b.c.call('chest_take', { item: 'all', x: at.x, y: at.y, z: at.z, timeoutSeconds: 8, visibleOnly: true, stay: true })
         const d = detail(r), moved = Object.values(d.took || d.moved || {}).reduce((s: number, n: any) => s + (Number(n) || 0), 0)
         if (d.contents) caches.cacheOpened(b, at) // открыт своими — копатель его повторно не берёт
@@ -139,10 +146,13 @@ export function swarmLoot (sw: SwarmDriverCtx) {
         return Number(moved) > 0
       } finally { board.release(id, b.name, claim.claim.token) }
     }
+    return await scavenge(b, board, round)
+  }
+  async function scavenge(b, board, round) {
     // Вещи погибших (пользователь 14.10: «остаются бомжи без предметов в конце игры, хотя их много валяется — им надо
     // лутаться; в итоге мы на спавне их легко убили»): куча — где умер боец (последняя позиция, drops), живёт 5 мин
     // (предмет исчезает), к ней идёт один; подбор с земли по вещи, пока видно, потом надеть лучшее.
-    const me = pos[b.name]?.p
+    const me = pos[b.name]?.p, risky = riskyFor(b, board)
     // Погибший в падении за край (последняя позиция в 3 бл. над смертельной высотой) вещей не оставил: они ушли вниз с ним.
     // Куча — пока не разобрана (подход дал «пусто») и пока у неё никто; не дошёл — снова, когда сам ушёл с места (retry.ts),
     // а не через 30 с (21.10).

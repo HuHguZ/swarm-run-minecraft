@@ -260,7 +260,7 @@ function shieldStep (bot) {
 // pure arithmetic.
 function readOffHand (bot) {
   const it = bot.inventory.slots[OFF_HAND]
-  return it ? { item: it.name, durability: percentLeft(it) } : null
+  return it ? { item: it.name, durability: percentLeft(it), count: it.count } : null
 }
 
 // ---------------------------------------------------------------- equip

@@ -31,8 +31,8 @@ export function installRounds (ctx: ArenaContext) {
         const hm = !m && /\]: (\S+) (was .+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
         const dead = m || hm, wind = dead && ctx.windOutAt?.[dead[1]]
         if (wind && Date.now() - wind.at < 4000) {
-          ctx.windKills = (ctx.windKills || 0) + 1; delete ctx.windOutAt[dead[1]]
-          log(`🌬☠ ${dead[1]} сброшен ветром (${wind.kind}, бросал ${wind.by}): ${dead[2]} — всего сбросов ${ctx.windKills}`)
+          ctx.windRecentDeaths = (ctx.windRecentDeaths || 0) + 1; delete ctx.windOutAt[dead[1]]
+          log(`🌬☠ ${dead[1]} погиб в течение 4 с после броска ветра (${wind.kind}, бросал ${wind.by}); native причина: ${dead[2]} — всего таких смертей ${ctx.windRecentDeaths}`)
         }
         if (hm && humans[hm[1]] && !names.includes(hm[1])) {
           log(`☠ ${hm[1]} ${hm[2]}`)
@@ -81,6 +81,8 @@ export function installRounds (ctx: ArenaContext) {
   const GIVE_TO = process.env.ARMS_GIVE_ALL === '1' ? '@a[gamemode=survival]' : '@a[team=blue,gamemode=survival]'
   ctx.giveBlue = async () => { for (const g of GIVE) await rcon(i, `give ${GIVE_TO} minecraft:${g}`).catch(() => {}); if (GIVE.length) log(`🎒 ${process.env.ARMS_GIVE_ALL === '1' ? 'всем' : 'синим'} выдано: ${GIVE.join(', ')}`) }
   ctx.spreadBots = async () => {
+    const ready = new Set<string>()
+    const park = (name: string) => rcon(i, `gamemode spectator ${name}`).catch(e => { ctx.stop = true; throw e })
     for (const [k, b] of bots.entries()) {
       const h = ctx.armsHome(b, k)
       const command = `spreadplayers ${Math.floor(h.x)} ${Math.floor(h.z)} 0 3 under ${Math.max(Y + 3, h.y + 3)} false ${b.name}`
@@ -88,9 +90,17 @@ export function installRounds (ctx: ArenaContext) {
       let receipt = await spread().catch(e => String(e?.message || e))
       // Тела нет в мире (отвалилось) — переподключить и ещё раз; не вышло — без него, а не вся арена (бой роя 24.10: «No
       // entity was found» у одного ронял драйвер на старте).
-      if (/^No (player|entity)/.test(receipt)) { await b.c.call('connect').catch(() => {}); await sleep(1500); receipt = await spread().catch(e => String(e?.message || e)) }
-      if (!/^Spread 1 entity\/entities\b/.test(receipt)) log(`⚠ разнос ${b.name}: ${receipt || 'сервер молчит'}`)
+      if (/^No (player|entity)/.test(receipt)) {
+        await b.c.call('connect').catch(() => {})
+        await park(b.name) // Новое тело могло загрузить survival из сохранённого состояния.
+        await sleep(1500); receipt = await spread().catch(e => String(e?.message || e))
+      }
+      if (/^Spread 1 entity\/entities\b/.test(receipt)) ready.add(b.name)
+      else { out.add(b.name); log(`⚠ разнос ${b.name}: ${receipt || 'сервер молчит'}`); await park(b.name) }
     }
+    log(`разнос: подтверждено ${ready.size}/${bots.length}`)
+    if (!ready.size) { ctx.stop = true; throw new Error('safe placement: ни одного подтверждённого бойца') }
+    return ready
   }
   // Конец раунда: команда без живых — победа другой; пауза, уборка, новые сундуки, все на старт, снова лут и бой.
   // Раунд дольше ROUND_S (420 реальных с) — победа той, где живых больше (ничья — по убийствам).
@@ -140,12 +150,12 @@ export function installRounds (ctx: ArenaContext) {
       await ctx.roundKit(b)
     }
     // По списку онлайн, а не по карте humans: под нагрузкой сброса раунда чтение Pos у неё отваливается (10.10: «не телепортировало»).
-    // Разнос не подтвердился (spreadplayers: «Could not spread», молчание сервера) — раунд всё равно начинается: иначе between
-    // оставался true навсегда и бой не шёл (стенд 22.10, c30: 15 минут стояния после «сундуки набиты»).
-    await ctx.spreadBots().catch(e => log(`⚠ разнос ботов: ${String(e?.message || e).slice(0, 120)}`))
+    // Успешно размещённые продолжают раунд; остальные остаются зрителями и не считаются живыми.
+    out.clear()
+    await ctx.spreadBots()
     ctx.readDeaths()
-    out.clear(); deadNow.clear(); ctx.humanOut.clear()
-    for (const b of bots) await rcon(i, `gamemode survival ${b.name}`)
+    deadNow.clear(); ctx.humanOut.clear()
+    for (const b of bots) if (!out.has(b.name)) await rcon(i, `gamemode survival ${b.name}`)
     await ctx.giveBlue()
     if (HUMAN_TEAM) for (const h of new Set([...ctx.humanNames, ...Object.keys(humans)])) await ctx.humanStart(h)
     await rcon(i, `title @a title {"text":"Раунд ${ctx.round}","color":"gold"}`).catch(() => {})
@@ -163,9 +173,10 @@ export async function placeFighters (ctx: ArenaContext) {
   if (arms) {
     ctx.between = true
     for (let k = 0; k < N; k++) { const h = ctx.armsHome(bots[k], k); await ctx.reset(bots[k].name); await rcon(i, `tp ${bots[k].name} ${h.x} ${h.y} ${h.z}`); await ctx.roundKit(bots[k]) }
+    ctx.out.clear()
     await ctx.spreadBots()
     ctx.readDeaths()
-    for (const b of bots) await rcon(i, `gamemode survival ${b.name}`)
+    for (const b of bots) if (!ctx.out.has(b.name)) await rcon(i, `gamemode survival ${b.name}`)
     await ctx.giveBlue()
     ctx.between = false
   }

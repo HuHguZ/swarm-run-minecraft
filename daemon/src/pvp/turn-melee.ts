@@ -313,6 +313,15 @@ export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
         turn.back = false; turn.strafe = open.k
         if (cooldownLeft > 150) { turn.forward = false; turn.sprint = false }
         if (ready('wallNote')) { rest('wallNote', 4000); used('спиной к стене — ухожу вдоль неё') }
+      } else {
+        // Угол: сзади и с боков стена — прорыв мимо него по диагонали вперёд-вбок, в спринте и прыжке (пользователь 25.10: «из
+        // угла пытаться убежать всеми силами»). Удар по пути — как обычно.
+        const diag = ['left', 'right'].map(k => { const f = keyDir(bot, 'forward'), sd = keyDir(bot, k), n = Math.hypot(f.x + sd.x, f.z + sd.z) || 1
+          return { k, len: require('../flee').runLength(bot, new Vec3((f.x + sd.x) / n, 0, (f.z + sd.z) / n), 4, 3).len } }).sort((a, b) => b.len - a.len)[0]
+        if (diag.len >= 1.5) {
+          turn.back = false; turn.forward = true; turn.strafe = diag.k; turn.sprint = true; turn.jump = true
+          if (ready('cornerNote')) { rest('cornerNote', 4000); used('в углу — прорыв мимо него') }
+        }
       }
     }
   }

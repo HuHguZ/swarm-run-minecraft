@@ -246,7 +246,7 @@ function trackTarget (entity, nowOf = null) {
         // an ambiguous pair still uses the existing observation fallback.
         velocityMeasured = !firstFallDisplacement
         if (entity.onGround === true) {
-          if (!last.grounded) { groundPath = 0; groundSamples = [{ t: last.t, path: 0 }] }
+          if (!last.grounded || !groundSamples.length) { groundPath = 0; groundSamples = [{ t: last.t, path: 0 }] }
           const dx = p.x - last.x; const dz = p.z - last.z; const distance = Math.hypot(dx, dz)
           groundPath += distance
           groundSamples.push({ t: now, path: groundPath })

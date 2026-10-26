@@ -34,7 +34,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     const cur = this.current
     // Спасаюсь из пропасти на элитрах (rescue) — его не рвёт ничто, кроме stop (13.10: подстрелил — рывок от следующей
     // стрелы отменил полёт, и бот упал).
-    if (cur && cur.name === 'fly_to' && cur.params?.rescue && cur.ctl && !cur.ctl.aborted) return { status: 'failed', error: 'спасаюсь на элитрах', code: 'RESCUE_BUSY' }
+    if (cur && (cur.name === 'fly_to' || cur.name === 'pearl_to') && cur.params?.rescue && cur.ctl && !cur.ctl.aborted) return { status: 'failed', error: cur.name === 'fly_to' ? 'спасаюсь на элитрах' : 'спасаюсь жемчугом', code: 'RESCUE_BUSY' }
     if (exclusive && !DODGES.test(name) && cur && DODGES.test(cur.name) && cur.ctl && !cur.ctl.aborted && cur.done) await beforeStart(cur.done.catch(() => {}))
     if (stopped) throw cancelled
     } catch (err) {

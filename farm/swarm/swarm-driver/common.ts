@@ -16,3 +16,11 @@ export type SwarmDriverCtx = Record<string, any>
 
 // Ход бота по частям: общее — тело, его задача и доска, раунд, враги, ближний враг и контакт, манёвр, цель боя.
 export interface TurnCtx { b: any; context: any; board: any; member: any; task: any; round: number; m: any; enemies: any[]; nearest?: any; gap?: number; contact?: boolean; maneuver?: boolean; foe?: any }
+
+// Ракеты и заряды ветра во второй руке — тоже запас (пользователь 25.10: «ракеты кончаются»): состояние тела считает в рюкзаке
+// только еду из второй руки, и у летающего с ракетами в левой руке драйвер видел 0 — пороги полёта, запас и раздача врали.
+export function withOffHand(inventory: Record<string, number> | undefined, off: { item?: string; count?: number } | null | undefined) {
+  const inv = { ...(inventory || {}) }
+  if (off?.item && /^(firework_rocket|wind_charge)$/.test(off.item) && off.count) inv[off.item] = (inv[off.item] || 0) + off.count
+  return inv
+}

@@ -129,3 +129,39 @@ test('Q10 после входа за колонну повторный localOnly
   await g.methods.juke({ from: 'Archer', maxTicks: 10, jumpy: 0 })
   assert.ok(g.walked[0].x < .5, 'близкая летящая стрела требует немедленного шага влево, колонна справа подождёт')
 })
+
+test('wall закрывает луч к телу и при диагональном направлении стрелка', async t => {
+  const build: typeof import('../src/build') = require('../src/build')
+  for (const [x, z] of [[0, -1], [1, 0], [1, 1], [-1, 1], [1, .4], [-.4, -1]]) {
+    const f = scene(t, false), placed = new Map<string, Vec3>(), original = f.bot.blockAt
+    f.foe.position = new Vec3(.5 + x * 12, 0, .5 + z * 12)
+    f.bot.blockAt = p => placed.has(p.floored().toString())
+      ? { name: 'stone', position: p.floored(), boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : original(p)
+    t.mock.method(build, 'pickFiller', () => ({ name: 'stone' } as any))
+    t.mock.method(build, 'placeBlockAt', async (_bot, at, opts) => {
+      assert.equal(opts.honest, true)
+      placed.set(at.toString(), at)
+      return { ok: true }
+    })
+    const result = await f.methods.take_cover({ from: 'Archer', wall: true, maxRun: 0, arena: { x: 0, z: 0, r: 20 } })
+    assert.equal(result.ok, true, JSON.stringify({ x, z, result, placed: [...placed.keys()] }))
+    assert.ok(placed.size <= 6)
+  }
+})
+
+test('wall не объявляет укрытие по старому лучу переместившегося стрелка', async t => {
+  const build: typeof import('../src/build') = require('../src/build')
+  const f = scene(t, false), placed = new Set<string>(), original = f.bot.blockAt
+  f.foe.position = new Vec3(12.5, 0, .5)
+  f.bot.blockAt = p => placed.has(p.floored().toString())
+    ? { name: 'stone', position: p.floored(), boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : original(p)
+  t.mock.method(build, 'pickFiller', () => ({ name: 'stone' } as any))
+  t.mock.method(build, 'placeBlockAt', async (_bot, at) => {
+    placed.add(at.toString())
+    f.foe.position = new Vec3(.5, 0, -12.5)
+    return { ok: true }
+  })
+  const result = await f.methods.take_cover({ from: 'Archer', wall: true, maxRun: 0, arena: { x: 0, z: 0, r: 20 } })
+  assert.equal(result.ok, false)
+  assert.equal(placed.size, 1, 'новый угол прекращает бесполезную старую стенку')
+})

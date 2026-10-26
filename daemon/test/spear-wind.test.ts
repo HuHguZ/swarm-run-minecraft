@@ -35,14 +35,19 @@ function fixture(raised = false) {
 
 function preparedPair(t) {
   const f = fixture(true), report = { id: 'thrower', position: { x: -2.5, y: 1, z: .5 }, velocity: { x: 0, y: 0, z: 0 }, onGround: true }
+  // Supply the same previously inspected geometry to initial and remaining-flight pricing.
+  t.mock.method(require('../src/pvp/search'), 'observedCollision', bot => ({ blockAt: bot.blockAt, physics: bot.physics, game: bot.game }))
+  const wind = require('../src/combat/team-wind'), nativePlan = wind.teamWindPlan
+  // Exercise the running receiver cursor; the cheaper idle-jump candidate has no executed displacement yet.
+  t.mock.method(wind, 'teamWindPlan', (bot, report, target, options) => nativePlan(bot, report, target, {
+    ...options, accept: plan => plan.runTicks > 0 && (!options.accept || options.accept(plan))
+  }))
   f.bot.entity.velocity.y = -.0784000015258789
   let proposal = planAttack(f.bot, report, 'enemy', { incomingDps: 0 })
   while (!proposal.best && proposal.partial) proposal = planAttack(f.bot, report, 'enemy', { incomingDps: 0 })
   const base = proposal.best
   assert.ok(base, JSON.stringify(proposal))
-  // The remaining-physics fixture supplies previously inspected geometry through its observation port.
   // Use a fresh view so an earlier sight cache cannot silently supply the initial viewpoint instead.
-  t.mock.method(require('../src/pvp/search'), 'observedCollision', bot => ({ blockAt: bot.blockAt, physics: bot.physics, game: bot.game }))
   f.bot = Object.assign(new EventEmitter(), f.bot)
   return { ...f, report, base }
 }

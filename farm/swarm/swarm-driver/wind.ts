@@ -1,4 +1,5 @@
 import { distance } from './common'
+import { arenaRoom } from '../../../daemon/src/combat/team-wind'
 import type { SwarmDriverCtx } from './common'
 
 // Фланг ветра (пользователь 24.10: «если они стоят под тем, кого подкидывают, не откинут — отойти в сторону»): взрыв
@@ -22,6 +23,8 @@ export function flankSpots(target: { x: number; y: number; z: number }, arena: {
 /** An observation may start one short chain per team; it never stops an existing fight or defence. */
 export function swarmWind(sw: SwarmDriverCtx) {
   const { bots, pos, now, alive, teamOf, arena, log } = sw
+  // До края: в Колизее — до внешней стены по эллипсу (combat/team-wind arenaRoom).
+  const edgeRoom = (q: { x: number; z: number }) => arenaRoom(arena, q)
   const pending = new Map<string, object>()
   const attempted = new Map<string, string>()
   let generation = sw.generation
@@ -30,13 +33,14 @@ export function swarmWind(sw: SwarmDriverCtx) {
     (/^(lava_escape|dodge_blast|clear_web|evade|juke|take_cover|douse_lava|pearl_to|wind_jump|wind_leap|fly_to|burrow|block_behind|peek_shot)$/.test(b.last?.m || '') || b.shieldHold && b.last?.m === 'swarm_hold') && b.last?.pending !== false
   // Preflight is a query: panic() caches the strategic verdict and must not run for an unused wind opportunity.
   // Отходящий по плану (flee, recover) — не в наряд: караул и фланг слали его обратно к человеку под лук (игра пользователя 24.10).
-  const available = b => alive(b.name) && !!pos[b.name]?.p && !b.swarmReserved && !pos[b.name]?.combo && !protectedAction(b) && !/^(flee|recover)$/.test(b.swarmTask?.kind || '')
+  // Вырезает союзника из паутины (dangers webRescue) — не уводить фланом (Codex 25.10, C-HELPER-FAILURE: g летел на ярус, q так и сидел).
+  const available = b => alive(b.name) && !!pos[b.name]?.p && !b.swarmReserved && !b.webRescue && !pos[b.name]?.combo && !protectedAction(b) && !/^(flee|recover)$/.test(b.swarmTask?.kind || '')
   // В рукопашной — не трогать ходом на точку (бой роя 24.10: караул и разгон прервали goto 54 боя из 89, ⚔ cancelled by goto).
   const meleeBusy = b => b.last?.m === 'fight' && b.last.pending === true
   async function windObserve(b, sightings, seenAt = now()) {
     const round = sw.generation, team = teamOf(b), key = `${round}:${team}`, token = {}, reserved: any[] = []
     const current = () => round === sw.generation && alive(b.name)
-    const charged = o => (pos[o.name]?.inv?.wind_charge || 0) > 0 || pos[o.name]?.offHand === 'wind_charge'
+    const charged = o => (pos[o.name]?.inv?.wind_charge || 0) > 0 || pos[o.name]?.offHand?.item === 'wind_charge'
     const roster = bots.filter(o => teamOf(o) === team && alive(o.name) && pos[o.name]?.p)
     if (pending.has(key) || !current() || now() - seenAt > 1000 || !roster.some(o => charged(o) && available(o))) return false
     const target = (sightings || []).filter(e => e.visible === true && sw.hostile(b, e.id))
@@ -108,7 +112,7 @@ export function swarmWind(sw: SwarmDriverCtx) {
       const hardReaction = o => o.maceDefense?.until > now() || /^(lava_escape|dodge_blast|clear_web|evade|juke|douse_lava|burrow|block_behind|pearl_ambush|pearl_trap|boost_lance)$/.test(o.last?.m || '') && o.last?.pending !== false
       // Кого враг уже достаёт (в 8 бл.), тот не встречает жемчуг: дерётся или уходит сам (игра пользователя 24.10).
       const pressed = o => sw.boardOf(o).enemies().some(e => now() - e.seenAt < 1500 && distance(e.position, pos[o.name].p) <= 8)
-      const free = bots.filter(o => teamOf(o) === team && alive(o.name) && !!pos[o.name]?.p && !pos[o.name]?.combo && !hardReaction(o) && !meleeBusy(o) && !sw.panic(o) && !pressed(o))
+      const free = bots.filter(o => teamOf(o) === team && alive(o.name) && !!pos[o.name]?.p && !o.webRescue && !pos[o.name]?.combo && !hardReaction(o) && !meleeBusy(o) && !sw.panic(o) && !pressed(o))
       const smashers = free.filter(o => (pos[o.name].inv?.mace || 0) > 0 && (pos[o.name].inv?.wind_charge || 0) > 0 && distance(pos[o.name].p, at) <= 30)
         .sort((x, y) => distance(pos[x.name].p, at) - distance(pos[y.name].p, at)).slice(0, 2) // двое: третий ближний — ловушка или зелье (бой 24.10: их набор был только в 30–90 бл.)
       const walkers = free.filter(o => !smashers.includes(o) && distance(pos[o.name].p, at) <= reach)
@@ -196,27 +200,45 @@ export function swarmWind(sw: SwarmDriverCtx) {
     // Лук тоже: стрела толкает вдоль своего полёта (AbstractArrow.doKnockback — «Отдача» ×0.6 на уровень, плюс обычный
     // отброс от попадания), подброшенного в воздухе — на несколько блоков; со стороны центра — наружу.
     const team = teamOf(b), inv = o => pos[o.name]?.inv || {}
-    const charged = o => (inv(o).wind_charge || 0) > 0 || pos[o.name]?.offHand === 'wind_charge' || (inv(o).bow || 0) > 0 && ((inv(o).arrow || 0) + (inv(o).tipped_arrow || 0) + (inv(o).spectral_arrow || 0)) > 0
+    const charged = o => (inv(o).wind_charge || 0) > 0 || pos[o.name]?.offHand?.item === 'wind_charge' || (inv(o).bow || 0) > 0 && ((inv(o).arrow || 0) + (inv(o).tipped_arrow || 0) + (inv(o).spectral_arrow || 0)) > 0
     for (const e of sightings || []) {
-      if (e.visible !== true || !sw.hostile(b, e.id) || !e.position) continue
+      // Ник сквозь уступ — тоже место: на ярусе выше его прямо не видно никому снизу (ниже — только для яруса).
+      if (e.visible !== true && !e.nametag || !sw.hostile(b, e.id) || !e.position) continue
       const key = `${team}:${e.id}`
       if (now() - (flankAt.get(key) || 0) < FLANK_MS) continue
-      const room = arena.r - Math.max(Math.abs(e.position.x - arena.x), Math.abs(e.position.z - arena.z))
-      const crew = bots.filter(o => teamOf(o) === team && available(o) && charged(o) && !sw.panic(o) && distance(pos[o.name].p, e.position) <= FLANK_RANGE)
-      // Один боец (чемпион) — не рой: его фланг уводил из боя (стенд 24.10 14:48 — по 2–3 раза в секунду).
-      if (crew.length < 2) continue
-      const floorY = Math.min(...crew.map(o => pos[o.name].p.y))
+      const room = edgeRoom(e.position)
+      // Стоит на ярусе выше нас (гребень Колизея) — фланг на его ярусе со стороны центра: с поля его закрывает уступ, а на 18 бл.
+      // никого нет (стенд ветра 25.10: «cand:far / cand:los» — по бегущему у края ни одного броска). Подняться — дальше, до 48 бл.
+      const low = Math.min(...bots.filter(o => teamOf(o) === team && pos[o.name]?.p).map(o => pos[o.name].p.y))
+      const tier = !e.airborne && (e.velocity?.y || 0) <= .5 && e.position.y - low > 2.5
+      if (e.visible !== true && !tier) continue
+      const crew = bots.filter(o => teamOf(o) === team && available(o) && charged(o) && !sw.panic(o) && distance(pos[o.name].p, e.position) <= (tier ? 64 : FLANK_RANGE) && !(tier && meleeBusy(o)))
+      // Один боец (чемпион) — не рой: его фланг уводил из боя (стенд 24.10 14:48 — по 2–3 раза в секунду). На ярус — и один свободный:
+      // снизу заряд упирается в уступ (стенд ветра 25.10: none:blocked — половина отказов).
+      if (crew.length < (tier ? 1 : 2)) continue
+      const floorY = tier ? e.position.y : Math.min(...crew.map(o => pos[o.name].p.y))
       // Подброшен, а не прыгнул: прыжок — 0.42 бл./т. вверх, обычный в бою; выше 2.5 бл. над полом — уже не прыжок.
-      const airborne = (e.velocity?.y || 0) > .5 || e.position.y - floorY > 2.5
-      if (!airborne && room > 5) continue
+      const airborne = !tier && ((e.velocity?.y || 0) > .5 || e.position.y - floorY > 2.5)
+      if (!airborne && room > (tier ? 8 : 5)) continue
       const { spots, bad } = flankSpots(e.position, arena, floorY, crew.map(o => pos[o.name].p))
-      const movers = crew.filter(o => bad(pos[o.name].p)).sort((x, y) => distance(pos[x.name].p, spots[0]) - distance(pos[y.name].p, spots[0])).slice(0, FLANK_N)
+      // На ярусе — «плохо» стоит и тот, кто ниже его на 2+ бл.: снизу уступ закрывает.
+      const wrong = tier ? (p: any) => bad(p) || p.y < e.position.y - 2 : bad
+      const movers = crew.filter(o => wrong(pos[o.name].p)).sort((x, y) => distance(pos[x.name].p, spots[0]) - distance(pos[y.name].p, spots[0])).slice(0, FLANK_N)
       if (!movers.length) continue
       flankAt.set(key, now())
-      log(`🌬↔ ${team} → ${e.id}${airborne ? ' в воздухе' : ' у края'} (${room.toFixed(0)} бл. до края): на фланг ${movers.map((o, k) => `${o.name} ${distance(pos[o.name].p, spots[k]).toFixed(0)} бл.`).join(', ')}`)
+      log(`🌬↔ ${team} → ${e.id}${airborne ? ' в воздухе' : tier ? ' на ярусе' : ' у края'} (${room.toFixed(0)} бл. до края): на фланг ${movers.map((o, k) => `${o.name} ${distance(pos[o.name].p, spots[k]).toFixed(0)} бл.`).join(', ')}`)
       movers.forEach((o, k) => {
         const token = {}; o.swarmReserved = token
-        void sw.go(o, spots[k], 1.5, 2).catch(() => {}).finally(() => { if (o.swarmReserved === token) delete o.swarmReserved })
+        // На ярус — время по пути и с элитрами (пользователь 25.10: «научи вставать на мой ярус со стороны центра»): 2 с пешком
+        // не поднимали с поля на 30 бл. ни разу, и снизу заряд по гребню не попадает (стенд: 15 «out?» мимо).
+        const far = distance(pos[o.name].p, spots[k]), m = pos[o.name]
+        const wings = (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 5
+        const move = !tier ? sw.go(o, spots[k], 1.5, 2)
+          : wings ? o.c.call('fly_to', { at: spots[k], timeoutSeconds: 12, arena })
+          : o.c.call('goto', { ...spots[k], range: 2, climb: true, timeoutSeconds: Math.min(15, Math.max(4, Math.ceil(far / 3))), arena, _hunt: true })
+        void Promise.resolve(move)
+          .then(r => { if (tier) log(`🌬↔ ${o.name}: на ярус к ${e.id} ${wings ? 'на элитрах' : 'пешком'} — ${detail(r).ok || r?.status === 'done' ? 'дошёл' : detail(r).why || r?.status || '?'}`) })
+          .catch(() => {}).finally(() => { if (o.swarmReserved === token) delete o.swarmReserved })
       })
     }
   }
@@ -237,7 +259,10 @@ export function swarmWind(sw: SwarmDriverCtx) {
       sentryAt.set(key, now())
       const maces = bots.filter(o => teamOf(o) === team && alive(o.name) && pos[o.name]?.p && smasher(o))
       const sector = (p: any) => { const a = Math.atan2(p.z - e.position.z, p.x - e.position.x); return ((Math.round(a / (2 * Math.PI / 3)) % 3) + 3) % 3 }
-      const held = new Set(maces.filter(o => { const d = distance(pos[o.name].p, e.position); return d >= 4 && d <= SENTRY_MAX + 2 }).map(o => sector(pos[o.name].p)))
+      const holding = new Map<any, number>(maces.filter(o => { const d = distance(pos[o.name].p, e.position); return d >= 4 && d <= SENTRY_MAX + 2 }).map(o => [o, sector(pos[o.name].p)]))
+      const remaining = new Map<number, number>()
+      for (const k of holding.values()) remaining.set(k, (remaining.get(k) || 0) + 1)
+      const held = new Set(remaining.keys())
       const empty = [0, 1, 2].filter(k => !held.has(k))
       if (held.size >= 3 || !empty.length) continue
       // Караул — не больше 3 на команду (бой 24.10, булава у всех: кольца по 3 на каждого врага — вся команда в карауле,
@@ -252,9 +277,12 @@ export function swarmWind(sw: SwarmDriverCtx) {
         const a = k * 2 * Math.PI / 3
         let spot = { x: e.position.x + SENTRY_R * Math.cos(a), y: e.position.y, z: e.position.z + SENTRY_R * Math.sin(a) }
         if (arena) { const m = Math.max(Math.abs(spot.x - arena.x), Math.abs(spot.z - arena.z)), lim = arena.r - 2; if (m > lim) spot = { x: arena.x + (spot.x - arena.x) * lim / m, y: spot.y, z: arena.z + (spot.z - arena.z) * lim / m } }
-        const o = free.filter(q => !sent.includes(q.name)).sort((x, y) => distance(pos[x.name].p, spot) - distance(pos[y.name].p, spot))[0]
+        // Moving the last holder to an empty sector adds no coverage and interrupts its current approach.
+        const o = free.filter(q => !sent.includes(q.name) && (!holding.has(q) || remaining.get(holding.get(q)!)! > 1)).sort((x, y) => distance(pos[x.name].p, spot) - distance(pos[y.name].p, spot))[0]
         if (!o || distance(spot, e.position) < SENTRY_MIN - 1) continue
         sent.push(o.name)
+        const from = holding.get(o)
+        if (from !== undefined) remaining.set(from, remaining.get(from)! - 1)
         const token = {}; o.swarmReserved = token; o.swarmSentry = token; o.sentryPost = { foe: e.id, at: { ...e.position } }
         void sw.go(o, spot, 2, 2).catch(() => {}).finally(() => { if (o.swarmReserved === token) delete o.swarmReserved; if (o.swarmSentry === token) delete o.swarmSentry })
       }
@@ -300,17 +328,20 @@ export function swarmWind(sw: SwarmDriverCtx) {
       const n = Math.hypot(ux, uz) || 1; ux /= n; uz /= n
       const at = (k: number, side = 0) => ({ x: e.position.x + ux * k - uz * side, y: L.y, z: e.position.z + uz * k + ux * side })
       const S = at(BOOST_D), spots = [at(BOOST_D + 3, -.6), at(BOOST_D + 3, .6), at(BOOST_D + 4.5)]
-      const crew = [lancer, ...archers], tokens = crew.map(o => { const t = {}; o.swarmReserved = t; return t })
+      const round = sw.generation, crew = [lancer, ...archers], tokens = crew.map(o => { const t = {}; o.swarmReserved = t; return t })
+      const current = () => round === sw.generation && crew.every((o, k) => o.swarmReserved === tokens[k] && alive(o.name) && pos[o.name]?.p && !o.webRescue && !protectedAction(o))
       log(`🏹➶ ${team} разгон стрелой на ${e.id}: копьё ${lancer.name} (${distance(L, e.position).toFixed(0)} бл.), лучники ${archers.map(o => o.name).join(', ')}`)
       void (async () => {
         await Promise.all([sw.go(lancer, S, 1, 4), ...archers.map((o, k) => sw.go(o, spots[k], 1, 4))]).catch(() => {})
+        if (!current()) return
         if (!alive(lancer.name) || !pos[lancer.name]?.p || distance(pos[lancer.name].p, S) > 2) { log(`🏹➶ ${lancer.name}: до места не дошёл`); return }
-        const lance = lancer.c.call('boost_lance', { foe: e.id, from: archers.map(o => o.name), maxMs: 4500 })
+        const lance = lancer.c.call('boost_lance', { foe: e.id, from: archers.map(o => o.name), maxMs: 4500 }).catch(err => ({ detail: { why: err.message } }))
         await new Promise(r => setTimeout(r, 900)) // копьё: задержка до 0.75 с (деревянное) и запас
+        if (!current()) { await lance; return }
         const flight = archers.map((o, k) => Math.ceil(distance(pos[o.name]?.p || spots[k], S) / arrowSpeed(BOOST_DRAW[k])))
         const longest = Math.max(...flight)
         const shots = await Promise.all(archers.map((o, k) => o.c.call('boost_shot', { ally: lancer.name, foe: e.id, draw: BOOST_DRAW[k], lag: longest - flight[k], wait: BOOST_DRAW[archers.length - 1] - BOOST_DRAW[k] }).catch(err => ({ detail: { why: err.message } }))))
-        const r = await lance.catch(err => ({ detail: { why: err.message } })), d = r?.detail || r || {}
+        const r = await lance, d = r?.detail || r || {}
         log(`🏹➶ ${lancer.name} → ${e.id}: ${d.hit ? 'удар копьём' : 'без удара' + (d.why ? ' — ' + d.why : '')}, скорость ${d.vmax ?? '?'} бл/т; стрелы: ${shots.map((s: any) => { const x = s?.detail || s || {}; return x.ok ? (x.hit ? 'попал' : 'мимо') : x.why || '?' }).join(', ')}`)
       })().finally(() => { boosting.delete(team); crew.forEach((o, k) => { if (o.swarmReserved === tokens[k]) delete o.swarmReserved }) })
     }
@@ -338,22 +369,29 @@ export function swarmWind(sw: SwarmDriverCtx) {
   function windWing(b, sightings) {
     const team = teamOf(b)
     for (const e of sightings || []) {
-      if (!e.position || !sw.hostile(b, e.id) || e.position.y - arena.y < 8 || !e.airborne) continue
+      if (!e.position || !sw.hostile(b, e.id) || e.position.y - arena.y < 8) continue
+      // Стоит на гребне у края (ник сквозь уступ — тоже) — заход с центра арены наружу; в воздухе — только видимый.
+      const ledge = !e.airborne && (e.visible === true || e.nametag) && edgeRoom(e.position) <= 8
+      if (!ledge && (!e.airborne || e.visible === false)) continue
       const wingers = bots.filter(o => teamOf(o) === team && o.last?.m === 'wing_orbit' && o.last.pending !== false && winging.get(o.name)?.foe === e.id)
-      if (wingers.length >= 3) continue
-      const kit = o => { const m = pos[o.name], inv = m?.inv || {}; return (inv.elytra || m?.armor?.torso === 'elytra') && (inv.firework_rocket || 0) >= 2 && ((inv.wind_charge || 0) >= 2 || m?.offHand === 'wind_charge') }
+      // На гребне — один заход и коротко: кружащие втроём по 14 с забирали всех элитровых у тарана копьём (игра пользователя
+      // 25.10: «кружат много сверху колизея, а атак копьями мало» — 30 облётов, 2 тарана за 3 мин).
+      if (wingers.length >= (ledge ? 1 : 3)) continue
+      const kit = o => { const m = pos[o.name], inv = m?.inv || {}; return (inv.elytra || m?.armor?.torso === 'elytra') && (inv.firework_rocket || 0) >= 5 && ((inv.wind_charge || 0) >= 2 || m?.offHand?.item === 'wind_charge') }
       const o = bots.filter(q => teamOf(q) === team && available(q) && !meleeBusy(q) && !sw.panic(q) && kit(q) && !wingers.includes(q) &&
+        // Ближе 48 бл. и он у меня в глазах (стенд 25.10: со 140 бл. взлетали и тут же «цели не видно», каждый тик).
+        distance(pos[q.name].p, e.position) <= 48 &&
         !(winging.get(q.name)?.foe === e.id && distance(winging.get(q.name).at, e.position) < 6) &&
         // Не взлетел отсюда (крыша, стена) — снова только с другого места (повтор по месту, не по времени).
         !(winging.get(q.name)?.failAt && distance(winging.get(q.name).failAt, pos[q.name].p) < 3))
         .sort((x, y) => distance(pos[x.name].p, e.position) - distance(pos[y.name].p, e.position))[0]
       if (!o) continue
       winging.set(o.name, { foe: e.id, at: { ...e.position } })
-      log(`🪽🌬 ${o.name} → ${e.id}: в воздухе +${Math.round(e.position.y - arena.y)} — облёт на элитрах, заряды на сближении (${distance(pos[o.name].p, e.position).toFixed(0)} бл.)`)
+      log(`🪽🌬 ${o.name} → ${e.id}: ${ledge ? 'на гребне' : 'в воздухе'} +${Math.round(e.position.y - arena.y)} — ${ledge ? 'заход с центра' : 'облёт'} на элитрах, заряды на сближении (${distance(pos[o.name].p, e.position).toFixed(0)} бл.)`)
       // Ход бота полёт не рвёт: резерв до квитанции (guardedTurn пропускает зарезервированного).
       const token = {}; o.swarmReserved = token
       const from = { ...pos[o.name].p }
-      void o.c.call('wing_orbit', { target: e.id, seconds: 12, radius: 8, arena, floorY: arena.y }).then(r => { const d = detail(r); if (!d.ok && /^взлёт/.test(d.why || '')) winging.set(o.name, { ...winging.get(o.name), failAt: from }); log(`🪽🌬 ${o.name}: облёт ${d.ok ? `${Math.round((d.ms || 0) / 100) / 10} с, ближе 16 бл. ${d.nearTicks} т., ближе всего ${d.closest} бл., ${d.why}${d.landed ? ', сел' : ''}` : d.why || r?.status || '?'}`) }).catch(() => {})
+      void o.c.call('wing_orbit', { target: e.id, seconds: ledge ? 6 : 12, radius: 8, arena, floorY: arena.y, ledge }).then(r => { const d = detail(r); if (!d.ok && /^взлёт/.test(d.why || '')) winging.set(o.name, { ...winging.get(o.name), failAt: from }); log(`🪽🌬 ${o.name}: облёт ${d.ok ? `${Math.round((d.ms || 0) / 100) / 10} с, ближе 16 бл. ${d.nearTicks} т., ближе всего ${d.closest} бл., ${d.why}${d.landed ? ', сел' : ''}` : d.why || r?.status || '?'}`) }).catch(() => {})
         .finally(() => { if (o.swarmReserved === token) delete o.swarmReserved })
     }
   }

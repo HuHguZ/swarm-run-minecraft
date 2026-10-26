@@ -8,14 +8,20 @@ import * as pick from '../pick'
 
 // Shared by acquisition and LOS repositioning: packet-only cells stay unknown,
 // including apparently empty head space above a visible support.
-export function observedCollision (bot) {
+export function observedCollision (bot, blockAt = pos => bot.blockAt(pos, false)) {
   const cells = new Map(); let observedAt = -Infinity
   const unknown = { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
-  const sightWorld = { blockAt: pos => { try { return bot.blockAt(pos, false) || unknown } catch { return unknown } } }
   return { physics: bot.physics, game: bot.game, blockAt (pos) {
     if (observedAt !== clock.now()) { observedAt = clock.now(); cells.clear() }
     const cell = pos.floored(); const key = cell.toString()
     if (cells.has(key)) return cells.get(key)
+    const raw = new Map()
+    const read = at => {
+      const key = at.toString()
+      if (!raw.has(key)) raw.set(key, blockAt(at))
+      return raw.get(key)
+    }
+    const sightWorld = { blockAt: pos => { try { return read(pos) || unknown } catch { return unknown } } }
     const eye = pick.eyeOf(bot)
     const points = [[.5, .5, .5]]
     for (const x of [.05, .95]) for (const y of [.05, .95]) for (const z of [.05, .95]) points.push([x, y, z])
@@ -24,7 +30,7 @@ export function observedCollision (bot) {
       const hit = len > 0 ? pick.blockOnRay(sightWorld, eye, delta.scaled(1 / len), len, /glass|_pane$|^barrier$|^iron_bars$/) : null
       return !hit || hit.pos.equals(cell)
     })
-    const block = seen ? bot.blockAt(cell, false) : null
+    const block = seen ? read(cell) : null
     cells.set(key, block); return block
   } }
 }

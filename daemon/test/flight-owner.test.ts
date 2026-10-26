@@ -51,10 +51,15 @@ test('chest swap cannot send use_item after its flight owner is revoked', async 
         await pending
         slots[to] = item; slots[from] = null
       },
-      equip: async () => { await pending },
+      equip: async (selected, destination) => {
+        await pending
+        slots[destination === 'off-hand' ? 45 : 36 + bot.quickBarSlot] = selected
+        slots[selected.slot] = null
+      },
       setQuickBarSlot: i => { bot.quickBarSlot = i },
       activateItem: () => { activated++; slots[6] = item }
     }
+    Object.defineProperty(bot, 'heldItem', { get: () => slots[36 + bot.quickBarSlot] })
     const old = sky.flightControl(bot, { aborted: false })
     const done = sky.swapChest(bot, 'chest', { hand, ctl: old, waitMs: 0 })
     if (revoke) sky.flightControl(bot, { aborted: false })

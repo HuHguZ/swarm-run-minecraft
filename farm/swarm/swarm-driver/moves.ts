@@ -37,7 +37,7 @@ export function swarmMoves (sw: SwarmDriverCtx) {
     const kit = m.inv?.elytra > 0 || m.armor?.torso === 'elytra'
     const blocks = at.climbFrom === undefined || m.p.y >= at.y - 1 || m.inv?.ender_pearl > 0 ? 0 : Math.max(0, at.y - Math.max(m.p.y, at.climbFrom)) + 3
     return { walk: blockCount(m.inv) >= blocks ? d / 5.6 + Math.max(0, at.y - m.p.y) : Infinity,
-      fly: kit && rockets >= 2 && !sw.blocked(b, key, String(rockets)) && sw.lootSafe(b, at) ? 4 + d / 20 + 8 / rockets : Infinity }
+      fly: kit && rockets >= 5 && !sw.blocked(b, key, String(rockets)) && sw.lootSafe(b, at) ? 4 + d / 20 + 8 / rockets : Infinity }
   }
   const go = async (b, at, range = 2, seconds = 4, pathArena = b.swarmTask?.kind === 'loot' ? lootArena(b) : arena, air = false) => {
     lootStep(b, at)
@@ -111,7 +111,9 @@ export function swarmMoves (sw: SwarmDriverCtx) {
   // по-своему, обход — только по ближнему врагу). Все свежие враги доски, а не один.
   const lootThreat = b => {
     const naked = !Object.keys(pos[b.name]?.inv || {}).some(n => WEAPON.test(n)) || !!b.swarmTask?.data?.weak
-    return { r: naked ? 22 : 14, foes: boardOf(b).enemies().filter(e => now() - e.seenAt < (naked ? 10000 : 3000)) }
+    const foes = boardOf(b).enemies().filter(e => now() - e.seenAt < (naked ? 10000 : 3000))
+    // Лучник достаёт дальше: у сундука стоишь мишенью (игра пользователя 25.10: o открывал сундук на гребне, лук в 31 бл. — одна стрела, 20 хп).
+    return { r: foes.some(e => e.threat === 'bow') ? 34 : naked ? 22 : 14, foes }
   }
   return { bounded, lootStep, weakLoot, lootArena, travelCost, go, buildGo, detail, execute, forgetCamp, reactCamp, release, ownProtection, renew, lootThreat }
 }

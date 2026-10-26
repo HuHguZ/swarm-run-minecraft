@@ -133,26 +133,34 @@ function hazardCoverMethods ({ session, gameClock, state }: RpcContext) {
         if (cover) tried.push(cover.at.toString())
       }
       if (p.localOnly) return { ok: false, why: cover ? 'не добежал до укрытия' : 'местного укрытия нет', tried }
-      if (p.arena) return require('../flee').smartFlee(session, ctl, { foes: [foe.id].filter(Boolean), arena: p.arena, timeoutMs: 3000, reason: 'ищу укрытие от видимой угрозы' })
+      // wall — без бегства: местного укрытия нет, а блоки есть — стенка на месте (пользователь 25.10: «укрытия из блоков редко
+      // строят, а это защищает от лучника»; арена прежде всегда уходила в бегство и до стройки не доходила).
+      if (p.arena && !p.wall) return require('../flee').smartFlee(session, ctl, { foes: [foe.id].filter(Boolean), arena: p.arena, timeoutMs: 3000, reason: 'ищу укрытие от видимой угрозы' })
       if (p.blocks === false || !pickFiller(bot)) return { ok: false, why: cover ? 'не добежал до укрытия' : 'укрытия нет, блоков нет', tried }
-      // Стена: клетка к нему (по большей оси), снизу вверх; он выше на 35°+ — третий блок.
-      const here = bot.entity.position; const ff = here.floored()
+      // Столб по самому лучу, затем соседние: по большей оси диагональный выстрел проходил мимо.
+      const here = bot.entity.position
       const dx = foe.position.x - here.x; const dz = foe.position.z - here.z
-      const step = Math.abs(dx) >= Math.abs(dz) ? new V(Math.sign(dx), 0, 0) : new V(0, 0, Math.sign(dz))
+      const length = Math.hypot(dx, dz) || 1
+      const front = here.offset(dx / length * 1.5, 0, dz / length * 1.5).floored()
+      const across = Math.abs(dx) >= Math.abs(dz) ? new V(0, 0, 1) : new V(1, 0, 0)
       const steep = (foe.position.y - here.y) / (Math.hypot(dx, dz) || 1) > 0.7
       let placed = 0
-      for (const h of steep ? [0, 1, 2] : [0, 1]) {
+      for (const side of [0, -1, 1]) for (const h of steep ? [0, 1, 2] : [0, 1]) {
         if (ctl.aborted) break
-        const c = ff.plus(step).offset(0, h, 0)
+        const c = front.plus(across.scaled(side)).offset(0, h, 0)
         const b = bot.blockAt(c)
         if (b && b.boundingBox === 'block') continue
         const r = await placeBlockAt(bot, c, { honest: true, timeoutMs: 1000, ctl }).catch(() => null)
         if (r?.ok && !r.already) placed++
+        if (ctl.aborted) break
+        const latest = observe(), moved = latest && latest.eye.distanceTo(eye()) > .5
+        if (latest) foe = latest
         if (!seen()) return { ok: true, how: `стена ${placed}`, tried }
+        if (moved) return { ok: false, why: `стена ${placed}, стрелок переместился`, tried }
       }
       return { ok: false, why: `стена ${placed}, луч открыт`, tried }
     }, { timeoutMs: 8000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
-    watch_dangers: async (p: any = {}) => { state.dangerWatch = p.on === false ? null : { foes: Array.isArray(p.foes) ? p.foes.map(String) : [] }; session._ndFoes = state.dangerWatch?.foes; return { status: 'done', detail: { on: !!state.dangerWatch } } },
+    watch_dangers: async (p: any = {}) => { state.dangerWatch = p.on === false ? null : { foes: Array.isArray(p.foes) ? p.foes.map(String) : [] }; session._ndFoes = state.dangerWatch?.foes; if (session.bot) session.bot._ndFoes = session._ndFoes; return { status: 'done', detail: { on: !!state.dangerWatch } } },
     // Враждебные мобы рядом (видно глазами: тип, позиция, скорость, что в руке и на теле) — для общего списка врагов в
     // гонке (10.10: «от мобов бегут, а меня не видят; от нескольких целей сразу убегать не умеют»).
     mobs: async (p) => session.immediate(async () => {

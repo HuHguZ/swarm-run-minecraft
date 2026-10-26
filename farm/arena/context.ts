@@ -42,8 +42,8 @@ export interface ArenaContext {
   between: boolean; round: number; stop: boolean; roundT0: number; lastKillAt: number; logAt: number; logBorn?: number
   // выбывшие до конца раунда люди (соло: раунд синих, когда выбыли все)
   humanNames: string[]; humanOut: Set<string>; spawnAt: any
-  // сброс ветром: кто и когда бросил в цель (watch), сколько сбросов кончилось смертью (rounds)
-  windOutAt?: Record<string, { by: string; at: number; kind: string }>; windKills?: number
+  // Время броска в цель (watch), смерти в течение 4 с после него (rounds): близость по времени не доказывает причину.
+  windOutAt?: Record<string, { by: string; at: number; kind: string }>; windRecentDeaths?: number
   stockChests: (round: number, only?: any[] | null) => Promise<void>
   restoreArena: () => Promise<void>
   // ставят части: map — home, place, armsHome; rounds — readDeaths … endRound; humans — kitHuman … hostile;
