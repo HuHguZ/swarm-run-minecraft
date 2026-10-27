@@ -227,7 +227,7 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
       const before = nativeKey(), target = new Vec3((support.box.minX + support.box.maxX) / 2, support.top, (support.box.minZ + support.box.maxZ) / 2)
       const planningBot = Object.assign(Object.create(bot), { entity: { ...bot.entity, attributes: structuredClone(bot.entity.attributes) } })
       const plan = await parkour.planJumpAsync(planningBot, ctl, target, { allowWalk: true, sprint: false, maxFallDamage: 0,
-        arena: boundedArena, tolerance: .08, maxTicks, maxFrames: parkour.ROUTE_FRAMES })
+        arena: boundedArena, tolerance: .12, maxTicks, maxFrames: parkour.ROUTE_FRAMES })
       if (ctl.aborted) throw new Error('прервано')
       if (run.bounds.error) throw run.bounds.error
       if (plan && before === nativeKey() && plan.steps.length * 50 <= deadline - gameClock.now() && !plan.fall && !plan.allowDamage &&

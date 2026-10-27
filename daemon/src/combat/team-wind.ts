@@ -267,10 +267,13 @@ function burstSpread(shot: WindShot): number {
   return spread + .01
 }
 
+/** Порыв заряда ветра (WindCharge 1.21.11: радиус 1.2, частица gust_emitter_small), а не чужой взрыв. */
+export const windGust = (packet: any): boolean => Math.abs(packet?.radius - WIND.reach / 2) <= 1e-5 && packet?.explosionParticle?.type === 'gust_emitter_small'
+
 export function matchingBurst(packet: any, expected: Point, shot?: WindShot): boolean {
   const center = packet?.center || packet
   const impulse = packet?.playerKnockback
-  if (!finite(center) || !finite(impulse) || vector(impulse).norm() <= .01 || Math.abs(packet.radius - WIND.reach / 2) > 1e-5 || packet.explosionParticle?.type !== 'gust_emitter_small') return false
+  if (!finite(center) || !finite(impulse) || vector(impulse).norm() <= .01 || !windGust(packet)) return false
   if (!shot) return vector(center).distanceTo(vector(expected)) <= .08
   const offset = vector(center).minus(vector(expected))
   const planeError = Math.abs(offset.dot(vector(shot.normal)))

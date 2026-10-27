@@ -4,6 +4,9 @@
 // internalModuleStat, цикл событий стоит, ферма lockstep падает «connected client stalled», в обычной игре тело застывает.
 // Здесь имя файла запоминается на пару (родитель, запрос); уже загруженный модуль отдаётся из Module._cache как есть. Не загружен
 // (круговая загрузка) или вынут из кэша (тесты) — обычный require.
+// Голые имена пакетов — так же (27.10, профиль боя 15×15: 78% остановок цикла — internalModuleStat, половина — heightAbove →
+// require('vec3') на каждый вызов). Свой кэш Node (relativeResolveCache) пишется только при первой загрузке модуля из этого
+// родителя; vec3 первым грузит другой файл — и каждый require отсюда снова ищет package.json. Встроенные (node:…, fs) — как есть.
 import Module = require('module')
 // Внутренности Module, которых нет в типах node: кэш загруженных, разрешение имени файла, метка своей обёртки require.
 type ModuleInternals = typeof Module & { _cache: Record<string, any>; _resolveFilename (request: string, parent: any): string }
@@ -12,7 +15,7 @@ function installRequireCache () {
   const original = Module.prototype.require
   const files = new Map()
   const cached = function (this: any, request: string) {
-    if (typeof request === 'string' && (request.startsWith('./') || request.startsWith('../'))) {
+    if (typeof request === 'string' && !request.startsWith('node:') && !Module.isBuiltin(request)) {
       const key = this.filename + '\0' + request
       const file = files.get(key)
       if (file) { const m = (Module as ModuleInternals)._cache[file]; if (m && m.loaded) return m.exports }

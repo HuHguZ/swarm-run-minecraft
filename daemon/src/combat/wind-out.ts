@@ -73,12 +73,13 @@ function alliesNear(bot: any, foe: any, now: number): WindReport[] {
 // Счётчик отказов (ND_WIND_TRACE=1): почему по видимому у края не бросили — для стенда ветра.
 export const windTrace: Record<string, number> = {}
 const trace = (k: string) => { if (process.env.ND_WIND_TRACE === '1') windTrace[k] = (windTrace[k] || 0) + 1 }
-export function windOutDecide(bot: any, own: WindReport, arena: WindArena, lag = 0) {
+export function windOutDecide(bot: any, own: WindReport, arena: WindArena, lag = 0, deadline?: number) {
   const now = worldTick(bot)
   if (now === null) return null
   for (const foe of windOutCandidates(bot, arena).slice(0, 2)) {
+    if (deadline !== undefined && clock.wall.monotonic() > deadline) { trace('late:budget'); return null }
     const allies = alliesNear(bot, foe, now)
-    const plan = planEnemyWind(bot, foe, [own], { arena, startTick: now, maxShots: 1, allies, delays: [lag], reactAfterHit: true, juggle: !foe.onGround })
+    const plan = planEnemyWind(bot, foe, [own], { arena, startTick: now, maxShots: 1, allies, delays: [lag], reactAfterHit: true, juggle: !foe.onGround, deadline })
     trace(!plan ? 'no_plan' : plan.baseline.out ? 'already_out' : plan.shots[0].fireDelay !== lag ? 'late' : 'planned')
     // Сам и так улетает — заряд не тратить (и не толкнуть его обратно на край).
     if (!plan || plan.baseline.out || plan.shots[0].fireDelay !== lag) continue
@@ -170,7 +171,7 @@ export function installWindOut(session: any) {
   const bot = session.bot
   if (!bot || bot._ndWindOut) return
   const stats = session._windOut ||= { tries: 0, fired: 0, log: [] as any[] }
-  let busy = false, tick = 0, spawnGeneration = 0, planEma = 40, lastMiss: { me: any, foe: any } | null = null
+  let busy = false, tick = 0, spawnGeneration = 0, planEma = 40, releaseEma = 40, staleTick: number | null = null, lastMiss: { me: any, foe: any } | null = null
   bot._ndWindOut = true
   bot.on('respawn', () => { spawnGeneration++ })
   const tryTrampoline = (arena: WindArena) => {
@@ -280,14 +281,23 @@ export function installWindOut(session: any) {
     const ex: typeof import('./enemy-wind-execute') = require('./enemy-wind-execute')
     const report = ex.enemyWindReport(session, { flying: true })
     if (!report.ok || !report.ready) return
+    // Кадр, чей план уже опоздал, второй раз не считать: тот же снимок даст тот же поздний бросок (Kimi AUDIT 27.10 — пары по 9–11
+    // повторов). Новый игровой тик — новый кадр.
+    if (staleTick !== null && worldTick(bot) === staleTick) return
     const t0 = clock.wall.monotonic(), nativeClock = bot.ndClock, observedAt = nativeClock?.observationNow?.(), generation = spawnGeneration
     // Упреждение на свой расчёт: бросок уходит через planMs после кадра, по которому считан (стенд 24.10 14:06: 90–230 мс —
-    // мимо, цель уже на земле). Цель — на столько тиков вперёд, сколько обычно длится расчёт (скользящее среднее).
-    const lag = Math.max(0, Math.min(4, Math.round(planEma * (nativeClock?.observationRate?.() ?? 20) / 1000)))
-    const pick = windOutDecide(bot, report.report, arena, lag)
+    // мимо, цель уже на земле). Цель — на столько тиков вперёд, сколько обычно идёт от кадра до выпуска (скользящее среднее):
+    // не только расчёт — выпуск ждёт и остальные обработчики тика (стенд 27.10 cl27b: расчёт 80–88 мс, до выпуска 126–280 мс,
+    // упреждение по одному расчёту давало stale_release у половины бросков). Больше 6 тиков (300 мс) прогноз не тянем.
+    const lag = Math.max(0, Math.min(6, Math.round(Math.max(planEma, releaseEma) * (nativeClock?.observationRate?.() ?? 20) / 1000)))
+    // Расчёт не дольше окна свежести выпуска (та же граница, что у stale_release ниже, в стеночных мс при наблюдённой скорости
+    // тиков): досчитанный позже план всё равно не бросается.
+    const deadline = t0 + ((lag + 1) * 50 + 25) * 20 / (nativeClock?.observationRate?.() || 20)
+    const frame = worldTick(bot)
+    const pick = windOutDecide(bot, report.report, arena, lag, deadline)
     const planMs = Math.round(clock.wall.monotonic() - t0)
     planEma = planEma * .8 + planMs * .2
-    if (!pick) return
+    if (!pick) { if (clock.wall.monotonic() > deadline) staleTick = frame; return }
     // Тот же бросок с того же места по стоящему там же уже не попал — не повторять (стенд 25.10: 15 «out?» снизу по стоящему на
     // гребне, ни взрыва у цели, ни сдвига). Сдвинулся я или он — снова можно.
     const me = bot.entity.position
@@ -310,16 +320,19 @@ export function installWindOut(session: any) {
       const tick = worldTick(bot)
       if (generation !== spawnGeneration || bot.ndClock !== nativeClock || tick === null || tick < pick.plan.gameTick) { entry.why = 'stale_release'; return done() }
       const elapsed = observedAt === undefined ? clock.wall.monotonic() - t0 : nativeClock.observationNow() - observedAt
-      if (Math.max(elapsed, (tick - pick.plan.gameTick) * 50) > (lag + 1) * 50 + 25) { entry.why = 'stale_release'; return done() }
+      releaseEma = releaseEma * .8 + elapsed * .2
+      // Для журнала: сколько ушло от кадра до выпуска (расчёт + остальные обработчики тика) против окна свежести.
+      entry.dbg += `, до выпуска ${Math.round(elapsed)} мс/${tick - pick.plan.gameTick} т. (окно ${(lag + 1) * 50 + 25}, lag ${lag})`
+      if (Math.max(elapsed, (tick - pick.plan.gameTick) * 50) > (lag + 1) * 50 + 25) { entry.why = 'stale_release'; staleTick = pick.plan.gameTick; return done() }
       entry.fired = release(bot, pick.shot)
       if (!entry.fired) { entry.why = 'charge_not_in_hotbar'; return done() }
       stats.fired++
       // Следующий бросок — с перезарядкой заряда (windReady), а не после замера: замер ждал полёт + 11 т., и за 1–1.5 с в воздухе
       // бот успевал один заряд (пользователь 25.10: «подкидываю себя на краю — кинут один ветер, и всё»; стенд: 1 сброс из 4 с 7 бл.).
       busy = false
-      // Взрыв у цели — по пакету explosion в окне полёта (порыв gust_emitter_small, радиус 1.2).
+      // Взрыв у цели — по пакету explosion в окне полёта (порыв gust_emitter_small, радиус 1.2) — для журнала.
       const spread = .08 + pick.shot.ticks * .05
-      const onBoom = (pk: any) => { if (pk?.center && Math.hypot(pk.center.x - pick.shot.burst.x, pk.center.y - pick.shot.burst.y, pk.center.z - pick.shot.burst.z) <= 1.5 + spread) entry.burst = true }
+      const onBoom = (pk: any) => { if (pk?.center && tw().windGust(pk) && Math.hypot(pk.center.x - pick.shot.burst.x, pk.center.y - pick.shot.burst.y, pk.center.z - pick.shot.burst.z) <= 1.5 + spread) entry.burst = true }
       bot._client.on('explosion', onBoom)
       let left = pick.shot.ticks + 3
       const wait = () => {
@@ -328,7 +341,9 @@ export function installWindOut(session: any) {
         bot.removeListener('physicsTick', wait); bot._client.removeListener('explosion', onBoom)
         const p = bot.players?.[pick.foe.username]?.entity?.position
         if (p) { entry.edgeAfter = +edgeRoom(arena, p).toFixed(1); entry.yAfter = +p.y.toFixed(1) }
-        lastMiss = !entry.burst && p && p.distanceTo(foeAt) < .3 ? { me: meAt, foe: foeAt } : null
+        // Промах — по смещению цели, а не по факту взрыва: порыв рядом (свой или чужой) без сдвига его не сносит (Kimi AUDIT 27.10:
+        // «взрыв виден», до края 7.2 → 7.2 и повтор с того же места). Порог — тот же, что у проверки повтора выше.
+        lastMiss = p && p.distanceTo(foeAt) < .5 ? { me: meAt, foe: foeAt } : null
         logged = true; stats.log.push(entry); if (stats.log.length > 20) stats.log.shift()
       }
       bot.on('physicsTick', wait)

@@ -175,6 +175,28 @@ test('swarm PvP: wounded recover, healer and cover coordinate, unseen HP cannot 
   assert.equal(JSON.stringify([...planPvp(f.board, members)]), before)
 })
 
+test('swarm PvP: a pinned ally is never its own cover; another free member guards it (Kimi AUDIT 1)', () => {
+  // Прижатый (хп < 80 %, враг в 4 бл.) — под прикрытием другого; один прижатый — бой без метки cover на себя.
+  const rush = { aggressive: true, doctrine: 'buffalo' as const }
+  const duo = [member('pinned', { health: 14 }), member('free', { position: p(-3) })]
+  const f = scene(duo)
+  f.see('pinned', 'enemy', p(2))
+  const plan = planPvp(f.board, duo, rush)
+  assert.ok(![...plan.values()].some(t => t.assignedTo === t.data?.cover), 'nobody covers itself')
+  assert.equal(plan.get('free')!.data!.cover, 'pinned')
+  const solo = [member('pinned', { health: 14 })]
+  const g = scene(solo)
+  g.see('pinned', 'enemy', p(2))
+  const alone = planPvp(g.board, solo, rush)
+  assert.notEqual(alone.get('pinned')?.data?.cover, 'pinned')
+  // Двое прижатых и один свободный: никто не прикрывает себя.
+  const trio = [member('p1', { health: 14 }), member('p2', { health: 15, position: p(1) }), member('free', { position: p(-3) })]
+  const h = scene(trio)
+  h.see('p1', 'enemy', p(2))
+  const three = planPvp(h.board, trio, rush)
+  assert.ok(![...three.values()].some(t => t.assignedTo === t.data?.cover), 'nobody covers itself among several wounded')
+})
+
 test('swarm PvP: shared quorum stages mass attack and defensive doctrines have real geometry', () => {
   const members = [member('a'), member('b'), member('c', { role: 'healer', canHeal: true }), member('d', { role: 'flank' }), member('e', { role: 'ranged' }), member('f')]
   const f = scene(members)

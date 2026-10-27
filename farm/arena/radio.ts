@@ -22,7 +22,7 @@ export function installRadio (ctx: ArenaContext) {
   // Чат бойцов — сообщением сервера (tellraw), не чатом бота: чат игрока рвёт задачи всех демонов (interruptOn 'chat' —
   // это для человека), и рация отряда срывала сундуки: 220 «interrupted» за минуту (гонка 10.10).
   // В чат игры — только с ARMS_CHAT=1 (10.10: «бесит спам в чате»); журнал гонки пишет всё равно.
-  ctx.tell = (b, text) => process.env.ARMS_CHAT !== '1' ? null : rcon(i, `tellraw @a ${JSON.stringify({ text: `<${b.name}> ${text}`, color: b.team === 'red' ? 'red' : b.team === 'blue' ? 'aqua' : 'white' })}`).catch(() => {})
+  ctx.tell = (b, text) => process.env.ARMS_CHAT !== '1' ? null : rcon(i, `tellraw @a ${JSON.stringify({ text: `[рой] ${b.name} — ${text}`, color: b.team === 'red' ? 'red' : b.team === 'blue' ? 'aqua' : 'white' })}`).catch(() => {})
   // ---------------------------------------------------------------- рация отряда
   // 10.10: «команды друг другу как в CS — прикрой, за мной, помогите; группироваться сразу и атаковать толпой».
   // Отряды по 4 (порядок в команде), лидер — сильнейший живой (держится, пока жив). Вызовы:

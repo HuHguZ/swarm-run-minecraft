@@ -5,6 +5,8 @@ import { SwarmBoard } from '../daemon/src/swarm/board'
 import { perchFor } from '../daemon/src/swarm/plan-judges'
 import { swarmTurnTasks } from './swarm/swarm-driver/turn-tasks'
 import { swarmRetry } from './swarm/swarm-driver/retry'
+import { createDriverState } from './swarm/swarm-driver/state'
+import { swarmLifecycle } from './swarm/swarm-driver/lifecycle'
 
 test('a rejected perch stays unavailable to that bot after moving, then becomes eligible again', async () => {
   for (const why of ['гребень выше 48 бл. — не перелететь', 'нет элитр или ракет']) {
@@ -61,4 +63,78 @@ test('perch fallback consumes precise flight state and remembers an actual nearb
     if (scenario === 'success') assert.ok(calls.some(c => c.method === 'swarm_hold'), 'a nearby successful pad is occupied instead of launching again')
     else assert.equal(calls.filter(c => c.method === 'flee').length, 2, 'a missed pad keeps the ordinary escape available')
   }
+})
+
+test('retry memory retains A after B and keeps each signature tied to its own launch position', () => {
+  const a = { name: 'A' }, b = { name: 'B' }, pos = { A: { p: { x: 0, y: 64, z: 0 } }, B: { p: { x: 0, y: 64, z: 0 } } }
+  const retry = swarmRetry({ pos } as any)
+  retry.failed(a, 'fly:A', 'target-A')
+  assert.equal(retry.blocked(a, 'fly:A', 'target-A'), true)
+  assert.equal(retry.blocked(a, 'fly:A', 'target-B'), false, 'a new destination remains available')
+  pos.A.p.x = 1.5
+  retry.failed(a, 'fly:A', 'target-B')
+  assert.equal(retry.blocked(a, 'fly:A', 'target-A'), true, 'choosing B must not forget A')
+  assert.equal(retry.blocked(a, 'fly:A', 'target-B'), true)
+  assert.equal(retry.blocked(b, 'fly:B', 'target-A'), false, 'another actor has no failure')
+  pos.A.p.x = 2.01
+  assert.equal(retry.blocked(a, 'fly:A', 'target-A'), false, 'moving beyond A origin reopens A')
+  assert.equal(retry.blocked(a, 'fly:A', 'target-B'), true, 'B retains its different physical origin')
+  pos.A.p.x = 3.51
+  assert.equal(retry.blocked(a, 'fly:A', 'target-B'), false)
+  assert.equal(retry.retries.size, 0, 'movement prunes obsolete origins instead of accumulating them')
+})
+
+test('A-B-A perch selection cannot forget unchanged terrain when the existing planner fact expires', async () => {
+  let now = 1000
+  const a = { x: 30, y: 80, z: 0 }, b = { x: 0, y: 80, z: 30 }, calls: any[] = []
+  const member: any = { id: 'A', team: 'blue', position: { x: 0, y: 64, z: 0 }, health: 20, strength: 1, role: 'fighter', inventory: { elytra: 1, firework_rocket: 12 } }
+  const m: any = { p: { ...member.position }, inv: { ...member.inventory } }, board = new SwarmBoard('blue', () => now)
+  board.setMembers([member])
+  const bot = { name: 'A', c: { async call(method, params) {
+    calls.push({ method, params })
+    return { status: 'done', detail: { ok: false, why: 'landing_missed', at: { ...m.p } } }
+  } } }
+  const sw: any = { now: () => now, alive: () => true, log() {}, pos: { A: m }, arena: {}, generation: 0,
+    cooldown: new Map(), detail: r => r.detail, rangedAdvantage: () => false }
+  Object.assign(sw, swarmRetry(sw))
+  const actions = swarmTurnTasks(sw), run = position => actions.turnFlee({ b: bot, board, task: { position, data: { perch: true, target: 'Foe' } },
+    round: 0, m, enemies: [], context: { members: [member] } } as any)
+  await run(a)
+  await run(b)
+  assert.equal(calls.filter(c => c.method === 'fly_to').length, 2)
+  assert.equal(board.facts().length, 2)
+  now += 15001
+  assert.equal(board.facts().length, 0, 'the existing fifteen-second planning memory really expired')
+  await run(a)
+  assert.equal(calls.filter(c => c.method === 'fly_to').length, 2, 'expiry alone does not change the failed physical request')
+  m.p.x += 2.01
+  await run(a)
+  assert.equal(calls.filter(c => c.method === 'fly_to').length, 3, 'movement still gives the same destination another chance')
+})
+
+test('cleared and the real round reset remove every signature without changing other retry keys', () => {
+  const at = { x: 0, y: 64, z: 0 }, bot = { name: 'A', c: { async call() { return {} } } }
+  const sw: any = createDriverState({ bots: [bot], pos: { A: { p: at, hp: 20, inv: {} } }, alive: () => true,
+    arena: { x: 0, y: 64, z: 0, r: 80 }, log() {}, home: () => at })
+  Object.assign(sw, swarmRetry(sw))
+  sw.failed(bot, 'fly:A', 'target-A'); sw.failed(bot, 'fly:A', 'target-B'); sw.failed(bot, 'pearl:A', 'target-A')
+  sw.cleared('fly:A')
+  assert.equal(sw.blocked(bot, 'fly:A', 'target-A'), false)
+  assert.equal(sw.blocked(bot, 'fly:A', 'target-B'), false)
+  assert.equal(sw.blocked(bot, 'pearl:A', 'target-A'), true)
+  sw.failed(bot, 'fly:A', 'target-A'); sw.failed(bot, 'fly:A', 'target-B')
+  swarmLifecycle(sw).reset()
+  assert.equal(sw.retries.size, 0)
+  assert.equal(sw.blocked(bot, 'fly:A', 'target-A'), false)
+  assert.equal(sw.blocked(bot, 'fly:A', 'target-B'), false)
+})
+
+test('a temporary missing position is not evidence that the actor moved away from a failed attempt', () => {
+  const bot = { name: 'A' }, position = { p: { x: 0, y: 64, z: 0 } }, pos: any = { A: position }
+  const retry = swarmRetry({ pos } as any)
+  retry.failed(bot, 'fly:A', 'target-A')
+  delete pos.A
+  assert.equal(retry.blocked(bot, 'fly:A', 'target-A'), false, 'unknown pose cannot authorize a physical comparison')
+  pos.A = position
+  assert.equal(retry.blocked(bot, 'fly:A', 'target-A'), true, 'the unchanged observed origin must retain its failure')
 })

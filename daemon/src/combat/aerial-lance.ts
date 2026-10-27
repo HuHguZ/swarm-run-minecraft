@@ -326,6 +326,13 @@ interface LanceCtx {
   using: boolean; useAt: number; hitAt: number; onHurt: (pk: any) => void; stopUse: () => void; clip: LanceClip
 }
 
+function syncLanceUse (ln: LanceCtx) {
+  if (!ln.bot._ndUse) return
+  const use = ln.bot._ndUse.cur
+  ln.using = !!use && use.hand === 0 && use.name === ln.name
+  ln.useAt = ln.using ? use.since : 0
+}
+
 function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats, used, allow, maxMs, passes, arena, telemetryHp }: any): LanceCtx {
   const W = sky.worldOf(bot)
   const S = sky.install(bot)
@@ -409,10 +416,11 @@ async function lanceRunUp (ln: LanceCtx) {
     noRocket: () => sky.rocketCount(bot) <= 1,
     onTick: () => {
       if (allow) allow()
+      syncLanceUse(ln)
       // Показ 09.10: заход ~10 т, задержка железного копья 13 т — пролёт в 1.3 бл. над ним «копьё 11 т», мимо.
       // Копьё — в конце разбега (≥ 10 бл. от него, ~5 т до разворота): к касанию готово, окно урона 11 с.
       const me = bot.entity.position; const f = foe()
-      if (!ln.using && bot.heldItem?.name === name && Math.hypot(me.x - f.x, me.z - f.z) >= 10) {
+      if (!ln.using && bot.heldItem?.name === name && Math.hypot(me.x - f.x, me.z - f.z) >= 10 && spear.teamSafe(bot)) {
         bot.activateItem(); ln.using = true; ln.useAt = clock.now(); used('элитры: копьё к тарану (в конце разбега)')
       }
     },
@@ -458,6 +466,7 @@ async function lanceApproach (ln: LanceCtx) {
         const b = bot.entity
         if (b.onGround) return fin('сел')
         if (!b.elytraFlying && clock.now() - S.startedAt > 400) return fin('полёт кончился')
+        syncLanceUse(ln)
         if (allow) allow()
         if (clock.now() - tR > 4500) return fin('долго')
         const f = foe()
@@ -541,7 +550,7 @@ async function lanceApproach (ln: LanceCtx) {
         const sp1 = Math.hypot(b.velocity.x, b.velocity.y, b.velocity.z)
         const eta = (dist - 3) / Math.max(0.3, sp1) * 50
         if (!ln.using && eta < delayMs + 4000) {
-          if (bot.heldItem?.name === name) { bot.activateItem(); ln.using = true; ln.useAt = clock.now(); used('элитры: копьё к тарану') }
+          if (bot.heldItem?.name === name && spear.teamSafe(bot)) { bot.activateItem(); ln.using = true; ln.useAt = clock.now(); used('элитры: копьё к тарану') }
         }
         // Пол близко на пике — выйти, иначе удар о землю.
         const fl = W.floorBelow(b.position.x, b.position.y, b.position.z, 6)

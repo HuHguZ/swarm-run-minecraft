@@ -4,6 +4,7 @@ import { assessSwarmFight } from '../../../daemon/src/swarm'
 import { ascentActive } from './ascent'
 import { rayBox } from '../../../daemon/src/pick'
 import { earlyFightMove } from './turn-work'
+import { currentTurn } from './lifecycle'
 import type { SwarmDriverCtx, TurnCtx } from './common'
 
 export function swarmTurn (sw: SwarmDriverCtx) {
@@ -72,6 +73,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     return exposed || facing && (risk.lethal || risk.burst || !healed && after >= exit.price / 1.25) ? running : task
   }
   function stopForTask(b, running, task, before, after) {
+    if (b.swarmTurnOwner) b.swarmTurnOwner.cancelled = true
     // Смена цели при той же фазе — видна в журнале (15×15 26.10: «обычный бой → обычный бой» 108 раз, причина не видна).
     if (running.data?.target !== task.data?.target && before === after) after = `${after}|цель ${running.data?.target ?? '—'}→${task.data?.target ?? '—'}`
     b.swarmTask = task; b.swarmTaskAt = now()
@@ -186,7 +188,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     if (b.boxedCamp) {
       const r = await execute(b, 'swarm_hold', { camp: true, checkOnly: true, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), arena })
       // Поздний ответ после сброса раунда не оживляет старую засаду (Codex 15.10).
-      if (round !== sw.generation || !alive(b.name)) return
+      if (!currentTurn(sw, b, round)) return
       if (await reactCamp(b, r)) return
     }
     // Кемпер в своей коробке получил другое дело — сперва выйти (пролом в сторону дела), иначе лез по кругу из запертой клетки.
@@ -194,8 +196,8 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       const was = b.boxedCamp
       b.campReacting = true
       let r: any
-      try { r = await execute(b, 'box_out', { toward: task.position || null, timeoutSeconds: 24, _climb: true, arena }) } finally { delete b.campReacting }
-      if (round !== sw.generation || !alive(b.name)) return
+      try { r = await execute(b, 'box_out', { toward: task.position || null, timeoutSeconds: 24, _climb: true, arena }) } finally { if (round === sw.generation) delete b.campReacting }
+      if (!currentTurn(sw, b, round)) return
       // Тело помнит коробку, пока не вышел: забыть только по выходу (иначе драйвер и тело расходились — Codex 15.10).
       // Пять неудач подряд — забыть (иначе вечный «выхожу — не вышел»; тело само отпустит коробку со смертью или новым раундом).
       if (r.left || r.why === 'не заперт' || (b.boxOutTries = (b.boxOutTries || 0) + 1) >= 5) forgetCamp(b)
@@ -206,8 +208,10 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     const boom = board.facts().find(f => f.id.startsWith('tnt:') && f.position && distance(f.position, m.p) < 6)
     if (boom) { const d = Math.hypot(m.p.x - boom.position.x, m.p.z - boom.position.z) || 1; await go(b, { x: m.p.x + (m.p.x - boom.position.x) / d * 7, y: m.p.y, z: m.p.z + (m.p.z - boom.position.z) / d * 7 }, 1.5, 3); return }
     if (!/^(flee|recover)$/.test(task.kind) && !task.data?.commanded && !task.data?.finishing && chestAtHand(b) && await loot(b, board, true)) return
+    if (!currentTurn(sw, b, round)) return
     const onslaught = sw.onslaught(b)
     if (onslaught && task.kind !== 'flee' && !task.data?.commanded && !task.data?.dig && !task.data?.ladder && await grab(b, enemies)) return
+    if (!currentTurn(sw, b, round)) return
     if (task.kind === 'flee') {
       await turnFlee(tc)
       return
@@ -227,6 +231,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // С этого места уже пробовал (убрал или нечем) — снова только с другого места (повтор по причине, retry.ts), а не через 4 с.
     if (m.water && !contact && !sw.blocked(b, `water:${b.name}`)) {
       const r = detail(await b.c.call('clear_water', {}).catch(e => ({ why: e.message })))
+      if (!currentTurn(sw, b, round)) return
       sw.failed(b, `water:${b.name}`)
       if (r.how || r.why) log(`💧 ${b.name}: ${r.how || r.why}`)
       if (r.ok) return
@@ -237,6 +242,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     }
     if (task.kind === 'heal') {
       if (distance(m.p, task.position) > 4.5) await go(b, task.position, 3)
+      if (!currentTurn(sw, b, round)) return
       await b.c.call('assist', { mode: 'heal', ally: task.data.ally })
       return
     }
@@ -249,6 +255,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // дороже боя/лута/охоты), копает, если не в схватке и задача — не бой и не приём строя. false — обычный ход дальше.
     // Боец тоже может копать тайник, когда враг дальше 16 бл. — цену против боя считает cacheJobs, отказ — сам cacheTurn.
     if (!contact && !exposed && !['flee', 'recover', 'heal'].includes(task.kind) && !task.data?.commanded && !task.data?.finishing && !task.data?.fountain && !task.data?.ambush && !task.data?.hold && task.data?.line === undefined && !task.data?.bait && !task.data?.cordon && !task.data?.buildKind && !task.data?.dig && !task.data?.ladder && await sw.cacheTurn(b, board)) return
+    if (!currentTurn(sw, b, round)) return
     // Манёвр приёма (линия, фонтан, засада, кольцо, приманка, оцепление, стройка) важнее ролевых привычек: обмен, сундуки,
     // поиск позиции, маяки и укрытия его не перебивают (разбор 13.10: строитель кокона уходил класть маяк, часовой без лука
     // по 10 с искал позицию для стрельбы).
@@ -260,6 +267,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     const engage = () => task.data?.digAvoid?.length ? turnFight({ ...tc, foe: nearest, task: { ...task, kind: 'fight', data: { ...task.data, target: nearest.id, committed: true } } }) :
       b.c.call('fight', { target: nearest.id, targets: enemies.map(e => e.id), allowPlayer: true, allowRanged: true, timeoutSeconds: 3, retreatAtHealth: 3, arena })
     if (!maneuver && !contact && !exposed && await transfer(b, context)) return
+    if (!currentTurn(sw, b, round)) return
     if (task.data?.buildKind) {
       await turnBuildSite(tc)
       return
@@ -268,6 +276,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     if (task.data?.gather && !contact) {
       if (distance(m.p, task.position) > 24) { await go(b, task.position, 8, 8); return }
       const r = detail(await b.c.call('mine', { block: task.data.gather, count: task.data.count || 32, radius: 24, timeoutSeconds: 20 }).catch(e => ({ why: e.message })))
+      if (!currentTurn(sw, b, round)) return
       log(`🏖 ${b.name}: добываю ${task.data.gather} команде на подъём — ${r.dug ?? 0} шт.${r.why ? ` (${String(r.why).slice(0, 60)})` : ''}`)
       return
     }
@@ -290,21 +299,29 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // раздадут передачи (пользователь 14.10: «сильные могут сразу много лута брать и передавать своим»).
     const carrier = onslaught && armed && gap > 16 && context.members.some(a => a.id !== b.name && !Object.keys(a.inventory || {}).some(n => WEAPON.test(n)))
     if (!maneuver && !contact && (task.kind === 'loot' || !armed || carrier) && await loot(b, board)) return
+    if (!currentTurn(sw, b, round)) return
     const bow = !!(m.inv?.bow || m.inv?.crossbow) && !!(m.attackArrows ?? (m.inv?.arrow || 0) + (m.inv?.spectral_arrow || 0))
     // Натиск: строителю не до вышек и маяков — бой (14.10: «бегают вокруг меня»).
     if (!maneuver && !contact && (member.role === 'ranged' && bow || member.role === 'miner-builder' && !onslaught || task.data?.sentry && bow) && await positionStep(b, context, member.role === 'miner-builder' ? 'build' : 'ranged')) return
+    if (!currentTurn(sw, b, round)) return
     if (!maneuver && !contact && (task.data?.sentry || b.swarmPosition?.purpose === 'recover') && b.swarmPosition && distance(m.p, b.swarmPosition.at) < 1.5) { if (exposed && armed) { await engage(); return } await b.c.call('swarm_hold', { sneak: b.swarmPosition?.cover > .5, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 3 }); return }
     if (!maneuver && member.role === 'miner-builder' && !onslaught && !contact && !sw.blocked(b, `work:${b.name}`, String(blockCount(m.inv)))) {
       if (nearest && nearest.position.y > m.p.y + 2 && await mineStep(b, context, nearest)) return
+      if (!currentTurn(sw, b, round)) return
       if (b.swarmPosition?.purpose === 'build' && b.swarmPosition.highGround >= 3 && distance(m.p, b.swarmPosition.at) < 2 && await buildStep(b, context, { kind: 'outpost', origin: b.swarmPosition.at })) return
+      if (!currentTurn(sw, b, round)) return
       // Маяк «враг был здесь» — один на клетку, а не на дробную позицию (иначе новый маяк почти каждый ход).
       const trail = nearest && 'trail:' + cellKey({ x: Math.floor(nearest.position.x), y: Math.floor(nearest.position.y), z: Math.floor(nearest.position.z) })
       if (nearest && !board.facts().some(f => f.id === trail) && (m.inv.cobblestone || 0) > 18) {
         const origin = { x: Math.floor(m.p.x) + 1, y: Math.floor(m.p.y), z: Math.floor(m.p.z) }
-        if (await buildStep(b, context, { kind: 'beacon', origin })) { board.recordFact(b.name, now(), { id: trail, kind: 'mark', position: nearest.position }, 30000); return }
+        const built = await buildStep(b, context, { kind: 'beacon', origin })
+        if (!currentTurn(sw, b, round)) return
+        if (built) { board.recordFact(b.name, now(), { id: trail, kind: 'mark', position: nearest.position }, 30000); return }
       }
       if (!task.data.cover && await buildStep(b, context)) return
+      if (!currentTurn(sw, b, round)) return
       if (!nearest && await mineStep(b, context, nearest)) return
+      if (!currentTurn(sw, b, round)) return
     }
     const foe = enemies.find(e => e.id === task.data?.target)
     tc.foe = foe
@@ -321,12 +338,14 @@ export function swarmTurn (sw: SwarmDriverCtx) {
         sw.positionQueries++
         try { if (await sw.pairedWind(b, context, foe.position, { enemy: foe.id, incomingDps }).catch(() => false)) return }
         finally { sw.positionQueries-- }
+        if (!currentTurn(sw, b, round)) return
       }
       await turnFight(tc)
       return
     }
     // Обход мест за лутом — и в командной гонке (21.10): лутающему без известных сундуков незачем бродить наугад.
     if (task.kind === 'loot' && await tour(b, board)) return
+    if (!currentTurn(sw, b, round)) return
     // Лут, а брать нечего (сундуки у врага, обход занят) и враг виден в 30 бл. — отойти от него, а не «искать» (поиск вёл прямо
     // к нему: поле s10 — 24 → 13 бл. за 3 с, и снова бегство; «лут ↔ бегство» по кругу).
     if (task.kind === 'loot') {

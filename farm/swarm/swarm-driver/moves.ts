@@ -1,5 +1,6 @@
 // Рой: ход тела — к точке в арене, лут по пути, исполнение команды, засада кемпера, отпуск тела.
 import { WEAPON, distance, cellKey, blockCount } from './common'
+import { currentTurn } from './lifecycle'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmMoves (sw: SwarmDriverCtx) {
@@ -33,7 +34,7 @@ export function swarmMoves (sw: SwarmDriverCtx) {
   const travelCost = (b, at) => {
     const m = pos[b.name], rockets = m?.inv?.firework_rocket || 0
     if (!m?.p) return { walk: Infinity, fly: Infinity }
-    const d = distance(m.p, at), key = 'lootFly:' + b.name + ':' + cellKey(at)
+    const d = distance(m.p, at), key = 'lootFly:' + b.name + ':' + cellKey(bounded(at))
     const kit = m.inv?.elytra > 0 || m.armor?.torso === 'elytra'
     const blocks = at.climbFrom === undefined || m.p.y >= at.y - 1 || m.inv?.ender_pearl > 0 ? 0 : Math.max(0, at.y - Math.max(m.p.y, at.climbFrom)) + 3
     return { walk: blockCount(m.inv) >= blocks ? d / 5.6 + Math.max(0, at.y - m.p.y) : Infinity,
@@ -45,15 +46,15 @@ export function swarmMoves (sw: SwarmDriverCtx) {
     // Полёт не обходит зону угрозы A*: если прямой путь плох, остаётся обычный обход по земле.
     if (air && cost.fly < cost.walk && sw.lootSafe(b, at)) {
       const reply = await b.c.call('fly_to', { at: bounded(at), timeoutSeconds: 15, arena: pathArena }).catch(e => ({ detail: { ok: false, why: e.message } }))
-      if (round !== sw.generation || !alive(b.name)) return { status: 'interrupted', detail: { interrupted: true } }
+      if (!currentTurn(sw, b, round)) return { status: 'interrupted', detail: { interrupted: true } }
       const state = (await b.c.call('status').catch(() => null))?.state
-      if (round !== sw.generation || !alive(b.name)) return { status: 'interrupted', detail: { interrupted: true } }
+      if (!currentTurn(sw, b, round)) return { status: 'interrupted', detail: { interrupted: true } }
       if (state?.pos) pos[b.name].p = state.pos
       if (state?.inventory) pos[b.name].inv = state.inventory
       const r = detail(reply)
       log(`🪽 ${b.name}: за лутом/к своему ${cellKey(at)} — ${r.ok ? 'сел' : r.why || reply.status || '?'}`)
       if (reply.status === 'interrupted' || state?.gliding) return { status: 'interrupted', detail: { ...r, interrupted: true } }
-      if (!r.ok) sw.failed(b, 'lootFly:' + b.name + ':' + cellKey(at), String(pos[b.name]?.inv?.firework_rocket || 0))
+      if (!r.ok) sw.failed(b, 'lootFly:' + b.name + ':' + cellKey(bounded(at)), String(pos[b.name]?.inv?.firework_rocket || 0))
       // fly_to садится рядом; под навесом нужен ещё короткий пеший подход, а не ложное «дошёл».
       if (r.ok && state?.pos && distance(state.pos, at) <= range) return { status: 'done', detail: { arrived: state.pos } }
     }

@@ -80,7 +80,9 @@ export function coverHurt(S: PvpPlan): void {
   const pinned = S.doctrine === 'line' ? [] : team.filter(m => !hurt.includes(m) && ratio(m) < .8 && enemies.some(e => !untouchable.has(e.id) && distance(e.position, m.position) <= 4))
   for (const ally of [...hurt, ...pinned]) {
     const foe = enemies.filter(e => !untouchable.has(e.id) && (aimingAt({ name: e.id, p: e.position, v: e.velocity }, { name: ally.id, p: ally.position }) || distance(e.position, ally.position) < 12)).sort((a, b) => distance(a.position, ally.position) - distance(b.position, ally.position))[0]
-    const guard = foe && team.filter(m => !plan.has(m.id) && !(aggressive && weak(m))).sort((a, b) => (b.strength / meanStrength) * 6 - distance(b.position, ally.position) - ((a.strength / meanStrength) * 6 - distance(a.position, ally.position)))[0]
+    // Защитник — другой: сам себе прикрытием он не бывает (Kimi AUDIT 27.10: «31v → 31i для 31v #cover»); свой бой
+    // без защитника решает общая оценка, без метки cover.
+    const guard = foe && team.filter(m => m.id !== ally.id && !plan.has(m.id) && !(aggressive && weak(m))).sort((a, b) => (b.strength / meanStrength) * 6 - distance(b.position, ally.position) - ((a.strength / meanStrength) * 6 - distance(a.position, ally.position)))[0]
     if (guard && foe) {
       const search = board.now() - foe.seenAt > 500
       put(guard, search ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, cover: ally.id, search }, search ? foe.position : spots.get(guard.id))

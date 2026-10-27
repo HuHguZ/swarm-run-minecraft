@@ -35,10 +35,15 @@ function dangerContext (ctx: ArenaContext) {
     if (key === 'wind' || key === 'fly') for (const dy of [3, 4, 5, 6]) { const at = { x: Math.floor(from.x), y: Math.floor(from.y) + dy, z: Math.floor(from.z) }; cells.set(cell(at), at) }
     return [...cells.values()]
   }
-  const inspect = (b, cells) => Promise.all(cells.map(at => b.c.call('swarm_pose', { at, inspectOnly: true }).then(r => {
-    const block = (r?.detail || r)?.existing
-    return block ? `${block.name}:${block.solid}` : null
-  }).catch(() => null)))
+  const inspect = async (b, cells) => {
+    const batch = await b.c.call('swarm_pose', { cells, inspectOnly: true }).catch(() => null)
+    if (!batch || batch.status && batch.status !== 'done') return cells.map(() => null)
+    const rows = (batch?.detail || batch)?.cells
+    const value = row => row?.existing ? `${row.existing.name}:${row.existing.solid}` : null
+    if (Array.isArray(rows)) return cells.map((at, k) => ['x', 'y', 'z'].every(axis => rows[k]?.at?.[axis] === at[axis]) ? value(rows[k]) : null)
+    // Older bodies still expose one observed block per request; an absent value remains unknown, never air.
+    return Promise.all(cells.map(at => b.c.call('swarm_pose', { at, inspectOnly: true }).then(r => value(r?.detail || r)).catch(() => null)))
+  }
   const retry = async (b, key, from, to) => {
     const old = failures.get(b)?.get(key)
     if (!old) return true
@@ -48,7 +53,7 @@ function dangerContext (ctx: ArenaContext) {
     if (old.interrupted && tactics?.owner === 'Skill' && tactics.action === null && tactics.requireObservation === false) return reopened()
     if (old.resource && (pos[b.name]?.inv?.[old.resource] || 0) > old.count) return reopened()
     const blocks = await inspect(b, old.cells)
-    return blocks.some((block, k) => block !== null && old.blocks[k] !== null && block !== old.blocks[k]) ? reopened() : false
+    return blocks.some((block, k) => block !== null && block !== old.blocks[k]) ? reopened() : false
   }
   const remember = async (b, key, from, to, detail, token) => {
     const why = [detail?.why, detail?.stop, detail?.stopped, detail?.error].filter(Boolean).join(' ')
@@ -90,7 +95,7 @@ function installDodgeAway (dz: DangerCtx) {
       const token = beginReaction(o)
       // Рывок — спринт с прыжками (тело: evade), а не путь до точки (12.10: «бегать и прыгать при увороте»); прыгучесть — своя.
       const evade = () => o.c.call('evade', { dir: { x: ax, z: az }, ticks: Math.max(4, Math.min(26, dist / 0.33)), jump: Math.random() < (o.dodgeStyle?.jumpy ?? 0.75), look, dropOk, maxDrop, ...(minRun ? { minRun } : {}) })
-      evade().then(async r => {
+      return evade().then(async r => {
         if (!ownsReaction(o, token)) return
         let d = r?.detail || r
         // Заперт (своё укрытие, яма) под зельем, облаком, булавой — прокопать выход прочь и снова рывок (14.10: «в укрытии
@@ -99,17 +104,19 @@ function installDodgeAway (dz: DangerCtx) {
           const dig = await o.c.call('dig_to', { at: { x: me.x + ax * 4, y: me.y, z: me.z + az * 4 }, maxSteps: 3, timeoutSeconds: 4 }).then(x => x?.detail || x).catch(() => null)
           if (!ownsReaction(o, token)) return
           log(`⛏ ${o.name}: заперт — ${dig?.dug ? `прокопал выход (${dig.dug} бл.)` : `не прокопать: ${dig?.why || '?'}`}`)
-          if (dig?.dug) d = await evade().then(x => x?.detail || x).catch(() => null)
+          if (dig?.dug) { r = await evade().catch(() => null); d = r?.detail || r }
         }
         if (!ownsReaction(o, token)) return
-        if (!d?.ok) { await remember(o, key, me, to, d, token); log(`⛔ ${o.name}: рывок не вышел — ${d?.why || r?.error || r?.status || '?'}`) }
-      }).catch(e => { if (ownsReaction(o, token)) log(`⛔ ${o.name}: рывок — ${e.message}`) })
+        const ok = !!d?.ok && (!r?.status || r.status === 'done')
+        if (!ok) { await remember(o, key, me, to, { ...d, error: r?.error || d?.error, stop: r?.status === 'interrupted' ? r.status : d?.stop }, token); log(`⛔ ${o.name}: рывок не вышел — ${d?.why || r?.error || r?.status || '?'}`) }
+        return ownsReaction(o, token) ? ok : undefined
+      }).catch(e => { if (ownsReaction(o, token)) { log(`⛔ ${o.name}: рывок — ${e.message}`); return false } })
         .finally(() => { const owned = ownsReaction(o, token); if (endReaction(o, token) && owned && then) then() })
     }
-    if (!failures.get(o)?.has(key)) run()
+    if (!failures.get(o)?.has(key)) return run()
     else {
       const action = o.last, round = ctx.round
-      retry(o, key, me, to).then(ok => { if (ok && o.last === action && ctx.round === round && !ctx.between) run() }).catch(() => {})
+      return retry(o, key, me, to).then(ok => { if (o.last === action && ctx.round === round && !ctx.between) return ok ? run() : false }).catch(() => false)
     }
   }
 }
@@ -267,7 +274,7 @@ function onDanger (dz: DangerCtx, b, m) {
   // 17 с под его булавой в коридоре (игра пользователя 25.10). Тогда — защита боем.
   const shieldNow = /shield/.test(offName) || (pos[b.name]?.inv?.shield || 0) > 0 && !(/totem_of_undying/.test(offName) && (pos[b.name]?.hp ?? 20) <= 16)
   episode.handled = true; episode.from = { ...m.pos }
-  log(inLava ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — выхожу (lava_escape)` : sm ? `☂ ${b.name}: ${sm.name} падает на меня (сядет через ${sm.ticks} т; ${sm.dbg}) — ${shieldNow ? 'щит к нему' : inv.cobweb > 0 ? 'паутина и защита' : 'защита в бою'}` : lv ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — ${(pos[b.name]?.inv?.water_bucket || 0) > 0 ? 'заливаю водой' : 'отхожу'}` : `🧪☁ ${b.name}: облако зелья — выхожу`)
+  if (src !== cl) log(inLava ? `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — выхожу (lava_escape)` : sm ? `☂ ${b.name}: ${sm.name} падает на меня (сядет через ${sm.ticks} т; ${sm.dbg}) — ${shieldNow ? 'щит к нему' : inv.cobweb > 0 ? 'паутина и защита' : 'защита в бою'}` : `🌋 ${b.name}: лава в ${lv.d.toFixed(1)} бл. — ${(pos[b.name]?.inv?.water_bucket || 0) > 0 ? 'заливаю водой' : 'отхожу'}`)
   if (src === lv) { dangerLava(dz, b, m, lv); return }
   // Булава сверху, а щит есть (14.10: «друг с булавой спокойно их убил в полёте, они даже не смотрели» — рывок за 15 т, а он
   // правит полёт и добивает через секунду: 71 удар замечен, рывки не спасли). mace_smash нет в bypasses_shield (jar 1.21.11):
@@ -294,7 +301,14 @@ function onDanger (dz: DangerCtx, b, m) {
   // Без щита — непрерывный ответ тела, а не рывок с просветом для лечения или возврата под булаву.
   if (sm) { dangerFightSmash(dz, b, sm); return }
   // Облако уже лежит на земле: выйти из его радиуса — отдельное дело, в отличие от летящего зелья.
-  ctx.dodgeAway(b, m.pos, cl.at, cl.r + 2, null, null, false, true)
+  episode.queued = true
+  let attempted = false
+  Promise.resolve(ctx.dodgeAway(b, m.pos, cl.at, cl.r + 2, () => { attempted = true }, null, false, true)).then(ok => {
+    if (observations.get(b)?.episodes.get(episode.key) !== episode) return
+    episode.queued = false
+    if (ok !== undefined) episode.handled = ok
+    if (attempted) log(`🧪☁ ${b.name}: облако зелья — уворот ${ok ? 'выполнен' : 'не вышел'}`)
+  })
 }
 
 function dangerLava (dz: DangerCtx, b, m, lv) {

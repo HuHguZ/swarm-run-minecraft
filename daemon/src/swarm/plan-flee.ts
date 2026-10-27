@@ -97,7 +97,7 @@ export function pvpFlee(S: PvpPlan): void {
     // (стенд 21.10: пустой размен начинался по 15 врагам группы, держался по четверым у бота — и кончался через секунду).
     const byGroup = why === 'пустой размен' || why === 'нас меньше'
     if (!held) retreats.set(m.id, { why, group, foes: enemies.filter(e => byGroup ? mine.some(a => distance(a.position, e.position) <= TEAM_LINK) : distance(e.position, m.position) <= 16 || e.id === risk.target).map(e => e.id) })
-    const middle = (g: SwarmMember[]) => ({ x: g.reduce((sum, a) => sum + a.position.x, 0) / g.length, y: m.position.y, z: g.reduce((sum, a) => sum + a.position.z, 0) / g.length })
+    const middle = (g: SwarmMember[]) => ({ x: g.reduce((sum, a) => sum + a.position.x, 0) / g.length, y: g[0].position.y, z: g.reduce((sum, a) => sum + a.position.z, 0) / g.length })
     // Оторвался от смертельного залпа — лечиться вдали, пока залп не перестанет убивать (иначе «бегу ↔ иду к ним»: стенд
     // 15×15, 21.10 — 40 миганий за раунд); лечиться некуда (90 %+) — retreatStep кончил отход, бой.
     if (why === 'залп' && held && nearestGap(m, enemies) > SAFE) { put(m, 'recover', { ally: m.id, reason: 'держу залп, лечусь' }, shelter ? middle(shelter) : m.position); continue }

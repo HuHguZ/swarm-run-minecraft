@@ -40,7 +40,7 @@ export function landingPlan (W, st, goal, price, H = 18) {
     if (remembered?.key === key && remembered.path.length) {
       const q = remembered.expected
       if (Math.hypot(st.p.x - q.p.x, st.p.y - q.p.y, st.p.z - q.p.z) <= HALF &&
-          Math.hypot(st.v.x - q.v.x, st.v.y - q.v.y, st.v.z - q.v.z) <= G) {
+          Math.hypot(st.v.x - q.v.x, st.v.y - q.v.y, st.v.z - q.v.z) <= G && st.boost === q.boost) {
         const valid = evaluate(remembered.path)
         if (valid) {
           const command = valid.path[0]
@@ -52,7 +52,7 @@ export function landingPlan (W, st, goal, price, H = 18) {
     const heading = Math.atan2(-st.v.x, -st.v.z)
     const curves = [0, .9 / H, -.9 / H, 1.35 / H, -1.35 / H, 2 / H, -2 / H]
     const maxTicks = Math.min(12000 / TICK_MS, Math.ceil(Math.max(SAFE_FALL, st.p.y - goal.at.y) / SAFE_FALL) * H * 2)
-    for (const curve of curves) for (const dive of [-1.3, -1, -.75, -.55, -.38, 0]) for (const flare of [.28, .45, .7, .95]) {
+    for (const dive of [-1.3, -1, -.75, -.55, -.38, 0]) for (const flare of [.28, .45, .7, .95]) for (const curve of curves) {
       const path = []
       let s: any = { p: st.p, v: st.v, boost: st.boost, fd: st.fd }
       let recovering = false

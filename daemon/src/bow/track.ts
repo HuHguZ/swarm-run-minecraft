@@ -324,4 +324,4 @@ function trackTarget (entity, nowOf = null) {
   return tracker
 }
 
-export { leadTarget, traceTarget, trackTarget, observedVelocity, hasObservedVelocity }
+export { leadTarget, traceTarget, trackTarget, observedVelocity, hasObservedVelocity, observedFallTicks }

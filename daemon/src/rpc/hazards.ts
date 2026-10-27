@@ -76,6 +76,19 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
       const items = bot.inventory.items()
       const cutter = items.some(i => /_sword$|^shears$/.test(i.name))
       const water = !cutter && !/nether/.test(String(bot.game?.dimension || '')) && items.find(i => i.name === 'water_bucket')
+      const walk = await (require('../navigation/web-exit') as typeof import('../navigation/web-exit')).webExitPlan(bot, ctl,
+        Math.min(...webs().map(at => tools.bestFor(bot, bot.blockAt(at)).ms), water ? 1500 : Infinity))
+      if (ctl.aborted) return { ok: false, cut: 0, left: webs().length, why: 'interrupted' }
+      if (walk) {
+        const why = threatened(walk.ticks * 50)
+        if (why) return { ok: false, cut: 0, left: webs().length, why }
+        const { executePlan } = require('../navigation/parkour/execute') as typeof import('../navigation/parkour/execute')
+        const { settledLanding } = require('../navigation/parkour/model') as typeof import('../navigation/parkour/model')
+        const out = await executePlan(bot, ctl, walk, state => !webs().length && settledLanding(bot, state, walk.target, .12))
+        const left = webs().length
+        if (process.env.ND_SWARM_TRACE === '1') console.log('[web-exit]', JSON.stringify({ ok: out.ok && !left, why: out.why, ticks: out.ticks, left, target: walk.target, at: bot.entity.position }))
+        return { ok: out.ok && !left, cut: 0, left, how: 'walk', why: out.why, ticks: out.ticks }
+      }
       const hit = water && pick.blockOnRay(bot, pick.eyeOf(bot), { x: 0, y: -1, z: 0 }, 4.5, /^(water|lava|bubble_column)$/)
       const source = hit?.pos?.offset(0, 1, 0)
       if (water && hit?.block.name === 'cobweb' && source.y > webs()[0].y && /^(air|cave_air|void_air)$/.test(bot.blockAt(source)?.name || '')) {

@@ -75,8 +75,8 @@ function worldOf (bot, { observed = false }: any = {}) {
       else if (b.name === 'lava') v = 2
       else if (b.name === 'water' || b.name === 'bubble_column') v = 3
       else v = 0
-      // Unknown cells are rechecked as the observer moves; they are never remembered as observed walls.
-      if (b || !observed) cells.set(k, v)
+      // Unknown cells block flight, but never become remembered landing supports.
+      if (b) cells.set(k, v)
     }
     return v
   }
@@ -101,7 +101,7 @@ function worldOf (bot, { observed = false }: any = {}) {
       const X = Math.floor(x); const Z = Math.floor(z)
       for (let Y = Math.floor(y); Y >= Math.floor(y) - depth; Y--) {
         const v = at(X, Y, Z)
-        if (v === 1) return { top: Y + 1 }
+        if (v === 1) return cells.has(key(X, Y, Z)) ? { top: Y + 1 } : null
         if (v === 2) return { top: Y + 1, lava: true }
         if (v === 3) return { top: Y + 1, water: true }
       }

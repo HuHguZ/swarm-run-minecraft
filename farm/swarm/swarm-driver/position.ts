@@ -2,6 +2,7 @@
 import { ownedCount, assessSwarmFight } from '../../../daemon/src/swarm'
 import { powerOf } from '../../../daemon/src/pvp/arms-graph'
 import { WEAPON, distance, cellKey, withOffHand } from './common'
+import { currentTurn } from './lifecycle'
 import type { SwarmDriverCtx } from './common'
 
 // Своё у получателя — с ракетами и зарядами во второй руке (подобранная ракета ложится туда).
@@ -19,7 +20,7 @@ export function swarmPosition (sw: SwarmDriverCtx) {
     const coverAt = () => !pos[recipient?.name]?.p ? 0 : recipient.swarmPosition && distance(pos[recipient.name].p, recipient.swarmPosition.at) < 1.5 ? Math.max(0, Math.min(1, recipient.swarmPosition.cover || 0)) :
       recipient.swarmTask?.data?.hide && recipient.swarmTask.position && distance(pos[recipient.name].p, recipient.swarmTask.position) < 3 ? 1 : 0
     // Сидящего в укрытии на шифте можно снабдить; бой, бег и рефлекс опасности не останавливаем.
-    const available = () => !!recipient && !pos[b.name]?.rescuing && !pos[recipient.name]?.rescuing && round === sw.generation && alive(b.name) && alive(recipient.name) && !panic(recipient) &&
+    const available = () => !!recipient && !pos[b.name]?.rescuing && !pos[recipient.name]?.rescuing && currentTurn(sw, b, round) && alive(recipient.name) && !panic(recipient) &&
       !((/^(lava_escape|dodge_blast|clear_web)$/.test(recipient.last?.m || '') || recipient.shieldHold && recipient.last?.m === 'swarm_hold') && recipient.last?.pending !== false) &&
       (!fighting(recipient) || coverAt() > 0 && recipient.last?.m === 'swarm_hold') &&
       context.board.enemies().every(e => now() - e.seenAt >= 1500 || distance(e.position, pos[recipient.name].p) >= 8)
@@ -71,6 +72,7 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       if (!available() || distance(pos[recipient.name].p, meeting) > 1.5 || meetingScore() <= 0) return false
       if (!await stopRecipient()) return false
       const fresh = await Promise.all([b.c.call('status'), recipient.c.call('status')])
+      if (!currentTurn(sw, b, round) || !alive(recipient.name)) return false
       for (const [i, bot] of [b, recipient].entries()) if (fresh[i]?.state?.pos) pos[bot.name].p = fresh[i].state.pos
       const before = held(fresh[1]?.state, task.data.item)
       const have = fresh[0]?.state?.inventory?.[task.data.item] || 0
@@ -80,24 +82,25 @@ export function swarmPosition (sw: SwarmDriverCtx) {
         const approach = await go(b, pos[recipient.name].p, 1.5, 3, lootArena(b))
         if (approach?.status === 'interrupted') return false
         const state = (await b.c.call('status'))?.state
+        if (!currentTurn(sw, b, round) || !alive(recipient.name)) return false
         if (state?.pos) pos[b.name].p = state.pos
       }
       if (!available() || distance(pos[recipient.name].p, meeting) > 1.5) return false
       if (distance(pos[b.name].p, pos[recipient.name].p) > 3) { physicalFailure = true; return false }
       if (!renew(context.board, b, claim)) return false
       const r = detail(await b.c.call('assist', { mode: 'toss', ally: recipient.name, item: task.data.item, count: task.data.count, arena }).catch(e => ({ why: e.message })))
-      if (round !== sw.generation) return true
+      if (!currentTurn(sw, b, round)) return true
       // Брошено — подобрать в любом случае: начатый бой получателя подождёт 2–3 с, а вещь на земле — потеря (жемчуг донора
       // уже потрачен; DeepSeek, ревью тайников 21.10).
       const pu = r.ok && alive(recipient.name) ? detail(await recipient.c.call('assist', { mode: 'pickup', item: task.data.item, arena }).catch(e => ({ why: e.message }))) : null
-      if (round !== sw.generation) return true
+      if (!currentTurn(sw, b, round)) return true
       const result = await recipient.c.call('status')
-      if (round !== sw.generation) return true
+      if (!currentTurn(sw, b, round)) return true
       const received = held(result?.state, task.data.item) - before >= task.data.count
       if (result?.state?.inventory && pos[recipient.name]) pos[recipient.name].inv = result.state.inventory
       if (result?.state?.armor && pos[recipient.name]) pos[recipient.name].armor = result.state.armor
       const donor = await b.c.call('status')
-      if (round !== sw.generation) return true
+      if (!currentTurn(sw, b, round)) return true
       if (donor?.state?.inventory && pos[b.name]) pos[b.name].inv = donor.state.inventory
       if (donor?.state?.armor && pos[b.name]) pos[b.name].armor = donor.state.armor
       if (received && context.board.ack(task.id, b.name, { token: claim.claim.token, confirmed: true })) telemetry.transfers++
@@ -120,7 +123,7 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       const a = (k + index) * Math.PI / 4, r = 8
       const at = { x: Math.max(arena.x - arena.r + 3, Math.min(arena.x + arena.r - 3, m.p.x + Math.cos(a) * r)), y: m.p.y, z: Math.max(arena.z - arena.r + 3, Math.min(arena.z + arena.r - 3, m.p.z + Math.sin(a) * r)) }
       const key = `${Math.round(at.x / 4)},${Math.round(at.z / 4)}`
-      if (distance(at, m.p) < 3) continue
+      if (distance(at, m.p) < 3 || (b.badSpots || []).some(p => p.from && distance(p.from, m.p) < 2 && distance(p, at) < 1)) continue
       const toward = away.filter(e => (at.x - m.p.x) * (e.position.x - m.p.x) + (at.z - m.p.z) * (e.position.z - m.p.z) > 0).length
       ;(toward ? behind : candidates).push({ at, key, seen: marks.get(key) || 0, toward })
     }
@@ -142,9 +145,11 @@ export function swarmPosition (sw: SwarmDriverCtx) {
     if (attack.enemy && sw.blocked?.(b, key, signature)) return false
     const preview = async () => {
       const own = await thrower.c.call('status', { physics: true }), physics = own?.detail?.physics
+      if (!currentTurn(sw, b, round) || !alive(thrower.name)) return null
       if (!physics?.onGround) return null
       const report = { id: thrower.name, position: physics.pos, velocity: physics.velocity, onGround: physics.onGround, attributes: physics.attributes }
       const dry = await execute(b, 'wind_receive', { thrower: report, to: at, ...attack, arena, dryRun: true })
+      if (!currentTurn(sw, b, round) || !alive(thrower.name)) return null
       if (!dry.plan) { if (attack.enemy && !dry.partial) sw.failed?.(b, key, signature); return null }
       return { report, dry }
     }
@@ -155,8 +160,10 @@ export function swarmPosition (sw: SwarmDriverCtx) {
     board.upsert({ id, kind: 'goto', assignedTo: b.name, participants: [b.name, thrower.name], position: at, expiresAt: now() + 20000 })
     const claim = board.claim(id, b.name, 20000)
     if (!claim) return false
+    const reservation = {}
     thrower.swarmReserved = true
-    const ownsPair = () => round === sw.generation && alive(b.name) && alive(thrower.name) && !pos[b.name]?.rescuing && !pos[thrower.name]?.rescuing && !fighting(thrower) && renew(board, b, claim)
+    thrower.swarmWindReservation = reservation
+    const ownsPair = () => currentTurn(sw, b, round) && alive(thrower.name) && !pos[b.name]?.rescuing && !pos[thrower.name]?.rescuing && !fighting(thrower) && renew(board, b, claim)
     try {
       await thrower.c.call('stop')
       if (!ownsPair()) return false
@@ -194,7 +201,10 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       if (ok && attack.enemy) sw.cleared?.(key)
       if (ok) log(attack.enemy ? `🌬 ${thrower.name} разогнал копьё ${b.name} → ${attack.enemy}: попадание подтверждено` : `🌬 ${thrower.name} подбросил ${b.name} на ${cellKey(at)}`)
       return ok ? receive : false
-    } finally { delete thrower.swarmReserved; board.release(id, b.name, claim.claim.token); board.cancel(id) }
+    } finally {
+      if (thrower.swarmWindReservation === reservation) { delete thrower.swarmWindReservation; if (thrower.swarmReserved === true) delete thrower.swarmReserved }
+      if (round === sw.generation) { board.release(id, b.name, claim.claim.token); board.cancel(id) }
+    }
   }
   // Запрос позиции — по миру, а не раз в 20 с (21.10): занятая позиция держится, пока бот на ней, цель та же и враги те же;
   // неудача — до ухода бота с места или смены врагов (retry.ts). Не больше двух тяжёлых запросов разом — бюджет ЦП.
@@ -208,7 +218,7 @@ export function swarmPosition (sw: SwarmDriverCtx) {
     try {
       const m = pos[b.name], board = context.board
       const query = await execute(b, 'swarm_position', { purpose, arena, enemies: board.enemies().map(e => ({ id: e.id })), radius: 12, limit: 6, reserve: context.member.reserve, budgetMs: 1500 })
-      if (round !== sw.generation || !alive(b.name)) return false
+      if (!currentTurn(sw, b, round)) return false
       const candidates = query.observed ? query.candidates || [] : []
       // Место, куда не вышло, — плохое, пока бот там же, откуда пробовал (сторож арены так же: watch.ts).
       for (const choice of candidates.filter(c => c.score > 0 && distance(c.at, m.p) > 2 && !(b.badSpots || []).some(p => p.from && distance(p.from, m.p) < 2 && distance(p, c.at) < 1))) {
@@ -222,23 +232,28 @@ export function swarmPosition (sw: SwarmDriverCtx) {
           if (!claim) continue
           try {
             const r = await execute(b, 'swarm_pillar', { ...method.params, arena, allies: context.members.map(a => a.id), timeoutSeconds: 12 })
+            if (!currentTurn(sw, b, round)) return false
             ok = r.ok === true && r.at && distance(r.at, choice.at) < .6
             actual = r.at
             board.ack(id, b.name, { token: claim.claim.token, confirmed: ok, position: base, block: method.params.item })
-          } finally { board.release(id, b.name, claim.claim.token); board.cancel(id) }
+          } finally { if (round === sw.generation) { board.release(id, b.name, claim.claim.token); board.cancel(id) } }
         } else if (method.kind === 'build') {
           const approach = await buildGo(b, method.plan.approach)
+          if (!currentTurn(sw, b, round)) return false
           if (approach?.status === 'failed') continue
           const cell = method.plan.cells[0]
           await buildStep(b, context, { kind: 'platform', id: `platform:${cellKey(cell.at)}`, origin: cell.at, cells: method.plan.cells, protected: [method.plan.reference] })
+          if (!currentTurn(sw, b, round)) return false
           if (!board.tasks().some(t => t.kind === 'build' && cellKey(t.position) === cellKey(cell.at) && t.status === 'done')) return true
           const moved = await buildGo(b, choice.at)
           actual = detail(moved).arrived
           ok = !!actual && distance(actual, choice.at) < .6
         } else {
           if (method.kind !== 'walk') { const pair = await pairedWind(b, context, choice.at); ok = !!pair; actual = pair && pair.at }
+          if (!currentTurn(sw, b, round)) return false
           if (!ok && choice.at.y < m.p.y && m.p.y - choice.at.y <= 4 && Math.hypot(choice.at.x - m.p.x, choice.at.z - m.p.z) <= 3) {
             const ledge = await execute(b, 'ledge_to', { at: choice.at, arena, maxFallDamage: 0, timeoutSeconds: 5 })
+            if (!currentTurn(sw, b, round)) return false
             ok = !!ledge.ok
             actual = ledge.at
           }
@@ -248,9 +263,10 @@ export function swarmPosition (sw: SwarmDriverCtx) {
             actual = r.at || r.arrived
           }
         }
-        if (round !== sw.generation || !alive(b.name)) return false
+        if (!currentTurn(sw, b, round)) return false
         if (ok && (!actual || ![actual.x, actual.y, actual.z].every(Number.isFinite))) {
           const s = await b.c.call('status', { physics: true }); actual = s?.state?.pos || s?.detail?.physics?.pos
+          if (!currentTurn(sw, b, round)) return false
           ok = !!actual && distance(actual, choice.at) < .6
         }
         if (!ok) { (b.badSpots ||= []).push({ ...choice.at, from: { ...m.p } }); b.badSpots = b.badSpots.slice(-32); continue }
@@ -262,7 +278,7 @@ export function swarmPosition (sw: SwarmDriverCtx) {
         return true
       }
       return false
-    } finally { sw.positionQueries--; delete b.swarmBusyUntil }
+    } finally { sw.positionQueries--; if (round === sw.generation) delete b.swarmBusyUntil }
   }
   const rangedAdvantage = b => {
     const here = b.swarmPosition, m = pos[b.name], enemies = boardOf(b).enemies()

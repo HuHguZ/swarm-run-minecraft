@@ -212,7 +212,7 @@ export function swarmWind(sw: SwarmDriverCtx) {
       const low = Math.min(...bots.filter(o => teamOf(o) === team && pos[o.name]?.p).map(o => pos[o.name].p.y))
       const tier = !e.airborne && (e.velocity?.y || 0) <= .5 && e.position.y - low > 2.5
       if (e.visible !== true && !tier) continue
-      const crew = bots.filter(o => teamOf(o) === team && available(o) && charged(o) && !sw.panic(o) && distance(pos[o.name].p, e.position) <= (tier ? 64 : FLANK_RANGE) && !(tier && meleeBusy(o)))
+      const crew = bots.filter(o => teamOf(o) === team && available(o) && charged(o) && !sw.panic(o) && distance(pos[o.name].p, e.position) <= (tier ? 64 : FLANK_RANGE) && !meleeBusy(o))
       // Один боец (чемпион) — не рой: его фланг уводил из боя (стенд 24.10 14:48 — по 2–3 раза в секунду). На ярус — и один свободный:
       // снизу заряд упирается в уступ (стенд ветра 25.10: none:blocked — половина отказов).
       if (crew.length < (tier ? 1 : 2)) continue

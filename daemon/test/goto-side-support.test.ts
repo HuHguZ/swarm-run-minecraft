@@ -5,7 +5,7 @@ import { Session } from '../src/session'
 import * as gameClock from '../src/game-clock'
 import * as tick from './tick-plugins-fixture'
 
-type Mode = 'side' | 'centred' | 'cube' | 'airborne' | 'unknown' | 'void' | 'hazard'
+type Mode = 'side' | 'corner' | 'centred' | 'cube' | 'airborne' | 'unknown' | 'void' | 'hazard'
 
 // Real Session, installed pathfinder, collision shapes and native physics; only the server clock is external.
 function fixture(t, mode: Mode = 'side') {
@@ -18,10 +18,13 @@ function fixture(t, mode: Mode = 'side') {
   bot.blockAt = p => {
     const q = p.floored()
     if (mode === 'unknown' && q.x === 533 && q.y === 150 && q.z === 609) return null
-    const floor = q.y === 150 && q.x >= 522 && q.x <= 532 && q.z >= 608 && q.z <= 610
+    const floor = q.y === 150 && (mode === 'corner'
+      ? q.x >= 642 && q.x <= 653 && q.z >= 644 && q.z <= 646 && !(q.x === 642 && q.z === 644)
+      : q.x >= 522 && q.x <= 532 && q.z >= 608 && q.z <= 610)
     return tick.block(floor && mode !== 'void' ? mode === 'hazard' ? 'campfire' : mode === 'cube' ? 'stone' : 'smooth_sandstone_slab' : 'air', q)
   }
-  bot.entity.position = new Vec3(mode === 'centred' ? 532.5 : 533.2591661231949, y, 609.3093884351136)
+  bot.entity.position = mode === 'corner' ? new Vec3(642.8234912439899, y, 644.8036398825346)
+    : new Vec3(mode === 'centred' ? 532.5 : 533.2591661231949, y, 609.3093884351136)
   bot.entity.velocity = new Vec3(0, -.0784, 0)
   bot.entity.onGround = mode !== 'airborne'
   bot.entity.attributes = { [bot.physics.movementSpeedAttribute]: { value: .1, modifiers: [] } }
@@ -39,10 +42,10 @@ function fixture(t, mode: Mode = 'side') {
   bot.on('path_update', p => paths.push(p))
   bot.on('nd_parkour', p => centering.push(p))
   bot.on('goal_updated', g => { if (g) firstGoals.push(bot.entity.position.clone()) })
-  const params: any = { x: 525.5, y, z: 609.5, range: .8, timeoutSeconds: 10,
+  const params: any = { x: mode === 'corner' ? 650.5 : 525.5, y, z: mode === 'corner' ? 644.5 : 609.5, range: .8, timeoutSeconds: 10,
     sprint: false, sprintJump: false, bridge: false, pathWait: true, pearl: false,
     descent: false, unstuck: false, surface: false, walkOnly: true,
-    arena: { x: 530.5, z: 609.5, r: 20, killY: 145 } }
+    arena: { x: mode === 'corner' ? 645.5 : 530.5, z: mode === 'corner' ? 644.5 : 609.5, r: 20, killY: 145 } }
   async function drive(promise) {
     let settled = false, value, error
     promise.then(v => { value = v; settled = true }, e => { error = e; settled = true })
@@ -69,6 +72,22 @@ test('goto leaves the observed side-supported lower slab by native walking befor
     assert.ok(f.centering.length > 0, 'the shared native controller performed the short approach')
     assert.ok(f.centering.every(s => !s.control.jump && !s.control.sprint && Math.abs(s.pos.y - 150.5) < .04 && s.hp === 20))
     assert.ok(Math.abs(f.bot.entity.position.x - 525.5) < .8)
+    assert.equal(f.bot.health, 20)
+  } finally { f.close() }
+})
+
+test('goto walks out of the three-corner slab support before native pathfinding', async t => {
+  const f = fixture(t, 'corner')
+  try {
+    await f.settle()
+    const result = await f.drive(f.session.goto(f.params))
+    assert.ifError(result.error)
+    assert.ok(result.value?.arrived, JSON.stringify(result.value))
+    assert.ok(f.firstGoals[0].x >= 643, 'the first native search starts over the supporting slab')
+    assert.ok(f.paths.some(p => p.status === 'success'))
+    assert.ok(f.centering.length > 0, 'the supported corner is left by the native centering walk')
+    assert.ok(f.centering.every(s => s.onGround && !s.control.jump && !s.control.sprint && Math.abs(s.pos.y - 150.5) < .04 && s.hp === 20))
+    assert.ok(Math.abs(f.bot.entity.position.x - f.params.x) < .8)
     assert.equal(f.bot.health, 20)
   } finally { f.close() }
 })

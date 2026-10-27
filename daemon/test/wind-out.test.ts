@@ -187,6 +187,48 @@ test('wind out: release freshness follows observed game time and rechecks the qu
   })
 })
 
+test('wind out: the forecast lead follows the measured delay up to the release, not just the planning time', async t => {
+  // Стенд 27.10 (cl27b, 221 бросок): расчёт 80–88 мс, но до выпуска 126–280 мс — остальные обработчики тика держат процесс;
+  // упреждение по одному расчёту (lag 2, окно 175) давало stale_release у половины. Упреждение — по замеренной задержке выпуска.
+  const { bot, own, arena } = fixture()
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const hands = require('../src/mace/hands') as typeof import('../src/mace/hands')
+  const enemy = require('../src/combat/enemy-wind') as typeof import('../src/combat/enemy-wind')
+  const execute = require('../src/combat/enemy-wind-execute') as typeof import('../src/combat/enemy-wind-execute')
+  const out = require('../src/combat/wind-out') as typeof import('../src/combat/wind-out')
+  const worldTick = require('../src/combat/team-wind').worldTick
+  const nativePlan = enemy.planEnemyWind
+  let wallMs = 0, fired = 0
+  const lags: number[] = []
+  t.mock.method(clock.wall, 'monotonic', () => wallMs)
+  const producer = new clock.GameClock({ epoch: 0 })
+  producer.setState({ tick_rate: 20 }); producer.syncAge(500n); bot.ndClock = producer
+  t.after(() => { producer.dispose(); bot.removeAllListeners() })
+  bot._client = new EventEmitter(); producer.attach(bot)
+  bot.getControlState = () => false; bot.activateItem = () => { fired++ }
+  t.mock.method(hands, 'windReady', () => true); t.mock.method(hands, 'offWind', () => true)
+  t.mock.method(hands, 'hotbarIndex', () => 0)
+  t.mock.method(execute, 'enemyWindReport', () => ({ ok: true, ready: true, report: { ...own, gameTick: worldTick(bot) } }))
+  t.mock.method(enemy, 'planEnemyWind', (...args: Parameters<typeof nativePlan>) => {
+    lags.push(args[3].delays![0]); const plan = nativePlan(...args); wallMs += 20; return plan
+  })
+  let release: (() => void) | null = null
+  t.mock.method(hands, 'afterPacket', (_b, fn) => { release = fn })
+  out.installWindOut({ bot, _rescue: { arena }, current: null } as any)
+  for (let i = 0; i < 12 && !fired; i++) {
+    release = null
+    bot.emit('physicsTick'); bot.emit('physicsTick')
+    assert.ok(release, `plan ${i} reached the release queue`)
+    wallMs += 260 // остальные обработчики тика: выпуск через 280 мс после кадра
+    release!()
+    producer.ticks += 1 // новый кадр — прежний опоздавший не пересчитывается
+    for (const l of bot.listeners('physicsTick').slice(1)) bot.removeListener('physicsTick', l as any) // ожидание взрыва прошлого броска
+  }
+  assert.equal(lags[0], 1, 'the first plan has no delay sample yet')
+  assert.equal(fired, 1, `the lead grew to the measured delay and a release fit its window: lags ${lags}`)
+  assert.ok(lags.at(-1)! >= 5 && lags.at(-1)! <= 6, `lead ≈ 280 ms at 20 TPS, capped: ${lags}`)
+})
+
 test('wind out: one native forecast blocked for 220 ms never releases its stale first trajectory', async t => {
   const { bot, own, arena } = fixture()
   const clock = require('../src/game-clock') as typeof import('../src/game-clock')
@@ -198,7 +240,7 @@ test('wind out: one native forecast blocked for 220 ms never releases its stale 
   const nativePlan = enemy.planEnemyWind, afterPacket = hands.afterPacket
   const producer = new clock.GameClock(); producer.syncAge(500n); bot.ndClock = producer
   t.after(() => { producer.dispose(); bot.removeAllListeners() })
-  let plans = 0, fired = 0, before: number | null = null, after: number | null = null, lag: number | undefined, complete!: () => void
+  let plans = 0, fired = 0, before: number | null = null, after: number | null = null, lag: number | undefined, queued = 0, complete!: () => void
   bot._client = new EventEmitter(); bot.getControlState = () => false; bot.activateItem = () => { fired++ }
   t.mock.method(hands, 'windReady', () => plans === 0); t.mock.method(hands, 'offWind', () => true)
   t.mock.method(hands, 'hotbarIndex', () => 0)
@@ -206,10 +248,10 @@ test('wind out: one native forecast blocked for 220 ms never releases its stale 
   t.mock.method(enemy, 'planEnemyWind', (...args: Parameters<typeof nativePlan>) => {
     plans++; lag = args[3].delays![0]; before = worldTick(bot)
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 220)
-    after = worldTick(bot); return nativePlan(...args)
+    after = worldTick(bot); const plan = nativePlan(...args); setImmediate(complete); return plan
   })
   const released = new Promise<void>(resolve => { complete = resolve })
-  t.mock.method(hands, 'afterPacket', (b, fn) => afterPacket(b, () => { fn(); complete() }))
+  t.mock.method(hands, 'afterPacket', (b, fn) => { queued++; afterPacket(b, fn) })
   const session: any = { bot, _rescue: { arena }, current: null }
   out.installWindOut(session)
   producer.on('tick', () => { bot.emit('physicsTick'); bot.emit('physicTick') }); producer.start()
@@ -218,5 +260,79 @@ test('wind out: one native forecast blocked for 220 ms never releases its stale 
   assert.equal(lag, 1)
   assert.equal(after, before, 'the actual clock cannot process timer/time packets during the forecast')
   assert.equal(fired, 0)
-  assert.equal(session._windOut.log[0]?.why, 'stale_release')
+  // Расчёт дольше окна свежести бросается ещё в планировании (Kimi AUDIT 2): до очереди выпуска он не доходит.
+  assert.equal(queued, 0, 'the over-budget forecast is dropped before the release queue')
+})
+
+test('wind out: a forecast past the release window is dropped in planning and the same frame is not recomputed (Kimi AUDIT 2)', t => {
+  const { bot, own, arena } = fixture()
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const hands = require('../src/mace/hands') as typeof import('../src/mace/hands')
+  const enemy = require('../src/combat/enemy-wind') as typeof import('../src/combat/enemy-wind')
+  const execute = require('../src/combat/enemy-wind-execute') as typeof import('../src/combat/enemy-wind-execute')
+  const out = require('../src/combat/wind-out') as typeof import('../src/combat/wind-out')
+  const worldTick = require('../src/combat/team-wind').worldTick
+  const nativePlan = enemy.planEnemyWind
+  let wallMs = 0, plans = 0, fired = 0, queued = 0
+  t.mock.method(clock.wall, 'monotonic', () => wallMs)
+  const producer = new clock.GameClock({ epoch: 0 })
+  producer.setState({ tick_rate: 20 }); producer.syncAge(500n); bot.ndClock = producer
+  t.after(() => { producer.dispose(); bot.removeAllListeners() })
+  bot._client = new EventEmitter(); producer.attach(bot)
+  bot.getControlState = () => false; bot.activateItem = () => { fired++ }
+  t.mock.method(hands, 'windReady', () => true); t.mock.method(hands, 'offWind', () => true)
+  t.mock.method(hands, 'hotbarIndex', () => 0)
+  t.mock.method(execute, 'enemyWindReport', () => ({ ok: true, ready: true, report: { ...own, gameTick: worldTick(bot) } }))
+  // Медленный кадр: к первой проверке бюджета прошло 300 мс — больше окна свежести (lag 1 → 125 мс).
+  t.mock.method(enemy, 'planEnemyWind', (...args: Parameters<typeof nativePlan>) => { plans++; wallMs += 300; return nativePlan(...args) })
+  t.mock.method(hands, 'afterPacket', (_b, fn) => { queued++; fn() })
+  const session: any = { bot, _rescue: { arena }, current: null }
+  out.installWindOut(session)
+  for (let k = 0; k < 6; k++) bot.emit('physicsTick')
+  assert.equal(queued, 0, 'an over-budget plan never reaches the release queue')
+  assert.equal(fired, 0)
+  assert.equal(plans, 1, 'the same stale frame is not planned again')
+  producer.ticks += 1
+  for (let k = 0; k < 2; k++) bot.emit('physicsTick')
+  assert.equal(plans, 2, 'a new game tick is a new frame worth planning')
+  assert.equal(fired, 0)
+})
+
+test('wind out: a nearby burst does not erase the miss memory; only real displacement of the foe allows the same throw again (Kimi AUDIT 3)', async t => {
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const hands = require('../src/mace/hands') as typeof import('../src/mace/hands')
+  const execute = require('../src/combat/enemy-wind-execute') as typeof import('../src/combat/enemy-wind-execute')
+  const out = require('../src/combat/wind-out') as typeof import('../src/combat/wind-out')
+  const worldTick = require('../src/combat/team-wind').worldTick
+  const own = (radius: number, type: string) => (c: any) => ({ center: { ...c }, radius, blockCount: 0, explosionParticle: { type } })
+  for (const c of [
+    { name: 'own charge burst, foe did not move', boom: own(1.2, 'gust_emitter_small'), shift: 0, again: false },
+    { name: 'foreign explosion near the aim point', boom: own(4, 'explosion'), shift: 0, again: false },
+    { name: 'foe was moved a block by the burst', boom: own(1.2, 'gust_emitter_small'), shift: 1, again: true }
+  ]) await t.test(c.name, st => {
+    const { bot, foe, own: report } = fixture(), arena = fixture().arena
+    st.mock.method(clock.wall, 'monotonic', () => 0)
+    const producer = new clock.GameClock({ epoch: 0 })
+    producer.setState({ tick_rate: 20 }); producer.syncAge(500n); bot.ndClock = producer
+    st.after(() => { producer.dispose(); bot.removeAllListeners() })
+    bot._client = new EventEmitter(); producer.attach(bot)
+    let ready = true, burst: any = null
+    bot.getControlState = () => false; bot.activateItem = () => { ready = false }
+    st.mock.method(hands, 'windReady', () => ready); st.mock.method(hands, 'offWind', () => true)
+    st.mock.method(hands, 'hotbarIndex', () => 0)
+    st.mock.method(execute, 'enemyWindReport', () => ({ ok: true, ready: true, report: { ...report, gameTick: worldTick(bot) } }))
+    st.mock.method(hands, 'afterPacket', (_b, fn) => fn())
+    const session: any = { bot, _rescue: { arena }, current: null }
+    out.installWindOut(session)
+    const at = foe.position.clone()
+    bot.emit('physicsTick'); bot.emit('physicsTick')
+    assert.equal(session._windOut.fired, 1, 'the first throw is released')
+    burst = foe.position.offset(0, 1, 0)
+    bot._client.emit('explosion', c.boom(burst))
+    foe.position = at.offset(c.shift, 0, 0)
+    for (let k = 0; k < 50; k++) bot.emit('physicsTick')
+    foe.position = at.clone(); ready = true
+    for (let k = 0; k < 2; k++) bot.emit('physicsTick')
+    assert.equal(session._windOut.tries, c.again ? 2 : 1, JSON.stringify(c.name))
+  })
 })

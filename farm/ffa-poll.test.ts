@@ -5,6 +5,10 @@ import path from 'node:path'
 import { watchStatus, installSight, watchAlarm } from './arena/watch'
 import { installRounds } from './arena/rounds'
 import { installSupply, startTactics } from './arena/supply'
+import { createDriverState } from './swarm/swarm-driver/state'
+import { swarmMoves } from './swarm/swarm-driver/moves'
+import { swarmPosition } from './swarm/swarm-driver/position'
+import { swarmTurnWork } from './swarm/swarm-driver/turn-work'
 const turn = () => new Promise(resolve => setImmediate(resolve))
 // Ручки окружения, меняющие опрос и конец раунда: тест — на умолчаниях.
 delete process.env.FFA_POLL_MS; delete process.env.ARMS_MOBS; delete process.env.ARMS_PHASES
@@ -307,6 +311,74 @@ test('watchdog protects a pending craft until its receipt, then diagnoses an aba
   b.last.pending = false; b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
   f.watchdog()
   assert.equal(f.calls.filter(c => c.method === 'stop').length, 1)
+})
+
+function frozenGoto(t, target = { x: 8, y: 64, z: 0 }) {
+  const f = fixture(t), b = f.bots[0], calls: any[] = []
+  const task: any = { kind: 'goto', position: target, data: { target: 'Foe' } }
+  b.swarmTask = task
+  b.c.call = async (method, params = {}) => {
+    calls.push({ method, params })
+    if (method === 'goto') b.last = { m: method, p: params, at: Date.now() }
+    return { status: 'done', detail: {} }
+  }
+  const sw = createDriverState({ bots: [b], pos: f.context.pos, alive: () => true, now: () => Date.now(),
+    arena: { x: 0, y: 64, z: 0, r: 100 }, home: () => f.context.pos.fast.p, log() {} })
+  Object.assign(sw, swarmMoves(sw))
+  Object.assign(sw, { teamOf: () => 'blue', onslaught: () => true,
+    breach: async (_b, at) => { calls.push({ method: 'breach', params: at }); return false } })
+  Object.assign(sw, swarmPosition(sw))
+  Object.assign(sw, swarmTurnWork(sw))
+  const run = () => sw.turnGoto({ b, task, m: sw.pos.fast, round: sw.generation, contact: false, enemies: [],
+    context: { members: [{ id: b.name }] }, foe: task.data.slot === undefined ? undefined : { position: { x: -2, y: 64, z: 0 } } })
+  const freeze = async () => {
+    f.advance(14000)
+    sw.pos.fast.observedAt = sw.pos.fast.frameAt = Date.now()
+    b.anchor = { p: { ...sw.pos.fast.p }, at: Date.now() - 14000 }
+    f.watchdog(); await turn()
+    assert.equal(b.badSpots.length, 1, 'the real watchdog records the physical approach failure')
+  }
+  return { ...f, b, sw, calls, task, run, freeze }
+}
+
+for (const route of ['task', 'bounded', 'search', 'stand', 'slot']) test(`watchdog failure selects another physical approach on the next ${route} goto`, async t => {
+  const f = frozenGoto(t, { x: route === 'bounded' ? 140 : 8, y: 64, z: 0 })
+  if (route === 'search') f.task.data.search = true, f.task.data.searchAt = { ...f.task.position }
+  if (route === 'stand') f.task.data.swarmStand = { ...f.task.position }, f.task.position = { x: 20, y: 64, z: 0 }
+  if (route === 'slot') f.task.data.slot = 0, f.task.position = { x: 20, y: 64, z: 0 }
+  await f.run(); await f.freeze(); await f.run()
+  const moves = f.calls.filter(c => c.method === 'goto').map(c => ({ x: c.params.x, y: c.params.y, z: c.params.z }))
+  assert.equal(moves.length, 2, 'the retry performs an alternative move instead of returning idle')
+  assert.notDeepEqual(moves[1], moves[0], 'do not send the same locally failed destination again')
+  assert.equal(f.sw.telemetry.searches, 1)
+  assert.equal(f.task.data.target, 'Foe', 'the detour retains the pursued enemy')
+})
+
+for (const change of ['moved', 'round', 'target']) test(`a failed goto remains available after ${change} changes`, async t => {
+  const f = frozenGoto(t)
+  await f.run(); await f.freeze()
+  if (change === 'moved') { f.sw.pos.fast.p.x = 2.1; f.watchdog() }
+  if (change === 'round') { f.context.round++; f.sw.generation++; f.b.waiting = true; f.watchdog(); f.b.waiting = false }
+  if (change === 'target') f.task.position = { x: 0, y: 64, z: 8 }
+  await f.run()
+  const last = f.calls.filter(c => c.method === 'goto').at(-1).params
+  assert.deepEqual({ x: last.x, y: last.y, z: last.z }, f.task.position)
+  assert.equal(f.sw.telemetry.searches, 0)
+})
+
+for (const opened of [false, true]) test(`a failed finishing hunt ${opened ? 'breaches' : 'detours after a refused breach'} without losing the last seen target`, async t => {
+  const f = frozenGoto(t)
+  await f.run(); await f.freeze()
+  f.task.data.hunt = f.task.data.finishing = true
+  f.task.data.enemyPosition = { ...f.task.position }
+  // turnGoto captures its existing breach helper at construction.
+  f.sw.breach = async (_b, at) => { f.calls.push({ method: 'breach', params: at }); return opened }
+  Object.assign(f.sw, swarmTurnWork(f.sw))
+  await f.run()
+  assert.deepEqual(f.calls.filter(c => c.method === 'breach').map(c => c.params), [f.task.data.enemyPosition])
+  assert.equal(f.calls.filter(c => c.method === 'goto').length, opened ? 1 : 2)
+  assert.equal(f.sw.telemetry.searches, opened ? 0 : 1)
+  assert.equal(f.task.data.target, 'Foe')
 })
 
 test('watchdog records the failed approach and escalates a second freeze without a forty-second window', async t => {

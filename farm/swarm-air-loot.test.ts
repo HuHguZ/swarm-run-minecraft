@@ -49,3 +49,46 @@ test('air loot uses flight for roof and distant loot, walks nearby and after lan
     }
   }
 })
+
+for (const waitAt of ['fly_to', 'status']) for (const change of ['current', 'cancelled', 'reset', 'dead']) {
+  test(`air approach after deferred ${waitAt} respects ${change} ownership before walking or recording failure`, async () => {
+    const deferred = () => { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done }); return { promise, resolve } }
+    const fly = deferred(), state = deferred(), calls: string[] = [], owner = { cancelled: false }
+    const from = { x: 0, y: 64, z: 0 }, target = { x: 60, y: 64, z: 0 }, inventory = { elytra: 1, firework_rocket: 16 }
+    const updated = { pos: { x: 1, y: 64, z: 0 }, inventory: { elytra: 1, firework_rocket: 15 } }
+    let alive = true
+    const pos = { A: { p: from, hp: 20, inv: inventory } }
+    const b = { name: 'A', swarmTurnOwner: owner, c: { call(method) {
+      calls.push(method)
+      if (method === 'fly_to') return fly.promise
+      if (method === 'status') return state.promise
+      assert.equal(method, 'goto')
+      return Promise.resolve({ status: 'done', detail: { arrived: target } })
+    } } }
+    const sw = createDriverState({ bots: [b], pos, alive: () => alive, arena: { x: 0, y: 64, z: 0, r: 100 }, home: () => from, log() {} })
+    Object.assign(sw, swarmRetry(sw), { lootSafe: () => true })
+    Object.assign(sw, swarmMoves(sw))
+    const generation = sw.generation, failedFlight = { status: 'done', detail: { ok: false, why: 'landing_missed' } }
+    const running = sw.go(b, target, 2, 4, sw.arena, true)
+    assert.deepEqual(calls, ['fly_to'])
+    if (waitAt === 'status') { fly.resolve(failedFlight); await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(calls, ['fly_to', 'status']) }
+    if (change === 'cancelled') owner.cancelled = true
+    if (change === 'reset') sw.generation++
+    if (change === 'dead') alive = false
+    fly.resolve(failedFlight)
+    await new Promise(resolve => setImmediate(resolve))
+    state.resolve({ state: updated })
+    const reply = await running
+    if (change === 'current') {
+      assert.deepEqual(calls, ['fly_to', 'status', 'goto'], 'a failed current flight keeps its legitimate walking fallback')
+      assert.equal(reply.status, 'done'); assert.equal(sw.retries.size, 1)
+      assert.deepEqual(pos.A.p, updated.pos); assert.deepEqual(pos.A.inv, updated.inventory)
+    } else {
+      assert.deepEqual(calls, waitAt === 'fly_to' ? ['fly_to'] : ['fly_to', 'status'], 'an obsolete approach cannot issue the old fallback goto')
+      assert.equal(reply.status, 'interrupted'); assert.equal(reply.detail.interrupted, true)
+      assert.equal(sw.retries.size, 0, 'accepted cancellation must not poison failure memory')
+      assert.equal(pos.A.p, from); assert.equal(pos.A.inv, inventory, 'a late cancelled snapshot cannot overwrite the current inventory')
+      if (change === 'cancelled') { assert.equal(sw.generation, generation); assert.equal(alive, true) }
+    }
+  })
+}

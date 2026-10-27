@@ -121,6 +121,21 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
     }),
     swarm_pose: async (p: any = {}) => session.immediate(async () => {
       const bot = session.require(), V = require('vec3')
+      if (p.inspectOnly === true) {
+        const points = p.cells === undefined ? [p.at] : p.cells
+        const empty = p.cells === undefined ? { poses: [] } : { poses: [], cells: [] }
+        if (!Array.isArray(points) || points.length > 64 || points.some(at => !at || ![at.x, at.y, at.z].every(Number.isSafeInteger))) return empty
+        // An empty visible cell has no block outline. Reuse the combat LOS view, keeping hidden/unloaded cells unknown.
+        const world = require('../pvp/search').observedCollision(bot), eye = require('../pick').eyeOf(bot)
+        const cells = points.map(at => {
+          const point = new V(at.x, at.y, at.z)
+          const block = point.offset(.5, .5, .5).distanceTo(eye) <= 64 ? world.blockAt(point) : null
+          const solid = block && !require('../navigation/geometry').HAZARD.test(block.name) && block.shapes?.some(s => s.every((n, i) => n === (i < 3 ? 0 : 1)))
+          return { at, ...(block ? { existing: { name: block.name, solid: !!solid } } : {}) }
+        })
+        return p.cells === undefined ? { poses: [], ...(cells[0]?.existing ? { existing: cells[0].existing } : {}) } : { poses: [], cells }
+      }
+      if (p.cells !== undefined) return { poses: [], cells: [] }
       if (!p.at || ![p.at.x, p.at.y, p.at.z].every(Number.isSafeInteger)) return { poses: [] }
       const at = new V(p.at.x, p.at.y, p.at.z), seen = require('../pick').blockSeen(bot, at, { range: 64 })
       const block = seen && bot.blockAt(at), solid = block && !require('../navigation/geometry').HAZARD.test(block.name) && block.shapes?.some(s => s.every((n, i) => n === (i < 3 ? 0 : 1)))

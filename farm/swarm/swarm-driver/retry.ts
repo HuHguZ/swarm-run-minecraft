@@ -1,19 +1,27 @@
 // Рой: повтор неудавшейся попытки — по причине, а не по сроку (пользователь 15.10 и 21.10: «режимы по миру, без костылей
 // по секундам»; Codex, разбор таймеров, уточнение A3: повтор привязан к причине неудачи). Неудача запоминается с подписью
 // мира: где стоял бот и что было важно для попытки (sig — цель, запасы, причина). Та же попытка снова — когда бот ушёл
-// с места (2 бл.) или подпись другая: цель сдвинулась, запасы пришли.
+// с места (2 бл.) или подпись другая: цель сдвинулась, запасы пришли. Другие подписи не стирают прежний отказ.
 // Точки команды (засада, яма, стена под лестницу) — так же: закрыта, пока споткнувшийся на ней стоит там же; раскрытая
 // засада — пока у неё враг (16 бл.).
 import { distance } from './common'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmRetry (sw: SwarmDriverCtx) {
-  const retries = new Map<string, { at: any; sig: string }>()
-  const failed = (b, key: string, sig = '') => { const p = sw.pos[b.name]?.p; retries.set(key, { at: p ? { ...p } : null, sig }) }
-  const blocked = (b, key: string, sig = '') => {
-    const f = retries.get(key), p = sw.pos[b.name]?.p
-    return !!f && f.sig === sig && !!f.at && !!p && distance(p, f.at) < 2
+  const retries = new Map<string, Map<string, { at: any }>>()
+  const nearby = (b, key: string) => {
+    const history = retries.get(key), p = sw.pos[b.name]?.p
+    if (history && p) {
+      for (const [sig, f] of history) if (!f.at || !p || !(distance(p, f.at) < 2)) history.delete(sig)
+      if (!history.size) retries.delete(key)
+    }
+    return history
   }
+  const failed = (b, key: string, sig = '') => {
+    const p = sw.pos[b.name]?.p, history = nearby(b, key) || new Map<string, { at: any }>()
+    history.set(sig, { at: p ? { ...p } : null }); retries.set(key, history)
+  }
+  const blocked = (b, key: string, sig = '') => !!sw.pos[b.name]?.p && !!nearby(b, key)?.has(sig)
   const cleared = (key: string) => { retries.delete(key) }
   const sites = new Map<string, { bot: string; at: any; watch?: any }>()
   // watch — место, у которого враг держит точку закрытой (раскрытая засада).

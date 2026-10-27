@@ -6,9 +6,9 @@ import { swarmWind } from './swarm/swarm-driver/wind'
 
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
-function fixture() {
+function fixture(names = ['Victim', 'Helper']) {
   const calls: any[] = [], gates = new Map<string, () => void>()
-  const bots = ['Victim', 'Helper'].map(name => {
+  const bots = names.map(name => {
     const b: any = { name, team: 'blue', last: { m: 'goto', pending: false } }
     b.c = { call(method, params) {
       calls.push({ name, method, params })
@@ -42,6 +42,31 @@ function fixture() {
   const seen = [{ id: 'Foe', visible: true, position: { x: 78, y: 150, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }]
   return { bots, victim, helper, pos, ctx, sw, api: swarmWind(sw), calls, gates, report, seen }
 }
+
+for (const action of ['pending fight', 'finished fight', 'free']) test(`airborne wind flank preserves ${action} ownership and uses free helpers`, async () => {
+  const f = fixture(['Victim', 'Helper', 'Free'])
+  f.pos.Victim.p = { x: 68, y: 120, z: 0 }
+  f.pos.Free = { p: { x: 67, y: 120, z: 0 }, inv: { wind_charge: 2 } }
+  let fight: Promise<any> | undefined
+  if (action !== 'free') {
+    fight = f.helper.c.call('fight', { target: 'Foe' })
+    assert.equal(f.helper.last.m, 'fight'); assert.equal(f.helper.last.pending, true)
+    if (action === 'finished fight') { f.calls.find(c => c.method === 'fight').reply({ landed: 1 }); await fight }
+  }
+  const running = f.helper.last
+  f.api.windFlank(f.victim, [{ id: 'Foe', visible: true, airborne: true,
+    position: { x: 70, y: 124, z: 0 }, velocity: { x: 0, y: 1, z: 0 } }])
+  const moved = f.calls.filter(c => c.method === 'goto')
+  assert.deepEqual(moved.map(c => c.name).sort(), action === 'pending fight' ? ['Free', 'Victim'] : ['Free', 'Helper', 'Victim'])
+  if (action === 'pending fight') {
+    assert.equal(f.helper.last, running, 'a flank cannot replace the actual pending fight intent')
+    assert.equal(f.helper.swarmReserved, undefined, 'the fighting ally is not claimed for repositioning')
+    f.calls.find(c => c.method === 'fight').reply({ landed: 1 }); await fight
+  }
+  for (const move of moved) move.reply({ ok: true })
+  await settle()
+  assert.ok(f.bots.every(b => !b.swarmReserved), 'free helpers release their flank reservations')
+})
 
 test('wind flank preserves the actual web helper during approach and resumes after rescue', async () => {
   const f = fixture(); f.report(true)

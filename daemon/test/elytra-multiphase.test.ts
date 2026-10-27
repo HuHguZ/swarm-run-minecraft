@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 import { landingPlan } from '../src/elytra/landing'
 import { rollout, worldOf } from '../src/elytra/physics'
-import { cost } from '../src/elytra/control'
+import { choose, cost } from '../src/elytra/control'
 
 function fixture () {
   let blocked = false
@@ -161,4 +161,73 @@ test('runout checks the actual lower support height, hazards, and lost continuou
   assert(checked.includes(97), 'the hazard predicate sees the actual lower surface')
   hazard = false
   assert(price() >= 5000, 'a horizontal friction tail cannot certify a drop into the air')
+})
+
+test('bounded landing search gives reflected trajectories the same safe touchdown price', () => {
+  // Gone-rocket state translated onto an explicitly known flat stone plane, not native arena geometry.
+  const flat = () => ({
+    boxHit: (x, y, z) => y < 0,
+    floorBelow(x, y, z, depth = 40) {
+      const start = Math.floor(y), Y = Math.min(-1, start)
+      return Y >= start - depth ? { top: Y + 1 } : null
+    },
+    landingSafe: () => true,
+    groundInertia: () => .6 * .91,
+    airborneInertia: .91
+  })
+  const plans = [1, -1].map(sign => {
+    const st = { p: new Vec3(0, 7.99904611479846, 0), v: new Vec3(sign * 1.1215206993805078, -.05434218764864825, -.931249670246468), fd: .0651348951951718, boost: 0 }
+    const g = { kind: 'land', at: new Vec3(sign * 22.52242528871688, 0, -3.5429565232895), maxFallDamage: 0,
+      arena: { x: sign * -8.47757471128312, y: 0, z: -3.5429565232895, r: 80, killY: -7, ellipse: { a: 77, b: 65 } } }
+    const plan = choose(flat(), st, g)
+    assert(plan && plan.work > 0, 'shared choose finds a complete landing manoeuvre')
+    assert.equal(plan.r.kind, 'floor')
+    assert(plan.r.fd <= 3, 'both directions retain the zero-damage fall limit')
+    assert(plan.work <= 32769, 'the existing search budget is unchanged')
+    return { plan, distance: Math.hypot(plan.r.p.x - g.at.x, plan.r.p.z - g.at.z) }
+  })
+  assert(Math.abs(plans[0].distance - plans[1].distance) < 1e-8, 'a budget cutoff must not favor one turn direction')
+  assert(Math.abs(plans[0].plan.c - plans[1].plan.c) < 1e-8, 'reflected safe landings have the same actual shared price')
+  assert(plans[0].distance < 3, 'the already available close touchdown survives the budget cutoff')
+})
+
+function warmRocketLanding (ticks) {
+  const { W } = fixture()
+  // Observed light31 input translated into the existing known flat fixture, not native arena geometry.
+  const g = { kind: 'land', at: new Vec3(601.5, 120, 600.5) }
+  let st: any = {
+    p: new Vec3(577.6413188673238, 127.95891707293028, 604.5722533812385),
+    v: new Vec3(1.4977452701814322, -.011523174863615102, .11243596754594322),
+    fd: .011523174863611985, boost: 24
+  }
+  for (let t = 0; t < ticks; t++) {
+    const plan = choose(W, st, g)
+    assert(plan && plan.r.kind === 'floor' && plan.r.fd <= 3, 'warm a complete safe route through real shared choose')
+    st = step(W, st, plan)
+    assert(!st.kind, 'forecast changes before touchdown')
+  }
+  return { W, st, g }
+}
+
+for (const [name, ticks, boost] of [['expires', 15, 0], ['refreshes', 1, 40]] as const) {
+  test(`shared landing choose replans when a rocket ${name} on the expected path`, () => {
+    const { W, st, g } = warmRocketLanding(ticks)
+    const actual = { ...st, boost }
+    const replanned = choose(W, actual, g)
+    const fresh = choose(fixture().W, actual, g)
+    assert(replanned && fresh && fresh.r.kind === 'floor' && fresh.r.fd <= 3)
+    assert(Math.abs(replanned.c - fresh.c) < 1e-8, 'a changed thrust forecast must compare the newly available cheaper landing')
+    assert.equal(replanned.yaw, fresh.yaw)
+    assert.equal(replanned.pitch, fresh.pitch)
+    assert.deepEqual(replanned.r.p, fresh.r.p)
+  })
+}
+
+test('unchanged remaining rocket thrust keeps the complete cached landing route', () => {
+  const { W, st, g } = warmRocketLanding(15)
+  assert.equal(st.boost, 9)
+  const cached = choose(W, st, g)
+  const fresh = choose(fixture().W, st, g)
+  assert(cached && fresh && cached.r.kind === 'floor' && cached.r.fd <= 3)
+  assert(cached.work < fresh.work, 'ordinary one-tick countdown still reuses the verified route')
 })

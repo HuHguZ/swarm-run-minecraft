@@ -1,4 +1,5 @@
 import { Vec3 } from 'vec3'
+import { wall } from '../game-clock'
 import { type Point, supportAt } from '../navigation/geometry'
 import { landingDamage } from '../navigation/landing'
 import edges = require('../edges')
@@ -14,7 +15,7 @@ export interface EnemyWindShot {
   thrower: string; fireDelay: number; ticks: number; from: Vec3; aim: Vec3; yaw: number; pitch: number
   velocity: Vec3; burst: Vec3; feet: Vec3; fireTick?: number; arrivalTick?: number
 }
-export interface EnemyWindOptions { arena: WindArena; startTick?: number; maxShots?: number; allies?: WindReport[]; delays?: number[]; reactAfterHit?: boolean; juggle?: boolean }
+export interface EnemyWindOptions { arena: WindArena; startTick?: number; maxShots?: number; allies?: WindReport[]; delays?: number[]; reactAfterHit?: boolean; juggle?: boolean; deadline?: number }
 
 // Blast Protection has a separate attribute from netherite's ordinary knockback resistance; glint hides its level.
 export function windResistance(foe: any): { lo: number; hi: number } {
@@ -259,11 +260,15 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
   if (!Number.isSafeInteger(start) || start < now || start > now + 20) return null
   const baseline = rollout(snapshot, foe, [], arena, 0), shots: EnemyWindShot[] = []
   let nominal = baseline, tried = 0
+  // Бюджет стены (wall.monotonic): план, досчитанный позже, всё равно уйдёт в stale_release — бросаю расчёт, а не досчитываю
+  // до 0.5 с в physicsTick (Kimi AUDIT 27.10: 369 из 736 расчётов — stale_release, p90 251 мс, максимум 494).
+  const late = () => options.deadline !== undefined && wall.monotonic() > options.deadline
   // shortcut: at most three ranked shooters per step and two delays/heights; replan the next observed trajectory instead of searching a battle.
   for (let step = 0; step < Math.min(3, options.maxShots ?? 2, throwers.length); step++) {
     let best: { shot: EnemyWindShot; run: ReturnType<typeof rollout>; score: number } | null = null
     for (const report of throwers.filter(r => !shots.some(s => s.thrower === r.id)).slice(0, 3)) {
       for (const delay of options.delays ?? [0, 2]) for (const height of [.4, 1.6]) {
+        if (late()) { planTrace('late:budget'); return null }
         const shot = enemyWindShot(snapshot, foe, report, nominal.frames, { fireDelay: start - now + delay, height })
         tried++
         if (!shot) { planTrace('shot:none'); continue }
@@ -282,7 +287,7 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
     shots.push(best.shot); nominal = best.run
     if (nominal.out) break
   }
-  if (!shots.length) return null
+  if (!shots.length || late()) return null
   const worst = bounds(snapshot, foe, shots, arena, resistance.hi, team, allyTracks)
   if (!worst) return null
   const outcome = (r: ReturnType<typeof rollout>) => ({ out: r.out, progress: r.progress, ticks: r.ticks, position: r.position, air: r.air })

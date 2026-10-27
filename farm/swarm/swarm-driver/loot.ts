@@ -1,5 +1,6 @@
 // Рой: лут — безопасность сцены, обход сундуков, пополнение, сундук под рукой.
 import { WEAPON, blockCount, distance, cellKey, underArrowFire } from './common'
+import { currentTurn } from './lifecycle'
 import type { SwarmDriverCtx } from './common'
 import { swarmCaches } from './caches'
 
@@ -64,21 +65,23 @@ export function swarmLoot (sw: SwarmDriverCtx) {
       // Полёт выгоднее — садимся рядом; иначе остаются жемчуг и прежний подъём блоками.
       const price = sw.travelCost(b, pick.h), air = price.fly < price.walk
       const up = !air && pick.h.climbFrom !== undefined && pick.h.y - me.y > 3 ? await sw.pearlUp(b, pick.h) : null
+      if (!currentTurn(sw, b, round)) return true
       if (underArrowFire(b, now()) || up?.moved) return true
       if (up) approach = up
       else if (air) approach = detail(await go(b, pick.h, 1, 6, lootArena(b), true).catch(e => ({ why: e.message })))
       else if (pick.h.climbFrom !== undefined && pick.h.y - me.y > 1) {
         b.climbing = true
-        const r = detail(await b.c.call('goto', { ...bounded(pick.h), range: 1, timeoutSeconds: 20, arena: lootArena(b), climb: true, exactY: true, _hunt: true, _climb: true }).catch(e => ({ why: e.message })).finally(() => { b.climbing = false }))
+        const r = detail(await b.c.call('goto', { ...bounded(pick.h), range: 1, timeoutSeconds: 20, arena: lootArena(b), climb: true, exactY: true, _hunt: true, _climb: true }).catch(e => ({ why: e.message })).finally(() => { if (round === sw.generation) b.climbing = false }))
+        if (!currentTurn(sw, b, round)) return true
         log(`🧰 ${b.name}: к сундукам наверху (+${Math.round(pick.h.y - me.y)}, блоков ${blocks}) — ${r.arrived ? 'дошёл' : String(r.why || r.stopped || 'не дошёл').slice(0, 60)}`)
         // Не поднялся — минуту ни к каким верхним (31aj: перебирал 12 сундуков крыши по очереди, 10 отказов за 51 с).
         approach = r
         const rise = (pos[b.name]?.p?.y ?? me.y) - me.y
         if (!r.arrived && rise < 2 && !underArrowFire(b, now())) sw.failed(b, `tourUp:${b.name}`, upSig)
       } else approach = detail(await go(b, pick.h, 2, 6, lootArena(b), true).catch(e => ({ why: e.message })))
-    } finally { delete b.grabbing }
+    } finally { if (round === sw.generation) delete b.grabbing }
     if (underArrowFire(b, now())) return true
-    if (round !== sw.generation || !alive(b.name) || approach.interrupted) return true
+    if (!currentTurn(sw, b, round) || approach.interrupted) return true
     const end = pos[b.name]?.p
     if (end && distance(end, pick.h) < 4 && end.y >= pick.h.y - 1) marks.set(pick.k, { by: b.name, at: now(), done: true })
     // Не приблизился (стоял или ушёл вбок) — место ему плохое на минуту (Codex 15.10: «вбок на 3 бл.» держало приоритет навсегда).
@@ -104,13 +107,16 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     const round = sw.generation
     // Копатель тайников (plan-jobs.cacheJobs: копка дороже лута и боя) — копает, а не обходит сундуки.
     if (arms && !atHand && await caches.cacheTurn(b, board)) return true
+    if (!currentTurn(sw, b, round)) return false
     // Под рукой — без паузы опроса: пауза 4 с от прошлого похода отпускала бота к приказу мимо сундука.
     if (!arms || !atHand && (cooldown.get(`loot:${b.name}`) || 0) > now() || chased(board, pos[b.name]?.p)) return false
     cooldown.set(`loot:${b.name}`, now() + 4000)
     // Броня слабее алмазной — сперва вещи погибших: в куче незерит, а сундуки через полкарты (игра пользователя 25.10: «до конца
     // в железке ходил, а лута вокруг полно»).
     if (!/netherite|diamond/.test(pos[b.name]?.armor?.torso || '') && await scavenge(b, board, round)) return true
+    if (!currentTurn(sw, b, round)) return false
     const chests = detail(await b.c.call('blocks_around', { find: 'chest', seen: true, radius: 16, count: 8 })).found || []
+    if (!currentTurn(sw, b, round)) return false
     if (underArrowFire(b, now())) return false
     for (const at of chests) knownChests.set('chest:' + cellKey(at), at)
     caches.cacheSeen(b, chests)
@@ -129,12 +135,13 @@ export function swarmLoot (sw: SwarmDriverCtx) {
         if (distance(pos[b.name].p, at) > 3) {
           if (!board.renew(claim.id, b.name, claim.claim.token, 45000)) return false
           const approach = await go(b, at, 2, 4, lootArena(b), true).catch(() => null)
-          if (round !== sw.generation || !alive(b.name) || approach?.status === 'interrupted') return false
+          if (!currentTurn(sw, b, round) || approach?.status === 'interrupted') return false
           if (approach?.status !== 'done' || !detail(approach).arrived) { blockedRoutes.set(routeKey, sceneOf(b)); continue }
         }
         // Пока шёл, враг подошёл — не открывать: стоять у сундука под ним (игра пользователя 25.10: «убил, пока он в сундуке был»).
         if (underArrowFire(b, now()) || !lootSafe(b, { x: at.x + .5, y: at.y, z: at.z + .5 }) || !renew(board, b, claim)) return false
         const r = await b.c.call('chest_take', { item: 'all', x: at.x, y: at.y, z: at.z, timeoutSeconds: 8, visibleOnly: true, stay: true })
+        if (!currentTurn(sw, b, round)) return false
         const d = detail(r), moved = Object.values(d.took || d.moved || {}).reduce((s: number, n: any) => s + (Number(n) || 0), 0)
         if (d.contents) caches.cacheOpened(b, at) // открыт своими — копатель его повторно не берёт
         if (Number(moved) > 0 || d.at && d.contents) board.ack(id, b.name, { token: claim.claim.token, confirmed: true })
@@ -164,11 +171,11 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     try {
       if (distance(me, pile.p) > 2) {
         const approach = await go(b, pile.p, 1, 8, lootArena(b), true).catch(() => null)
-        if (round !== sw.generation || !alive(b.name) || approach?.status === 'interrupted') return false
+        if (!currentTurn(sw, b, round) || approach?.status === 'interrupted') return false
         if (approach?.status !== 'done' || !detail(approach).arrived) { sw.failed(b, pileKey(pile)); return false }
       }
       let got = 0
-      for (let k = 0; k < 8 && alive(b.name) && !underArrowFire(b, now()) && !chased(board, pos[b.name]?.p); k++) { const r = detail(await b.c.call('assist', { mode: 'pickup', maxD: 6, arena: lootArena(b) }).catch(() => ({}))); if (!r.ok) break; got++ }
+      for (let k = 0; k < 8 && round === sw.generation && alive(b.name) && !underArrowFire(b, now()) && !chased(board, pos[b.name]?.p); k++) { const r = detail(await b.c.call('assist', { mode: 'pickup', maxD: 6, arena: lootArena(b) }).catch(() => ({}))); if (!currentTurn(sw, b, round)) return false; if (!r.ok) break; got++ }
       if (!got && underArrowFire(b, now())) return false
       if (got && !underArrowFire(b, now())) await b.c.call('armor').catch(() => {})
       log(`🪦 ${b.name}: вещи погибшего у ${cellKey({ x: Math.floor(pile.p.x), y: Math.floor(pile.p.y), z: Math.floor(pile.p.z) })} — ${got ? `подобрал ${got}` : 'пусто'}`)

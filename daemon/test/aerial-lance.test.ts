@@ -184,6 +184,77 @@ test('заход тарана: ракета проверяется с ускор
   }
 })
 
+test('таран: после безопасного отпускания ради союзника заряд начинается заново', async t => {
+  const flight = require('../src/elytra/flight') as typeof import('../src/elytra/flight')
+  const itemuse = require('../src/itemuse') as typeof import('../src/itemuse')
+  const spear = require('../src/spear') as typeof import('../src/spear')
+  const pick = require('../src/pick') as typeof import('../src/pick')
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  let now = 1000
+  t.mock.method(clock, 'now', () => now)
+  const bot: any = new EventEmitter(), item = { name: 'iron_spear', count: 1 }, rocket = { name: 'firework_rocket', count: 8 }
+  bot.username = 'Own'; bot.health = 20
+  bot.entity = { id: 1, position: new Vec3(.5, 106, 14.5), velocity: new Vec3(0, -.1, -1.4), yaw: 0, pitch: 0,
+    elytraFlying: true, onGround: false, metadata: [] }
+  bot.heldItem = item; bot.inventory = { items: () => [item, rocket], slots: [] }
+  bot.inventory.slots[6] = { name: 'elytra' }; bot.inventory.slots[45] = rocket
+  bot._client = new EventEmitter()
+  const packets: any[] = []
+  bot._client.write = (name, data) => packets.push({ name, data, at: now })
+  bot.physics = { simulatePlayer: state => state }
+  bot.getControlState = () => false; bot.setControlState = () => {}
+  bot.activateItem = () => { bot.usingHeldItem = true; bot._client.write('use_item', { hand: 0 }) }
+  bot.deactivateItem = () => { bot.usingHeldItem = false; bot._client.write('block_dig', { status: 5 }) }
+  bot.look = async (yaw, pitch) => { bot.entity.yaw = yaw; bot.entity.pitch = pitch }
+  bot._ndElytra = { driving: 0, fd: 0, startedAt: 0 }; bot.fireworkRocketDuration = 0
+  bot.blockAt = p => ({ name: p.y < 100 ? 'stone' : 'air', boundingBox: p.y < 100 ? 'block' : 'empty' })
+  const enemy: any = { id: 2, type: 'player', username: 'Foe', position: new Vec3(.5, 100, .5), onGround: true, isValid: true }
+  bot.entities = { 1: bot.entity, 2: enemy }; bot._ndSwarmAllies = ['Ally']
+  const use = itemuse.install(bot), ctl = { aborted: false }, stats: any = {}
+  t.mock.method(flight, 'fly', async (_b, _ctl, options: any) => { options.onTick?.(); return { why: 'разбег' } })
+  t.mock.method(flight, 'chestDown', async () => ({ ok: true }))
+  const done = L.lance(bot, ctl, enemy, { passes: 1, telemetryHp: () => null, stats })
+  try {
+    for (let n = 0; n < 20 && !stats.lancePasses; n++) await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(stats.lancePasses, 1)
+    assert.equal(use.cur?.name, 'iron_spear')
+    bot.entity.metadata[8] = 1; bot.emit('entityUpdate', bot.entity)
+    now = 1700
+    bot.emit('physicsTick')
+    assert.equal(use.cur.since, 1000, 'первый заряд уже созрел')
+    bot.usingHeldItem = false // Mineflayer also clears this on foreign entity_status.
+    bot.emit('physicsTick')
+    assert.equal(packets.filter(p => p.name === 'use_item').length, 1, 'подтверждённый receipt переживает чужой entity_status')
+    const eye = pick.eyeOf(bot), dir = sky.lookVec(bot.entity.yaw, bot.entity.pitch)
+    const ally = { id: 3, type: 'player', username: 'Ally', isValid: true, elytraFlying: true, onGround: false,
+      position: eye.offset(dir.x * 3, dir.y * 3 - .3, dir.z * 3), velocity: new Vec3(0, 0, 0) }
+    bot.entities[3] = ally
+    assert.equal(spear.teamSafe(bot), false, 'видимый союзник действительно пересёк луч')
+    bot.emit('physicTick')
+    assert.equal(use.cur, null, 'общий сторож отправил настоящее отпускание')
+    assert.equal(packets.filter(p => p.name === 'block_dig' && p.data.status === 5).length, 1)
+    bot.emit('physicsTick')
+    assert.equal(spear.teamSafe(bot), false)
+    assert.equal(packets.filter(p => p.name === 'use_item').length, 1, 'пока союзник на луче, заряд не перезапускается')
+    delete bot.entities[3]
+    assert.equal(spear.teamSafe(bot), true)
+    now = 1750
+    bot.emit('physicsTick')
+    assert.equal(packets.filter(p => p.name === 'use_item').length, 2, 'после ухода союзника начинаем новый заряд')
+    assert.equal(use.cur?.since, now, 'задержка считается от нового use_item, не от прежнего разбега')
+    const early = stats.lanceEarly || 0
+    now += 50
+    bot.emit('physicsTick')
+    assert.equal(stats.lanceEarly, early + 1, 'после перезапуска реальный план касания ещё раньше новой задержки')
+    assert.equal(packets.filter(p => p.name === 'use_item').length, 2, 'новый заряд не начинается каждый тик')
+  } finally {
+    ctl.aborted = true; bot.entity.elytraFlying = false; bot.entity.onGround = true
+    bot.emit('physicsTick')
+    await done
+  }
+})
+
 test('разбег против копья: бок/тыл и противоположная сторона союзника внутри арены', () => {
   const e: any = { position: { x: 0, y: 100, z: 0 }, yaw: 0 }
   const point = L.lanceFlankPoint({ x: 0, y: 106, z: -12 }, e, 107)

@@ -1,5 +1,6 @@
 // Рой: задачи хода бота — бегство (насест, укрытие, отрыв), отход раненого, стойка (щиты, засада, кемпер), стройка у цели.
 import { blockCount, distance, cellKey } from './common'
+import { currentTurn } from './lifecycle'
 import type { SwarmDriverCtx, TurnCtx } from './common'
 
 export function swarmTurnTasks (sw: SwarmDriverCtx) {
@@ -13,12 +14,13 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       .sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
     if (close && m.p.y > arena.y + 4 && sw.blocked && !sw.blocked(b, `jump:${b.name}`)) {
       const r = detail(await b.c.call('jump_down', { from: close.position, arena }).catch(e => ({ why: e.message })))
-      if (round !== sw.generation || !alive(b.name)) return
+      if (!currentTurn(sw, b, round)) return
       let how = r.ok ? `спрыгнул ${r.drop} бл.${r.mlg ? ' (ведро)' : ''}, хп ${r.hp}` : r.why || r.error || '?'
       if (!r.ok && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 5) {
         const d = Math.hypot(m.p.x - close.position.x, m.p.z - close.position.z) || 1
         const at = bounded({ x: m.p.x + (m.p.x - close.position.x) / d * 14, y: arena.y, z: m.p.z + (m.p.z - close.position.z) / d * 14 })
         const f = detail(await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message })))
+        if (!currentTurn(sw, b, round)) return
         how += `; элитры к полю — ${f.ok ? 'сел' : f.why || f.error || '?'}`
         if (f.ok) r.ok = true
       }
@@ -35,7 +37,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       const d = Math.hypot(m.p.x - chaser.position.x, m.p.z - chaser.position.z) || 1
       const at = bounded({ x: m.p.x + (m.p.x - chaser.position.x) / d * 30, y: arena.y, z: m.p.z + (m.p.z - chaser.position.z) / d * 30 })
       const f = detail(await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message })))
-      if (round !== sw.generation || !alive(b.name)) return
+      if (!currentTurn(sw, b, round)) return
       log(`🪽↩ ${b.name}: ${chaser.id} в ${distance(chaser.position, m.p).toFixed(1)} бл. — улетаю на 30 бл. — ${f.ok ? 'сел' : f.why || f.error || '?'}`)
       if (f.ok) return
       sw.failed(b, `airflee:${b.name}`)
@@ -49,7 +51,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       for (const a of [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2]) {
         const toward = bounded({ x: m.p.x + Math.cos(base + a) * 12, y: m.p.y, z: m.p.z + Math.sin(base + a) * 12 })
         w = detail(await b.c.call('wind_jump', { toward, times: 2 }).catch(e => ({ why: e.message })))
-        if (round !== sw.generation || !alive(b.name)) return
+        if (!currentTurn(sw, b, round)) return
         if (w.used || !/^стена впереди/.test(w.why || '')) break
       }
       log(`🌬↩ ${b.name}: ${chaser.id} в ${distance(chaser.position, m.p).toFixed(1)} бл. — прыжок на ветре прочь — ${w.used ? `зарядов ${w.used}, подъём ${(+w.rise || 0).toFixed(1)}` : w.why || w.error || '?'}`)
@@ -61,13 +63,13 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       .sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
     if (archer) {
       const reply = await b.c.call('take_cover', { from: archer.id, localOnly: true, nearerThan: task.data?.perch ? task.position : undefined, arena })
-      if (round !== sw.generation || !alive(b.name)) return
+      if (!currentTurn(sw, b, round)) return
       if (reply?.status === 'interrupted') { b.swarmFightReply = reply; cooldown.set(`fight:${b.name}`, now() + 500); return }
       if (detail(reply)?.ok) return
       // Прятаться не за что — стенка из блоков на месте, в его сторону.
       if (blockCount(m.inv) >= 2) {
         const wall = detail(await b.c.call('take_cover', { from: archer.id, wall: true, arena }).catch(e => ({ why: e.message })))
-        if (round !== sw.generation || !alive(b.name)) return
+        if (!currentTurn(sw, b, round)) return
         log(`🧱🏹 ${b.name}: от лучника ${archer.id} (${distance(archer.position, m.p).toFixed(0)} бл.) — ${wall.ok ? wall.how : wall.why || wall.error || '?'}`)
         if (wall.ok) return
       }
@@ -85,7 +87,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
         // какому (игра 25.10: 26 попыток к соседним насестам подряд, бот висел).
         if (!sw.blocked(b, `fly:${b.name}`, perch) && !sw.blocked(b, `flyfrom:${b.name}`)) {
           const reply = await b.c.call('fly_to', { at: task.position, timeoutSeconds: 15, arena }), r = detail(reply)
-          if (round !== sw.generation || !alive(b.name)) return
+          if (!currentTurn(sw, b, round)) return
           if (reply?.code === 'RESCUE_BUSY') return
           // Ответ уже знает, где закончен полёт; округлённый старый опрос ещё может помнить место взлёта.
           const actual = r.at || reply?.state?.pos
@@ -133,7 +135,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     if (!atMe && rangedAdvantage(b)) { await b.c.call('fight', { target: task.data.target, targets: enemies.map(e => e.id), allowPlayer: true, allowRanged: true, timeoutSeconds: 3, retreatAtHealth: 8, arena }); return }
     // Погоня (kite): отрыв по открытому без точки (smartFlee сам обходит тупики), до 22 бл.; к своим — к ним.
     const outcome = detail(await b.c.call('flee', { from: enemies.map(e => e.id), toward: [...(task.data?.kite && !task.data?.regroup ? [] : [task.position]), ...context.members.filter(a => a.id !== b.name && a.health > 0).map(a => a.position)], timeoutSeconds: 3, safeDist: task.data?.kite ? 22 : 14, reason: task.data?.reason, arena }))
-    if (round !== sw.generation || !alive(b.name)) return
+    if (!currentTurn(sw, b, round)) return
     if (outcome.cornered && (atMe || task.data?.target)) {
       const target = atMe?.id || task.data.target
       log(`⚔ ${b.name}: физически зажат, отвечаю ${target}`)
@@ -154,20 +156,30 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       if (task.data?.hide || task.data?.regroup) { await go(b, task.position, 2); return }
       // Готовится (лут, позиция) — пока это его дело: паника не рвёт его, пока враги дальше 14 и без луков (safety.ts).
       b.swarmPreparing = true
-      if (!await loot(b, board) && !await positionStep(b, context, m.inv?.bow ? 'ranged' : 'escape')) await search(b, context, enemies)
+      const looted = await loot(b, board)
+      if (!currentTurn(sw, b, round) || looted) return
+      const positioned = await positionStep(b, context, m.inv?.bow ? 'ranged' : 'escape')
+      if (!currentTurn(sw, b, round) || positioned) return
+      await search(b, context, enemies)
     }
     return
   }
 
   async function turnRecover (tc: TurnCtx) {
-    const { b, context, task, m, enemies, contact } = tc
+    const { b, context, task, round, m, enemies, contact } = tc
     if (contact) {
       const out = detail(await b.c.call('flee', { from: enemies.map(e => e.id), timeoutSeconds: 3, safeDist: 14, arena }))
+      if (!currentTurn(sw, b, round)) return
       if (out.mode !== 'оторвался') return
     }
     // В кольце и «стаде» место раненого — середина строя: поиск укрытия подальше уводил его из-за щитов (ревью 13.10).
     else if (['ring', 'weak-center'].includes(task.data?.doctrine)) { if (distance(m.p, task.position) > 1) await go(b, task.position, .6) }
-    else if (!await positionStep(b, context, 'recover') && distance(m.p, task.position) > 3) await go(b, task.position)
+    else {
+      const positioned = await positionStep(b, context, 'recover')
+      if (!currentTurn(sw, b, round)) return
+      if (!positioned && distance(m.p, task.position) > 3) await go(b, task.position)
+    }
+    if (!currentTurn(sw, b, round)) return
     await b.c.call('eat', { timeoutSeconds: 4 }).catch(() => {})
     return
   }
@@ -179,6 +191,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     if (distance(m.p, task.position) > range + .4) {
       const before = distance(m.p, task.position)
       const walked = detail(await go(b, task.position, range).catch(e => ({ why: e.message })))
+      if (!currentTurn(sw, b, round)) return
       if (task.data.camp && !walked.arrived && distance(pos[b.name]?.p || m.p, task.position) > before - 1) sw.siteFailed(b, 'camp:' + task.data.camp)
       return
     }
@@ -186,7 +199,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     // Не замуровался — снова, когда пришли блоки или он на другом месте (retry.ts), а не через 10 с.
     if (task.data.camp && !boxed.has(`${b.name}:${task.data.camp}`) && !sw.blocked(b, `box:${b.name}`, String(blockCount(m.inv))) && blockCount(m.inv) >= 10) {
       const r = detail(await b.c.call('box_in', {}).catch(e => ({ why: e.message })))
-      if (round !== sw.generation || !alive(b.name)) return
+      if (!currentTurn(sw, b, round)) return
       const tries = (boxTries.get(`${b.name}:${task.data.camp}`) || 0) + 1; boxTries.set(`${b.name}:${task.data.camp}`, tries)
       if (r.sealed || tries >= 2) boxed.add(`${b.name}:${task.data.camp}`); else sw.failed(b, `box:${b.name}`, String(blockCount(pos[b.name]?.inv || m.inv)))
       if (r.sealed) b.boxedCamp = task.data.camp
@@ -195,13 +208,13 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     }
     const held = await execute(b, 'swarm_hold', { camp: !!b.boxedCamp, ...(task.data.hold === 'shield' ? { shield: true, face: task.data.face, timeoutSeconds: 4 } : { sneak: true, timeoutSeconds: 2 }),
       enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), arena })
-    if (round !== sw.generation || !alive(b.name)) return
+    if (!currentTurn(sw, b, round)) return
     await reactCamp(b, held)
     return
   }
 
   async function turnBuildSite (tc: TurnCtx) {
-    const { b, context, task, m, enemies } = tc
+    const { b, context, task, round, m, enemies } = tc
     const enemy = enemies.find(e => e.id === task.data.target), o = task.data.origin
     // Кокон — пока цель в своей клетке; отсечка — пока цель ещё перед стеной (она стоит на её пути, а не вокруг неё).
     const ready = enemy && now() - enemy.seenAt <= 1000 && (task.data.buildKind === 'cutoff'
@@ -212,6 +225,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     // Цель в клетке кокона заперта: её тычок сквозь щель — цена, а не повод бросать кладку (swarm_work contained).
     const contained = task.data.buildKind === 'cocoon' && ready ? [task.data.target] : []
     if (ready && await buildStep(b, context, { kind: task.data.buildKind, origin: o, direction: task.data.direction, contained })) return
+    if (!currentTurn(sw, b, round)) return
     // Класть пока нечего (клетки у другого, крыша ждёт стен) — стоять у стройки, а не бродить. Но не в коробке кокона:
     // строитель, доложивший свои клетки, стоял в щели и закрывал телом последнюю клетку крыши (лаборатория 14.10, 22/23).
     const site = { x: o.x + .5, y: o.y, z: o.z + .5 }

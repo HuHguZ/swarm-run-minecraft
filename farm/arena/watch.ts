@@ -208,10 +208,16 @@ export function installSight (ctx: ArenaContext) {
     // Замер 14.10: отрезки по поверхности — с песка на крышу за 58 с и 29 блоков без кирки; по прямой — внутрь засыпки рядов.
     surfaceY = (x, z, top) => { const rx = Math.floor(x - X), rz = Math.floor(z - Z); for (let y = Math.floor(top - Y); y >= -2; y--) if (solid(rx, y - 1, rz) && !solid(rx, y, rz) && !solid(rx, y + 1, rz)) return Y + y; return null }
   }
+  let announcedAt = -Infinity
   ctx.swarmDriver = (require('../swarm/swarm-driver') as typeof import('../swarm/swarm-driver')).createSwarmDriver({ bots, pos, alive: ctx.alive, arms, arena, hideouts, chestTops, perches: ctx.perches, drops: () => Object.values(ctx.deathAt), aggressive: SOLO && process.env.SWARM_AGGRO !== '0',
     humanNames: () => ctx.humanNames || [],
     sandSpot: arms && L?.map === 'colosseum' ? { x: X + 0.5, y: Y, z: Z + 10.5 } : null, edgeOf, digSites, surfaceY, ladderSites,
-    announce: SOLO ? (text, color) => rcon(i, `tellraw @a ${JSON.stringify([{ text: '[рой] ', color: 'dark_aqua' }, { text, color }])}`) : null,
+    announce: SOLO || process.env.ARMS_CHAT === '1' ? (text, color) => {
+      const at = Date.now()
+      if (at - announcedAt < 20000) return
+      announcedAt = at
+      return rcon(i, `tellraw @a ${JSON.stringify([{ text: '[рой] ', color: 'dark_aqua' }, { text, color }])}`)
+    } : null,
     home: b => { if (arms) return ctx.armsHome(b, 0); const [x, z] = ctx.home(b, 0).split(/\s+/).map(Number); return { x, y: Y, z } }, log,
     hostile: (b, name) => ctx.hostile(b, name) && (!names.includes(name) || !ctx.deadNow.has(name) && !ctx.out.has(name))
   })

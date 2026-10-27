@@ -192,20 +192,20 @@ export function swarmTeam (sw: SwarmDriverCtx) {
         ladderSites: process.env.ARENA_LADDERS === '0' ? [] : [...walls.values()].filter(t => !t.done && sw.siteOpen('ladder:' + t.key)),
         digSites: digSites ? p => digSites(p).filter(s => sw.siteOpen('hole:' + cellKey(s)) && !holes.some(h => h.x === s.x && h.z === s.z && h.y >= s.y - (s.blocks?.length ?? 2) + 1 && (h.bottomY ?? h.y) <= s.y)) : undefined, campSpots: onslaughtNow ? hideouts.filter(s => sw.siteOpen('camp:' + cellKey(s), board.enemies())) : undefined }))
       const chosen = board.doctrineState()?.doctrine, fight = board.teamFight
-      if (chosen && chosen !== was) { log(`🧭 ${team}: приём ${was || '—'} → ${chosen}`); say2(`🧭 приём: ${DOCTRINE_RU[chosen] || chosen}`, 'aqua', true) }
-      // Штурм и отбой — в журнал и в чат (пользователь 14.10: «как рой показывает интеллект — не вижу»).
+      if (chosen && chosen !== was) { log(`🧭 ${team}: приём ${was || '—'} → ${chosen}`); announceTeam(`🧭 приём: ${DOCTRINE_RU[chosen] || chosen}`, 'aqua') }
+      // В чат игры проходят только командные события; арена ограничивает их общей частотой.
       const short = n => String(n).replace(/^NeuroFarm/, '')
       // Сперва итог старого штурма, потом старт нового: в одном плане старый истекает и сразу голосуют за новый — в чате
       // «окончен» шло следом за «ШТУРМ!» и читалось как конец только что начатого (разбор соседней сессии, 14.10).
       if (board.assaultEnded && board.assaultEnded.at !== e0) {
         const e = board.assaultEnded
         const text = e.why === 'проигрываем' ? `⚠ штурм на ${e.target} провален за ${e.seconds} с (потеряли ${e.lost}) — меняем тактику: отход в колизей, лут и лечение, новый штурм — когда станем сильнее` : `штурм на ${e.target} окончен: ${e.why === 'время вышло' ? `${e.seconds} с вышли` : e.why}, потеряли ${e.lost}`
-        log(`☢ ${team}: ${text}`); say2(text, e.why === 'проигрываем' ? 'yellow' : 'gray')
+        log(`☢ ${team}: ${text}`); announceTeam(text, e.why === 'проигрываем' ? 'yellow' : 'gray')
       }
       if (board.assault && board.assault.since !== a0) {
         const a = board.assault
         log(`☢ ${team}: ШТУРМ на ${a.target} — подтвердили ${a.voters.length}: ${a.voters.map(short).join(', ')}`)
-        say2(`☢ ШТУРМ на ${a.target}! подтвердили ${a.voters.length}: ${a.voters.slice(0, 6).map(short).join(', ')}${a.voters.length > 6 ? '…' : ''} — все до конца`, 'red')
+        announceTeam(`☢ ШТУРМ на ${a.target}! подтвердили ${a.voters.length}: ${a.voters.slice(0, 6).map(short).join(', ')}${a.voters.length > 6 ? '…' : ''} — все до конца`, 'red')
       }
       if (fight && fight.engage !== held) log(`⚖ ${team}: бой ${fight.engage ? 'держим' : 'не держим'} — ${fight.ours} на ${fight.theirs}, потери ≈ ${fight.ourLoss.toFixed(1)} : ${fight.theirLoss.toFixed(1)}${fight.wipedUs && !fight.wipedThem ? ', нас выносят' : ''}`)
       const deliveryFoes = board.enemies(), occupied = new Set(board.tasks().filter(t => t.status === 'claimed').flatMap(t => [t.claim!.owner, ...(t.participants || [])]))
@@ -244,17 +244,20 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     }
     return { board, members, member: members.find(m => m.id === b.name), task: planned.get(team)?.get(b.name) }
   }
-  // Голос роя в чате игры (натиск): приёмы — не чаще раза в 5 с, штурм — всегда.
+  // Поштучная связь бойцов остаётся в журнале, независимо от режима чата арены.
   const DOCTRINE_RU: Record<string, string> = { hunt: 'загон — строители режут путь, бойцы давят', wave: 'волна — ветром сбивают с высоты', buffalo: 'бизон — центр давит, фланги заходят сбоку', fountain: 'фонтан — рассыпаться от взрывов и сомкнуться' }
-  const say2 = (text: string, color: string, throttled = false) => { if (!announce || throttled && now() - sw.saidAt < 5000) return; sw.saidAt = now(); Promise.resolve(announce(text, color)).catch(() => {}) }
+  const announceTeam = (text: string, color: string) => { if (announce) Promise.resolve(announce(text, color)).catch(() => {}) }
+  const say2 = (text: string, _color: string, _throttled = false) => { log(`📻 ${text}`) }
   const say = (b, task) => {
     // Сброс и удар с взлёта — в ключе строки: без них «🫸сброс» печатался только при смене дела или цели (стенд 21.10: шесть
     // строк за шесть раундов — по ним решили, что сброс не включается).
-    const identity = `${task.kind}:${task.data?.target || task.data?.ally || task.data?.blueprint || ''}:${task.data?.doctrine || ''}:${task.data?.camp || task.data?.dig || task.data?.gather || task.data?.ladder || ''}:${task.data?.shove ? 'shove' : ''}:${task.data?.smash ? 'smash' : ''}:${task.data?.axe ? 'axe' : ''}`
+    const identity = `${task.kind}:${task.data?.target || task.data?.ally || task.data?.blueprint || ''}:${task.data?.doctrine || ''}:${task.data?.camp || task.data?.dig || task.data?.gather || task.data?.ladder || ''}:${task.data?.shove ? 'shove' : ''}:${task.data?.smash ? 'smash' : ''}:${task.data?.axe ? 'axe' : ''}:${task.data?.cover || ''}`
     if (b.swarmSaid === identity) return
     b.swarmSaid = identity
     if (task.data?.doctrine) b.swarmDoctrine = task.data.doctrine
-    log(`🐜 ${b.name} [${task.data?.role || ''}/${task.data?.doctrine || ''}]: ${task.kind}${task.data?.target ? ' → ' + task.data.target : ''}${task.data?.ally ? ' для ' + task.data.ally : ''}${task.data?.shove ? ' 🫸сброс' : ''}${task.kind === 'fight' ? ['finishing', 'cover', 'ambush', 'turned', 'fountain', 'cordon', 'assault', 'smash', 'axe'].filter(k => task.data?.[k]).map(k => ' #' + k).join('') : ''}${(task.data?.panic || task.data?.camp || task.data?.dig || task.data?.gather || task.data?.ladder || task.kind === 'loot') && task.data.reason ? ` (${task.data.reason})` : ''}`)
+    log(`🐜 ${b.name} [${task.data?.role || ''}/${task.data?.doctrine || ''}]: ${task.kind}${task.data?.target ? ' → ' + task.data.target : ''}${task.data?.ally || task.data?.cover ? ' для ' + (task.data.ally || task.data.cover) : ''}${task.data?.shove ? ' 🫸сброс' : ''}${task.kind === 'fight' ? ['finishing', 'cover', 'ambush', 'turned', 'fountain', 'cordon', 'assault', 'smash', 'axe'].filter(k => task.data?.[k]).map(k => ' #' + k).join('') : ''}${(task.data?.panic || task.data?.camp || task.data?.dig || task.data?.gather || task.data?.ladder || task.kind === 'loot') && task.data.reason ? ` (${task.data.reason})` : ''}`)
+    if ((task.kind === 'fight' || task.kind === 'goto') && task.data?.target && !task.data?.search)
+      say2(`${b.name} — цель ${task.data.target}; иду${task.data.cover ? ' прикрыть ' + task.data.cover : ''}`, b.team === 'red' ? 'red' : 'aqua', true)
   }
   // Натиск: против людей (соло) или по оценке плана команды — сильное меньшинство (race.ts strongFew).
   const onslaught = b => aggressive || !!pvpState(boardOf(b)).strongFew

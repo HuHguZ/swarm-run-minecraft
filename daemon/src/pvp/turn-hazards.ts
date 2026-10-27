@@ -13,6 +13,9 @@ import { findItem } from './potions'
 import { HIT_REACH, TICK_MS, cooldownMs } from './rules'
 import { escapeBurn, lavaExit } from './lava-exit'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+import { webExitPlan } from '../navigation/web-exit'
+import { executePlan } from '../navigation/parkour/execute'
+import { settledLanding } from '../navigation/parkour/model'
 
 // Ямы и опасности рядом, паутина на нём, перезарядка, успокоился ли он.
 export function terrainTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -90,6 +93,20 @@ export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
     // Вода течёт раз в 5 тиков; цена включает спуск от источника до нижней паутины.
     opts.push({ how: 'water', item: water, cell, busyMs: 2 * TICK_MS, freeMs: (2 + 5 * (cell.y - Math.min(...webCells.map(c => c.y)))) * TICK_MS })
   }
+  const alternativeMs = Math.min(...opts.map(o => o.freeMs)), wasBlocking = guard?.blocking?.()
+  let walkBusyMs = 0, walkAt = 0
+  const walkCtl = { onAbort: ctx.ctl.onAbort, get aborted() {
+    return ctx.ctl.aborted || (bot.health ?? hp) < hp || !!(ctx.prof.player && mc.threat()) ||
+      !!(guard?.stats?.worn && walkBusyMs && loss(Math.max(0, walkBusyMs - (gameClock.now() - walkAt))) >= (bot.health ?? hp))
+  } }
+  const forecastWalk = async () => {
+    const previousAim = ctx.aim
+    ctx.aim = 'free'
+    try { return await webExitPlan(bot, walkCtl, alternativeMs) } finally { ctx.aim = previousAim }
+  }
+  const walk = await forecastWalk()
+  if (ctx.ctl.aborted || (bot.health ?? hp) < hp) return NEXT
+  if (walk && !walkCtl.aborted) opts.push({ how: 'walk', walk, busyMs: walk.ticks * TICK_MS, freeMs: walk.ticks * TICK_MS })
   const inputs = [webCells.map(c => [c, bot.blockAt(c)?.stateId]), bot.entity.onGround, bot.entity.isInWater, routeInputs()].join('|')
   const available = opts.filter(o => !(ctx.failedCutWeb?.inputs === inputs && ctx.failedCutWeb.how === o.how && gameClock.now() - ctx.failedCutWeb.at < o.busyMs))
   const score = o => o.freeMs * (1 + loss(o.freeMs) / Math.max(1, hp))
@@ -112,6 +129,20 @@ export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
     return NEXT
   }
   if (!plan) { await ctx.sleep(TICK_MS); return NEXT }
+  if (plan.how === 'walk') {
+    const path = wasBlocking === guard?.blocking?.() ? plan.walk : await forecastWalk()
+    if (!path || walkCtl.aborted) return NEXT
+    walkBusyMs = path.ticks * TICK_MS; walkAt = gameClock.now()
+    ctx.aim = 'free'
+    try {
+      const out = await executePlan(bot, walkCtl, { ...path, arena: ctx.arena }, state =>
+        !hazards.webCells(bot).length && settledLanding(bot, state, path.target, .12))
+      turn.meInWeb = hazards.webCells(bot).length > 0
+      ctx.failedCutWeb = turn.meInWeb ? { inputs, how: 'walk', at: gameClock.now(), why: out.why || 'web_not_left' } : null
+      if (out.ok && !turn.meInWeb) used('вышел из паутины шагом')
+    } finally { ctx.aim = 'target'; await holdWeapon() }
+    return NEXT
+  }
   if (guard) await guard.raise(false)
   let why = null
   ctx.aim = 'free'
