@@ -25,7 +25,9 @@ const WS = process.env.ND_WS || 'ws://127.0.0.1:8801'
 const PLAYER = process.env.MC_USERNAME || 'NeuroFarm1'
 const LOG = process.env.ND_SERVER_LOG || ''
 const OUT = process.env.LAB_OUT || path.join(REPO_ROOT, 'daemon/lab-end.jsonl')
-const UNTIL = process.env.UNTIL === 'dragon' ? 'dragon' : 'end'
+// UNTIL=room (end2 sr27): до комнаты портала (место «портал в Край» в памяти); START=sh — старт у лестницы крепости (постановка:
+// /locate = куда ведёт око, тело на поверхности над углом чанка старта +4) — мерить поиск комнаты, а не путь к крепости.
+const UNTIL = process.env.UNTIL === 'dragon' ? 'dragon' : process.env.UNTIL === 'room' ? 'room' : 'end'
 const MINUTES = Number(process.env.MINUTES || (UNTIL === 'dragon' ? 60 : 40))
 const DEATHS_MAX = Number(process.env.DEATHS_MAX || 1)
 const CAMPAIGN = process.env.CAMPAIGN || 'campaign.js'
@@ -96,6 +98,39 @@ async function main () {
   let pr = null
   let portalOk = false
   const p0 = (await status()).pos || { x: 0, z: 0 }
+  // PORTAL_FILL=1 (умолч., sr27-end 27.10): портал «после Ада» — постановкой: рама командами на расчищенной площадке у спавна,
+  // проход туда и обратно — телепортом в раму (портал прибытия в Аду ставит сам сервер, как после настоящего выхода). Прежняя
+  // постройка телом (PORTAL_FILL=0) в 8 из 11 прогонов давала «рама горит, но войти/выйти не вышло» — тело шло к крепости
+  // пешком 1300+ бл., и замер мерил не то.
+  if (process.env.PORTAL_FILL !== '0') {
+    const x0 = Math.floor(p0.x) + 3; const y0 = Math.floor(p0.y ?? 70); const z0 = Math.floor(p0.z)
+    // Вода/лава у площадки — камнем (спавн у воды: расчищенный воздух заливало, q-A −9170 «slain by Drowned» на 3-й мин).
+    for (const fl of ['water', 'lava']) await kit.cmd(`/fill ${x0 - 5} ${y0 - 2} ${z0 - 5} ${x0 + 8} ${y0 + 6} ${z0 + 5} minecraft:stone replace minecraft:${fl}`)
+    await kit.cmd(`/fill ${x0 - 3} ${y0 - 1} ${z0 - 3} ${x0 + 6} ${y0 - 1} ${z0 + 3} minecraft:stone`)
+    await kit.cmd(`/fill ${x0 - 3} ${y0} ${z0 - 3} ${x0 + 6} ${y0 + 5} ${z0 + 3} minecraft:air`)
+    await kit.cmd(`/fill ${x0} ${y0} ${z0} ${x0 + 3} ${y0 + 4} ${z0} minecraft:obsidian`)
+    await kit.cmd(`/fill ${x0 + 1} ${y0 + 1} ${z0} ${x0 + 2} ${y0 + 3} ${z0} minecraft:air`)
+    await kit.cmd(`/setblock ${x0 + 1} ${y0 + 1} ${z0} minecraft:fire`)
+    await sleep(1000)
+    const lit = /passed/i.test(rcon(`execute in minecraft:overworld if block ${x0 + 1} ${y0 + 1} ${z0} minecraft:nether_portal`))
+    if (lit) {
+      await kit.cmd('/gamemode survival')
+      // Проход — самим телом (портал «портал»/«портал (ад)» ложится в память, как у вышедшего из Ада); не вышло — телепортом в раму.
+      await kit.cmd(`/tp @s ${x0 + 1.5} ${y0} ${z0 - 1.5}`)
+      await sleep(1000)
+      await call('portal', { mode: 'enter', timeoutSeconds: 60 }).catch(() => null)
+      let inNether = (await status()).dimension === 'the_nether'
+      if (!inNether) {
+        await kit.cmd(`/tp @s ${x0 + 1.5} ${y0 + 1} ${z0 + 0.5}`)
+        try { await kit.ensureWorld('the_nether', { seconds: 30 }); inNether = true } catch {}
+      }
+      if (inNether) await call('portal', { mode: 'enter', timeoutSeconds: 60 }).catch(() => null)
+      if ((await status()).dimension !== 'overworld') await kit.ensureWorld('overworld', { tp: `${x0 + 1.5} ${y0} ${z0 - 1.5}`, seconds: 30 })
+      await kit.cmd('/gamemode creative')
+      portalOk = inNether
+      pr = { detail: { note: inNether ? 'рама горит (постановка)' : undefined, stopped: inNether ? undefined : 'в Ад телепортом в раму не перешёл' } }
+    } else pr = { detail: { stopped: 'рама командами не зажглась' } }
+  }
   for (let k = 0; k < 4 && !portalOk; k++) {
     if (k) {
       await kit.cmd(`/spreadplayers ${Math.round(p0.x + 12 * Math.sin(k * 2.1))} ${Math.round(p0.z + 12 * Math.cos(k * 2.1))} 0 4 false @s`)
@@ -166,6 +201,15 @@ async function main () {
   await kit.cmd('/execute in minecraft:overworld run gamerule advance_time true')
   await kit.cmd('/time set 1000')
   const truth = (() => { const m = /\[(-?\d+), [^,]+, (-?\d+)\] \((\d+) blocks/.exec(rcon(`execute in minecraft:overworld positioned ${start.x} 70 ${start.z} run locate structure minecraft:stronghold`)); return m ? { x: +m[1], z: +m[2], dist: +m[3] } : null })()
+  if (process.env.START === 'sh' && truth) {
+    await kit.cmd('/gamemode creative')
+    await kit.cmd(`/spreadplayers ${truth.x + 4} ${truth.z + 4} 0 3 false @s`)
+    await sleep(4000)
+    await kit.cmd('/spawnpoint @s')
+    await kit.cmd('/gamemode survival')
+    await kit.cmd('/time set 1000')
+    await sleep(1000)
+  }
   const inv0 = (await status()).inventory || {}
   const eyes0 = process.env.EYES_RAW === '1' ? eyes : cnt(inv0, /^ender_eye$/)
 
@@ -198,7 +242,7 @@ async function main () {
       const rc = await call('recall', { lines: 1 }).catch(() => null)
       const pl = rc?.detail?.state?.places || {}
       if (pl['крепость']) mark('stronghold')
-      if (pl['портал в Край']) mark('room')
+      if (pl['портал в Край']) { mark('room'); if (UNTIL === 'room') { stoppedBy = 'комната'; break } }
       if (s.dimension === 'the_end') {
         if (marks.end == null) rcon('execute in minecraft:the_end run forceload add -16 -16 15 15') // центр острова — для проверки дракона и после ухода тела
         mark('end')
@@ -223,7 +267,7 @@ async function main () {
   const s = await status()
   const deaths = deathLines(size)
   const ticks = clock0 && clock1 ? clock1.ticks - clock0.ticks : null
-  const ok = deaths.length === 0 && (UNTIL === 'dragon' ? marks.dragon != null : marks.end != null)
+  const ok = deaths.length === 0 && (UNTIL === 'dragon' ? marks.dragon != null : UNTIL === 'room' ? marks.room != null : marks.end != null)
   const rec = {
     at: new Date().toISOString(), scene: 'try-lab-end', until: UNTIL, seed: seedOf(), mapSh: MAP_SH, blind: !MAP_SH, ok, stoppedBy,
     minutes: Math.round((gameClock.now() - tc) / 6000) / 10, marks, endMin: marks.end ?? null, dragonMin: marks.dragon ?? null,

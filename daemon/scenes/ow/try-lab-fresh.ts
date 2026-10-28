@@ -156,7 +156,20 @@ async function scene () {
     await kit.cmd(`/setblock ~ ${START_Y - 1} ~ minecraft:stone`)
     await kit.cmd(`/tp @s ~ ${START_Y} ~`)
     await sleep(2000)
+    // ROOM=1 (ow 27.10, скамья боя): тёмная «пещера» 11×4×11 вокруг кармана — место для боя и для отхода/коробки.
+    if (process.env.ROOM === '1') {
+      await kit.cmd('/fill ~-5 ~ ~-5 ~5 ~3 ~5 air')
+      await kit.cmd('/fill ~-5 ~-1 ~-5 ~5 ~-1 ~5 stone')
+    }
   }
+  // SUMMON="skeleton 8;zombie 6" — мобы на расстоянии по оси x от тела (скамья боя); HEALTH=12 — хп тела до старта (урон generic).
+  for (const g of (process.env.SUMMON || '').split(';').map(x => x.trim()).filter(Boolean)) {
+    const [name, dist] = g.split(/\s+/)
+    await kit.cmd(`/summon minecraft:${name} ~${Number(dist) || 6} ~ ~`)
+  }
+  // HUNGER=1 — голод на секунду (сытость ~15): без естественного лечения, как ночью в сериях.
+  if (process.env.HUNGER === '1') { await kit.cmd('/effect give @s minecraft:hunger 1 200'); await sleep(1500) }
+  if (process.env.HEALTH) await kit.cmd(`/damage @s ${Math.max(0, 20 - Number(process.env.HEALTH))} minecraft:generic`)
 }
 
 async function status () {
@@ -174,7 +187,8 @@ async function main () {
   // команды — повторить, а не терять слот партии (ow-P2/P4/P5 02.10: по 1–2 слота на партию).
   for (let k = 0; ; k++) {
     try { await farmBootstrap(call, WS, PLAYER); await call('stop'); break } catch (e) {
-      if (k >= 3 || !/Timeout waiting for|chunks/.test(String(e.message))) throw e
+      // sr27 full r0: шесть сцен разом под нагрузкой фермы — демон не ответил на peek за 12 с (бутстрап сам отключился).
+      if (k >= 3 || !/Timeout waiting for|chunks|readiness RPC timed out|collision columns/.test(String(e.message))) throw e
       await sleep(8000)
     }
   }
@@ -244,6 +258,7 @@ async function main () {
     at: new Date().toISOString(),
     seed: seedOf(),
     until: UNTIL,
+    ...(process.env.SNAP ? { snap: process.env.SNAP } : {} as Record<string, any>),
     ...(KIT.length ? { kit: KIT.join(';') } : {} as Record<string, any>),
     ...(STAGES ? { stages: STAGES } : {} as Record<string, any>),
     ...(START_Y !== null ? { startY: START_Y } : {} as Record<string, any>),

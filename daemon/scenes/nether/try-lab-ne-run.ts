@@ -45,6 +45,7 @@ const DEATHS_MAX = Number(process.env.DEATHS_MAX || (KEEPINV === 'false' ? 1 : 5
 const CAMPAIGN = process.env.CAMPAIGN || 'campaign.js'
 const KIT_NAME = process.env.KIT || 'std'
 const ENDERMEN = process.env.ENDERMEN ?? '1'
+const PEARLS_NEED = Number(process.env.PEARLS || 12)
 let CENV: Record<string, any> = {} as Record<string, any>
 try { CENV = JSON.parse(process.env.CENV || '{}') } catch {}
 
@@ -108,6 +109,13 @@ const KITS = {
   postbastionsh: ['water_bucket', 'flint_and_steel', 'stone_pickaxe 2', 'stone_axe', 'stone_sword', 'cobblestone 107', 'stick 11', 'cooked_mutton 8',
     'crafting_table', 'golden_boots', 'shield', 'potion[potion_contents={potion:"minecraft:fire_resistance"}] 1'],
   // contractarmor — contractgold + железные шлем и нагрудник (13 слитков верхнего мира), без FR: бой у спавнера в броне забега (blz 21.10).
+  // entry / entryi — настоящий набор входа в Ад полного прохода (бриф sr27, поток bast 27.10): без золота, брони, щита и FR.
+  // Каменных кирок 2 — ворота сцены netherToolsReady (260 взмахов); третья из булыжника и палок набора — дело кампании.
+  // entryi — то же с железной киркой вместо одной каменной (ND_OW_KIT_PICK в умолчаниях: железная кирка при входе 6/6).
+  entry: ['water_bucket', 'flint_and_steel', 'stone_pickaxe 2', 'stone_axe', 'stone_sword', 'cobblestone 107', 'stick 11', 'cooked_mutton 4',
+    'crafting_table'],
+  entryi: ['water_bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'stone_axe', 'stone_sword', 'cobblestone 107', 'stick 11',
+    'cooked_mutton 4', 'crafting_table'],
   contractarmor: ['bucket', 'flint_and_steel', 'iron_pickaxe', 'stone_pickaxe', 'iron_sword', 'shield', 'golden_boots',
     'iron_helmet', 'iron_chestplate', 'cooked_mutton 8', 'cobblestone 64', 'crafting_table']
 }
@@ -551,6 +559,7 @@ async function nrWatch (nr: NeRun) {
       if (nr.best.rods >= 7) nr.mark('rods7')
       if (nr.best.rods >= Math.ceil(nr.eyesNeed() / 2)) nr.mark('rodsNeed')
       if (nr.best.pearls >= 10) nr.mark('pearls10')
+      if (process.env.UNTIL === 'pearls' && nr.best.pearls >= PEARLS_NEED) { nr.mark('pearlsNeed'); nr.stoppedBy = 'жемчуг набран'; break }
       if (nr.best.eyes >= 10) nr.mark('eyes10')
       if (nr.best.fireResistancePotions > 0 || nr.best.fireResistanceObserved) nr.mark('fireResistance')
       if (s.dimension && s.dimension !== nr.lastDim) { nr.mark(nr.lastDim + '->' + s.dimension); nr.lastDim = s.dimension }
@@ -604,6 +613,8 @@ async function nrFinish (nr: NeRun) {
   const passFinal = netherPass({ dimension: s.dimension || null, health: s.health ?? 0, deaths: deaths.length, inventory: inv, eyesNeed: nr.eyesNeed() })
   const passNow = nr.netherPassAt !== null && deaths.length === 0 && (!nr.UNTIL_NETHER || passFinal)
   if (nr.UNTIL_NETHER) nr.ok = passNow
+  // UNTIL=pearls (поток bast 27.10) — «вход в Ад → ≥ PEARLS жемчуга (или очей) живым», где бы ни был: ни одной смерти, тело живо.
+  if (process.env.UNTIL === 'pearls') nr.ok = deaths.length === 0 && (s.health ?? 0) > 0 && nr.best.pearls >= PEARLS_NEED
   if (process.env.UNTIL === 'rods') nr.ok = deaths.length === 0 && (s.health ?? 0) > 0 && s.dimension === 'overworld' &&
     cnt(inv, /^blaze_rod$/) + Math.floor(cnt(inv, /^blaze_powder$/) / 2) >= Math.ceil(nr.eyesNeed() / 2)
   if (deaths.length) nr.stoppedBy = `смертей ${deaths.length}`

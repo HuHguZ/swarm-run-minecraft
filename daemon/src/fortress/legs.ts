@@ -20,7 +20,10 @@ async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = nu
   // дальше — к крепости — поверху: штрек над лавовым морем застревал, g7-6-1) и при
   // видимых брутах, хоглинах, гастах.
   // cover — отрезок явно штреком (вызывающий знает причину).
-  const coverNeeded = () => cover || !(require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).goldWorn(bot) || bastionNear(session, bot.entity.position, 48) ||
+  // ND_GRAPH2_OPEN_WALK=1 (поток graph2 sr27, выкл.): «нет золотой вещи» само по себе — не причина штрека. Пиглины бьют только тех,
+  // кого видят (сенсор с лучом, follow 16): штрек — когда они на виду в 24 или слышны ближе 16 (piglinsAround), иначе отрезок ногами,
+  // как у спидраннера. Закрытый штрек — 2.3–2.8 взмаха и 1.1–1.4 блока заплат на блок хода (журналы демонов sr27), кирки входа — на 100–150 бл.
+  const coverNeeded = () => cover || (!(require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).goldWorn(bot) && (!openWalk() || piglinsAround(bot) || fortressNear(session) || piglinLand(bot))) || bastionNear(session, bot.entity.position, 48) ||
     // ND_BLZ_WALK_LEGS=1 (поток blz 21.10): видимый гаст — не повод штрека (шар отбивает ne-guard swat; штрек ест кирки: bz02 —
     // 216 незерака и обе кирки к 9-й мин поиска крепости). Бруты/хоглины/бастион/без золота — штрек как прежде. Слепой вид (blind) не трогает.
     (() => { try { return (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 40 }).some(e => e.seen && (process.env.ND_BLZ_WALK_LEGS === '1' ? /^(piglin_brute|hoglin|zoglin)$/ : /^(piglin_brute|hoglin|zoglin|ghast)$/).test(e.name)) } catch { return false } })()
@@ -61,6 +64,15 @@ async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = nu
     }
   }
   if ((strictCover || process.env.ND_NE_COVER !== '0') && worlds.worldOf(bot) === 'the_nether' && (strictCover || coverNeeded()) && gameClock.now() < deadline) {
+    // ND_GRAPH2_COVER_STALL=1 (поток graph2 sr27, выкл.): штрек с этой клетки дважды подряд не сделал ни шага — третий не копать (и не
+    // ставить заплат), пока тело не сдвинется: «на открытом: ни вниз, ни в стену — закрылся на месте» ×50 с одной клетки (sr27-graph2-A1
+    // 5730-fix: 106 вызовов без хода — 477 копок и 498 блоков из 1368 копок прогона). Отказ — вызывающему (сдвиг вбок, другая прямая).
+    const here = (() => { const p = bot.entity.position; return `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` })()
+    const stall = bot._ndCoverStall
+    if (process.env.ND_GRAPH2_COVER_STALL === '1' && stall?.key === here && stall.n >= 2 && !strictCover) {
+      await new Promise(r => gameClock.setTimeout(r, 1000))
+      return { ok: false, error: `закрытый штрек: ${stall.n} раз без шага с этой клетки — не копаю`, covered: true }
+    }
     await keepPicks(session, ctl)
     const d0 = Math.hypot(tx - bot.entity.position.x, tz - bot.entity.position.z)
     // ND_BASTION_SEARCH_RESERVE=1: preserve the gold-harvesting pick during covered search, as tunnelTo already does.
@@ -78,11 +90,18 @@ async function legTo (session, ctl, tx, tz, deadline, { onOpen = null, stop = nu
       })
     } finally { bot._ndToolFilter = filter0; bot._ndBastionSearchReserve = reserve0 }
     if (c.why?.includes('BASTION_SEARCH_SUPPLY:')) throw Object.assign(new Error(c.why), { code: 'BASTION_SEARCH_SUPPLY', supplyNeeded: true })
-    log('закрытый штрек', { to: { x: tx, z: tz }, ok: c.ok, moved: c.moved, dug: c.dug, placed: c.placed, mouths: c.mouths, corridor: c.corridor || undefined, gold: c.gold || undefined, down: c.down || undefined, unsealed: c.unsealed || undefined, why: c.why, at: c.at, view: c.view ? { seen: c.view.seen, bastion: !!c.view.bastion } : undefined })
+    bot._ndCoverStall = c.moved ? null : { key: here, n: (stall?.key === here ? stall.n : 0) + 1 }
+    const goldOn = (require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).goldWorn(bot)
+    const cause = cover ? 'явно' : strictCover ? 'strict' : !goldOn && (!openWalk() || piglinsAround(bot) || fortressNear(session) || piglinLand(bot)) ? (!openWalk() ? 'без золота' : piglinsAround(bot) ? 'пиглины' : fortressNear(session) ? 'крепость' : 'биом пиглинов')
+      : bastionNear(session, bot.entity.position, 48) ? 'бастион' : 'бруты/хоглины'
+    log('закрытый штрек', { cause, to: { x: tx, z: tz }, ok: c.ok, moved: c.moved, dug: c.dug, placed: c.placed, mouths: c.mouths, corridor: c.corridor || undefined, gold: c.gold || undefined, down: c.down || undefined, unsealed: c.unsealed || undefined, why: c.why, at: c.at, view: c.view ? { seen: c.view.seen, bastion: !!c.view.bastion } : undefined })
     // Руда из стен штрека — «золото по пути»: как хватит на 4 слитка, сразу ботинки (верстак — из рюкзака, в штреке).
     if (c.gold && !ctl.aborted) { try { if (await (require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).armGold(session, ctl)) log('золото из стен штрека: броня надета', {}) } catch {} }
     // Успех — по пройденному к цели (Codex q9: шаги туда-сюда у устья — не продвижение).
     const gain = d0 - Math.hypot(tx - bot.entity.position.x, tz - bot.entity.position.z)
+    // Штрек отказал сразу (ни шага, ни копки: «piglin_brute: stopped at a newly visible opening») — пауза 1 игр. с: обход крутил
+    // отрезки без единого ожидания, игровые часы стояли, тело молчало 30 с (sr27-bast-C6 слот 13: сервер lockstep упал «client stalled»).
+    if (!c.ok && !c.moved && !c.dug && !ctl.aborted) await new Promise(r => gameClock.setTimeout(r, 1000))
     if (c.ok || gain >= 8 || (c.view && stop && stop(c.view))) return { ok: true, bored: c.dug, covered: true, view: c.view }
     if (ctl.aborted) return { ok: false, error: 'прервано' }
     // Поверху без золотой вещи не идём (d5-5-1, d7-6-1: отрезок ногами — уступ над лавовым морем, падение): отрезок закрыт.
@@ -154,7 +173,7 @@ async function keepBlocks (session, ctl, { min = 24, want = 56 }: any = {}) {
   const bot = session.bot
   if (process.env.ND_NE_KEEP_BLOCKS === '0' || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted) return null
   // Закрытый штрек даёт незерак сам (два блока на шаг); копка вокруг — выход из укрытия.
-  if (process.env.ND_NE_COVER !== '0' && !(require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).goldWorn(bot)) return null
+  if (process.env.ND_NE_COVER !== '0' && !openWalk() && !(require('../bastion/take-gold-block') as typeof import('../bastion/take-gold-block')).goldWorn(bot)) return null
   const have = (require('../pack') as typeof import('../pack')).buildCount(bot, 'the_nether')
   if (have >= min || gameClock.now() < (bot._ndKeepBlocksAt || 0)) return null
   bot._ndKeepBlocksAt = gameClock.now() + 60000
@@ -177,6 +196,31 @@ async function keepPicks (session, ctl) {
   try { log('кирки: запас', { made: await T.restockPicks(session, ctl, 2, { reservePlanks: table ? 0 : 4 }), uses: T.lowUses(bot) }) } catch (e) { log('кирки: запас', { error: e.message }) }
 }
 
+const openWalk = () => process.env.ND_GRAPH2_OPEN_WALK === '1'
+// ND_GRAPH2_OPEN_WALK: у крепости — штрек, как прежде (иссушители и ифриты золоту не верят; sr27-graph2-B1 −2642: подход к спавнеру
+// поверху — иссушение, смерть): известная крепость/спавнер в 48 бл. или иссушитель/ифрит на виду в 24.
+// ND_GRAPH2_OPEN_WALK: пиглины родятся в пустошах и багровом лесу (nether_wastes, crimson_forest; 1.21.11 NetherBiomes spawners) — там
+// пиглин выходит из-за угла посреди отрезка (sr27-graph2-B2: 3 смерти от пиглинов из 6 против 0 из 10 в A). Ногами — только там, где их не
+// бывает (долина душ, искажённый лес, дельты); биом — под ногами, как F3. Неизвестный биом — как пустоши.
+function piglinLand (bot) {
+  if (process.env.ND_GRAPH2_OPEN_WALK_ANY === '1') return false
+  let biome = ''
+  try { biome = String((require('../perception') as typeof import('../perception')).biomeName(bot, bot.entity.position.floored()) || '') } catch {}
+  if (/soul_sand_valley|warped_forest|basalt_deltas/.test(biome)) return false
+  // Цена штрека от запаса кирок (координатор 27.10, итог bast): отрезок штреком — ~40 взмахов на 16 бл. (2.3–2.8 на блок хода). Расходных кирок
+  // (каменных в рюкзаке и из камня с палками) меньше чем на два отрезка — штрек всё равно встанет посреди пути без инструмента: пустоши
+  // ногами, пока пиглинов не видно и не слышно (это проверяет piglinsAround отдельно). Железная — под золото, в счёт не идёт.
+  let budget = Infinity
+  try { budget = (require('../tunnel') as typeof import('../tunnel')).pickBudget(bot).total } catch {}
+  return budget >= 80
+}
+function fortressNear (session) {
+  const bot = session.bot, p = bot.entity.position
+  const places = (session.journal?.state && session.journal.state.places) || {}
+  if ((Object.entries(places) as [string, any][]).some(([k, v]) => /^(крепость \(ад\)|спавнер блейзов)$/.test(k) && v && worlds.worldOfRecord(v) === 'the_nether' && Math.hypot(v.x - p.x, v.z - p.z) <= 48)) return true
+  try { return (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 24 }).some(e => e.seen && /^(wither_skeleton|blaze)$/.test(e.name)) } catch { return false }
+}
+
 // Пиглины, которым мы враги (без нашей золотой вещи): на виду в 24 бл. или слышны ближе 16 за 10 с.
 function piglinsAround (bot) {
   try {
@@ -197,7 +241,7 @@ async function goldOnTheWay (session, ctl) {
     gameClock.now() < (bot._ndGoldWayAt || 0)) return null
   const T: typeof import('../bastion/take-gold-block') = require('../bastion/take-gold-block')
   // Закрытый штрек сам копает руду в своих стенах; ходить к видимой руде поверху — выход из укрытия (нет).
-  if (process.env.ND_NE_COVER !== '0' && !T.goldWorn(bot)) return null
+  if (process.env.ND_NE_COVER !== '0' && !openWalk() && !T.goldWorn(bot)) return null
   const worn = T.goldWorn(bot)
   const R = worn ? 5 : 10
   const ids = ['nether_gold_ore', 'gilded_blackstone'].map(n => bot.registry.blocksByName[n]?.id).filter(Boolean)
@@ -238,6 +282,27 @@ async function woodOnTheWay (session, ctl) {
   let r: any = null
   try { r = await (require('../actions') as typeof import('../actions')).mine(session, ctl, { block: 'warped_stem,crimson_stem', count: 2, radius: 10 }) } catch (e) { r = { error: e.message } }
   log('дерево по пути', { sticks, got: count(/_(stem|hyphae)$/) - before, stopped: (r && (r.stopped || r.error)) || undefined })
+  return r
+}
+
+// ND_GRAPH2_STONE_WAY=1 (поток graph2 sr27, выкл.): камень кирок по пути — чернокамень (дельты, глыбы у лавового моря) на виду в 8 бл.,
+// пока булыжника/чернокамня меньше чем на две кирки, а палки (или доски) есть: 6 взмахов за 2 кирки (262 взмаха). sr27-graph2-A1 r0-s6:
+// булыжник 0, палок 7, кирки стёрты к 20-й мин — скрафтить нечем. Пиглинов и хоглинов в 24 не видно, не чаще раза в игровую минуту.
+async function stoneOnTheWay (session, ctl) {
+  const bot = session.bot
+  if (process.env.ND_GRAPH2_STONE_WAY !== '1' || !bot.inventory || !bot.registry?.blocksByName || worlds.worldOf(bot) !== 'the_nether' || ctl.aborted ||
+    gameClock.now() < (bot._ndStoneWayAt || 0)) return null
+  const count = (re: RegExp) => bot.inventory.items().filter(i => re.test(i.name)).reduce((s, i) => s + i.count, 0)
+  const stone = count(/^(cobblestone|cobbled_deepslate|blackstone)$/)
+  if (stone >= 6 || count(/^stick$/) + 2 * count(/_planks$/) + 8 * count(/_(stem|hyphae|log)$/) < 2 || !count(/_pickaxe$/)) return null
+  const id = bot.registry.blocksByName.blackstone?.id
+  if (!id || !(require('../sight') as typeof import('../sight')).visibleOf(bot, [id], 8, { max: 1 }).length) return null
+  bot._ndStoneWayAt = gameClock.now() + 60000
+  const foes = (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 24 }).filter(e => e.seen && /^(hoglin|zoglin|piglin|piglin_brute)$/.test(e.name))
+  if (foes.length) { log('камень по пути: рядом ' + foes[0].name + ' — не копаю', { stone }); return null }
+  let r: any = null
+  try { r = await (require('../actions') as typeof import('../actions')).mine(session, ctl, { block: 'blackstone', count: 6 - stone, radius: 8 }) } catch (e) { r = { error: e.message } }
+  log('камень по пути', { was: stone, now: count(/^(cobblestone|cobbled_deepslate|blackstone)$/), stopped: (r && (r.stopped || r.error)) || undefined })
   return r
 }
 
@@ -334,4 +399,4 @@ async function climbWalk (session, ctl, top, deadline, { exact = false }: any = 
   })
 }
 
-export { legTo, walkLeg, keepBlocks, goldOnTheWay, woodOnTheWay, retraceHome, climbTo, climbWalk }
+export { legTo, walkLeg, keepBlocks, goldOnTheWay, woodOnTheWay, stoneOnTheWay, retraceHome, climbTo, climbWalk }

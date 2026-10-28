@@ -45,7 +45,8 @@ interface SafetyVerdict {
   cost?: number; cheap?: boolean; trade?: boolean; shieldDuel?: boolean; hazard?: boolean; ourArmor?: number
 }
 function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
-  threats = [], observedHit = 0, minHealth = 8, phase = 'continue', instantHeal = false, dangerous = threats.length > 0, expected = null, shieldDuel = false }: any = {}): SafetyVerdict {
+  threats = [], observedHit = 0, minHealth = 8, phase = 'continue', instantHeal = false, dangerous = threats.length > 0, expected = null, shieldDuel = false,
+  owTrade = false }: any = {}): SafetyVerdict {
   const live = S4D() ? threats.filter(t => t.distance <= 16 && (t.name !== 'creeper' || inExchange(t))) : threats
   const near = live.filter(inExchange)
   const hits = (S4D() ? (near.length ? near : live) : threats.filter(t => t.distance <= 16)).map(t => t.hit).sort((a, b) => b - a)
@@ -68,6 +69,19 @@ function evaluate ({ health = 20, food = 20, foodPoints = 0, weapon = false,
   const cheap = FIGHT_COST() && typeof expected === 'number' && weapon && !odd && threshold < 20 && health >= threshold + COST_K * expected
   if (cheap && dangerous && (!healable || food < 18 || (phase === 'start' && !instantHeal && foodPoints < Math.max(0, 18 - food) + 4))) {
     return { ...result, cost: expected, cheap: true }
+  }
+  // ND_OW_FIGHT_TRADE (ow 27.10, спидран в верхнем мире без людей): уход тоже имеет цену — стрелок бьёт в спину, ходячий догоняет,
+  // коробка/нора ночью и в пещере часто не встаёт (CORNERED). В сериях sr27 почти все смерти наверху — отказ от боя с одним
+  // скелетом/зомби/пауком при 11–18 хп с мечом («нечем восстановить здоровье» → CORNERED → смерть). Бой с 1–2 обычными мобами
+  // принимается, если ожидаемый урон боя (assess.plan) с запасом ×1.5 оставляет minHealth/2; иначе — прежние правила ухода.
+  // ND_OW2_TRADE_HOLD (ow2 27.10, выкл.): начатый размен с ходячим у тела (≤ 4.5 бл.) не бросается на запасе minHealth/2 — уход от
+  // него тоже под ударами (коробка ~2 с в его досягаемости, бег в штреке — спиной). Скамья try-ow2-duel, два зомби, хп 12: после
+  // первого удара (9 хп) вердикт переворачивался в коробку, и та стоила 6–9 хп или смерть. Держать бой, пока ожидаемый остаток
+  // боя ×1.5 оставляет 1 хп; начало боя (phase start) — с прежним запасом.
+  const hold = process.env.ND_OW2_TRADE_HOLD === '1' && phase !== 'start' && near.some(t => t.name !== 'creeper' && !RANGED.has(t.name) && t.distance <= 4.5)
+  if (owTrade && FIGHT_COST() && dangerous && weapon && !odd && typeof expected === 'number' && threshold < 20 &&
+      !pool.some(t => t.name === 'creeper') && health - 1.5 * expected >= (hold ? 1 : minHealth / 2)) {
+    return { ...result, cost: expected, trade: true }
   }
   // S4d: a walker of the white list already at the body (≤ 4.5 бл.) hits whatever we do - a wall goes up and a run starts
   // inside its reach, and without food (< 18) the wall buys no regeneration. The trade is the fight while the body outlasts
@@ -159,7 +173,9 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
   // ударами дороже дуэли (c13-5-1 14.10: «recover» при еде 17 — коробка с пиглином в 11 бл., 20 → 4 за 3.5 с, смерть).
   const shieldDuel = shieldReady && weapon && threats.length > 0 && threats.length <= 2 &&
     threats.every(t => SHIELDED.test(String(t.name || '')) && !t.axe)
-  const result = { ...evaluate({ health: bot.health ?? 0, food: bot.food ?? 0, foodPoints, expected, shieldDuel,
+  const owTrade = process.env.ND_OW_FIGHT_TRADE === '1' && !people && bot.ndPlayPolicy?.mode === 'speedrun' &&
+    String(bot.game?.dimension || '').replace(/^minecraft:/, '') === 'overworld'
+  const result = { ...evaluate({ health: bot.health ?? 0, food: bot.food ?? 0, foodPoints, expected, shieldDuel, owTrade,
     weapon, threats, observedHit, minHealth, phase, instantHeal,
     dangerous: !!expectedEnemy || !!(target && (assess.MOBS[target.name] || target.username || target.name === 'player')) || threats.length > 0 }), ourArmor: gear.armor }
   const repel = result.action !== 'dead' && repelLava && weapon && target?.position && target.isValid !== false &&

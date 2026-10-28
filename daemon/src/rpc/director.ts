@@ -49,6 +49,9 @@ function directorMethods ({ session, director }: RpcContext) {
         fightText: f ? f.text : null,
         first: f && f.order && f.order[0] ? f.order[0] : null,
         pickLeft: items.toolBudget(bot, 'pickaxe'),
+        // ND_GRAPH2_BEDS: овцы на виду (глаза, луч) в 32 бл. и не глубже/выше 6 — факт графа sheep_seen (кровати по пути).
+        ...(process.env.ND_GRAPH2_BEDS === '1' ? { sheepSeen: (() => { try { return (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 32 })
+          .filter(e => e.seen && e.name === 'sheep' && (!e.pos || Math.abs(e.pos.y - bot.entity.position.y) <= 6)).length } catch { return 0 } })() } : {}),
         picks: picks.tools || [],
         // Время суток в тиках (поток route, 03.10): кровать к ночи — заранее, по часам, а не по «сумеркам».
         tod: bot.time && typeof bot.time.timeOfDay === 'number' ? bot.time.timeOfDay : null

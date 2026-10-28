@@ -1,6 +1,6 @@
 'use strict'
 // Крафт и верстак: свой стоящий, новый, подсказка окну крафта, описание нехватки.
-import { collectNearbyDrops } from './gather'
+import { collectNearbyDrops, posKey } from './gather'
 import { place, rememberOwnBlock, isOwnBlock, forgetOwnBlock } from './place'
 const gameClock: typeof import('../game-clock') = require('../game-clock')
 const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
@@ -44,9 +44,9 @@ async function reclaimTable (session, ctl, table) {
   const bot = session.bot
   if (!table || ctl.aborted) return null
   const at = table.position
-  if (!isOwnBlock(session, at)) return null
+  if (!isOwnBlock(session, at) && !session._ndOwnTables?.has(posKey(at))) return null
   const here = bot.blockAt(at)
-  if (!here || here.name !== 'crafting_table') { forgetOwnBlock(session, at); return null }
+  if (!here || here.name !== 'crafting_table') { forgetOwnBlock(session, at); session._ndOwnTables?.delete(posKey(at)); return null }
   await closeStrayWindow(bot)
   if (!bot.canDigBlock(here)) {
     return { kept: false, at: xyz(at), note: 'до верстака не дотянуться — оставил стоять, вернись за ним' }
@@ -63,6 +63,7 @@ async function reclaimTable (session, ctl, table) {
     return { kept: false, at: xyz(at), note: `верстак остался стоять (${e.message}) — сломай сам, это 4 доски` }
   } finally { receipt?.close() }
   forgetOwnBlock(session, at)
+  session._ndOwnTables?.delete(posKey(at))
 
   // Vanilla only vacuums up a drop within about a block, and the table is one
   // to three squares away. Wait for the free pickup first, walk only if it does
@@ -107,6 +108,28 @@ function findTable (bot, mcData, maxDistance = 3) {
   return bot.findBlock({ matching: [mcData.blocksByName.crafting_table.id], maxDistance })
 }
 
+// Свои поставленные верстаки — отдельно от ownBlocks (там 24 последних, заплатки штрека вытесняют верстак за минуту).
+function ownTable (session, table) {
+  if (table) (session._ndOwnTables ||= new Map()).set(posKey(table.position), table.position.clone())
+  return table
+}
+// ND_BAST_TABLE_BACK=1 (поток bast 27.10, выкл.): верстака нет и сделать не из чего — к своему брошенному (память, не обзор) до 64 бл.:
+// тактика рвала reclaimTable (ctl.aborted), верстак оставался в штреке бастиона, а пополнение кирок искало стебли по открытому
+// 20+ мин («не вижу crafting_table в радиусе 3», sr27-bast-A4 слот 14: 4 доски, 0/260 взмахов).
+function ownTableFar (session, maxDistance = 64) {
+  const bot = session.bot
+  if (process.env.ND_BAST_TABLE_BACK !== '1' || !session._ndOwnTables) return null
+  let best = null, bestD = maxDistance
+  for (const [key, pos] of session._ndOwnTables) {
+    const here = bot.blockAt(pos)
+    if (!here) continue
+    if (here.name !== 'crafting_table') { session._ndOwnTables.delete(key); continue }
+    const d = bot.entity.position.distanceTo(pos)
+    if (d < bestD) { best = here; bestD = d }
+  }
+  return best
+}
+
 // bot.craft() opens the table by activating the block, which silently does
 // nothing when the bot is out of reach or has no line of sight — and then the
 // call hangs 20s waiting for a window that never opens. So guarantee a table
@@ -124,7 +147,7 @@ async function placeFreshTable (session, ctl) {
   }
   if (!item) return null
   await place(session, ctl, { block: 'crafting_table' })
-  return findTable(bot, mcData, 3)
+  return ownTable(session, findTable(bot, mcData, 3))
 }
 
 async function ensureTable (session, ctl) {
@@ -145,7 +168,8 @@ async function ensureTable (session, ctl) {
   // at y=-59 costs the climb.
   const canPlace = !!bot.inventory.items().find(i => i.name === 'crafting_table') ||
     bot.recipesFor(mcData.itemsByName.crafting_table.id, null, 1, null).length > 0
-  const far = findTable(bot, mcData, canPlace ? 6 : 20)
+  const own = canPlace ? null : ownTableFar(session)
+  const far = findTable(bot, mcData, canPlace ? 6 : 20) || own
   if (far) {
     const p = far.position
     // Bounded, and cleared afterwards either way: pathfinder outlives the
@@ -153,7 +177,7 @@ async function ensureTable (session, ctl) {
     // body long after this call has answered.
     try {
       await withTimeout(
-        bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 2)), 15000, 'до верстака не дошёл')
+        bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 2)), far === own ? 45000 : 15000, 'до верстака не дошёл')
     } catch {}
     try { bot.pathfinder.setGoal(null) } catch {}
     table = findTable(bot, mcData, 3)
@@ -170,7 +194,7 @@ async function ensureTable (session, ctl) {
   if (!item) return null
 
   await place(session, ctl, { block: 'crafting_table' })
-  return findTable(bot, mcData, 3)
+  return ownTable(session, findTable(bot, mcData, 3))
 }
 
 // mineflayer waits a flat twenty seconds for the table window and there is no
@@ -243,8 +267,17 @@ function craftWithNudge (bot, recipe, times, table, ctl = null) {
   return work
 }
 
-async function craft (session, ctl, { item: name, count = 1, spendReserve = false, conversionStep = false, conversionInputs = null, conversionTimes = 1, planOnly = false, repair = false }: any = {}) {
+async function craft (session, ctl, { item: name, count = 1, spendReserve = false, conversionStep = false, conversionInputs = null, conversionTimes = 1, planOnly = false, repair = false, ownTableBack = false }: any = {}) {
   const bot = session.bot
+  // ownTableBack (ND_BAST_TABLE_BACK, кампания: верстака нет, досок < 4) — только вернуть свой брошенный верстак в рюкзак.
+  if (ownTableBack) {
+    const t = ownTableFar(session)
+    if (!t) return { made: 0, note: 'своего верстака в памяти нет' }
+    try { await withTimeout(bot.pathfinder.goto(new goals.GoalNear(t.position.x, t.position.y, t.position.z, 2)), 45000, 'до верстака не дошёл') } catch {}
+    try { bot.pathfinder.setGoal(null) } catch {}
+    const back = await reclaimTable(session, ctl, bot.blockAt(t.position))
+    return { made: 0, tableBack: !!back?.kept, note: back?.note || (back?.kept ? `свой верстак забрал с ${xyz(t.position).x},${xyz(t.position).y},${xyz(t.position).z}` : 'верстак не вернул') }
+  }
   if (repair) return (require('../conversions/repair') as typeof import('../conversions/repair')).repairItems(session, ctl, { item: name, planOnly })
   const mcData = session.mcData
   const itemData = mcData.itemsByName[name]

@@ -110,7 +110,8 @@ function smeltOrder (session, { item, count, fuel, timeoutSeconds }) {
 async function openForSmelt (session, ctl, order) {
   const { bot, from, covered, need } = order
   stopWalkingOnAbort(bot, ctl)
-  let block = await ensureFurnace(session, ctl, from)
+  // order.at — эта печь (вторая печь раздельной плавки, возврат к первой), а не ближайшая.
+  let block = order.at || await ensureFurnace(session, ctl, from)
   let note = covered < need ? `топлива хватило только на ${covered}` : null
 
   // Snapshot after the furnace exists: crafting one costs cobblestone, and that
@@ -359,7 +360,63 @@ function smeltResult (sm: SmeltRun) {
   }
 }
 
+// ND_SMELT_SPLIT=1 (ow 27.10): руда (≥ 4) — в две печи разом: первая загружена и оставлена гореть, вторая — свежая у ног
+// (8 булыжника), ждём вторую, потом забираем первую. Слиток — 10 с в любой печи: 8 слитков набора портала за ~40 с, а не 80.
+// Вторую печь поставить не вышло — ждём первую, как обычная плавка.
+function furnaceNear (bot, mcData, except) {
+  const ids = ['furnace', 'blast_furnace'].map(n => mcData.blocksByName[n]?.id).filter(Boolean)
+  const all = bot.findBlocks({ matching: ids, maxDistance: 4, count: 8 })
+  const p = all.find(q => !q.equals(except))
+  return p ? bot.blockAt(p) : null
+}
+async function smeltSplit (session, ctl, p, n) {
+  const bot = session.bot, mcData = session.mcData
+  const half = Math.floor(n / 2)
+  const orderA = smeltOrder(session, { ...p, count: n - half })
+  const smA = await openForSmelt(session, ctl, orderA)
+  let a
+  try { a = await loadFurnace(smA) } finally { await closeFurnace(smA) }
+  const atA = smA.block
+  let b = null
+  if (!ctl.aborted && countOf(bot, orderA.from) > 0) {
+    let second = furnaceNear(bot, mcData, atA.position)
+    if (!second && (itemNamed(bot, 'furnace') || cobbleOnHand(bot) >= 8)) {
+      try {
+        if (!itemNamed(bot, 'furnace')) await actions.craft(session, ctl, { item: 'furnace', count: 1 })
+        await actions.place(session, ctl, { block: 'furnace' })
+      } catch {}
+      second = furnaceNear(bot, mcData, atA.position)
+    }
+    if (second) {
+      try {
+        const smB = await openForSmelt(session, ctl, { ...smeltOrder(session, { ...p, count: half }), at: second })
+        try {
+          const lb = await loadFurnace(smB)
+          await watchSmelt(smB, lb.started, lb.target)
+          await collectFurnace(smB)
+        } finally { await closeFurnace(smB) }
+        b = smeltResult(smB)
+      } catch {}
+    }
+  }
+  const smA2 = await openForSmelt(session, ctl, { ...orderA, at: atA })
+  try {
+    await watchSmelt(smA2, a.started, a.target)
+    await collectFurnace(smA2)
+  } finally { await closeFurnace(smA2) }
+  const r = smeltResult(smA2)
+  if (!b) return r
+  const gained = { ...b.gained }
+  for (const [k, v] of Object.entries(r.gained)) gained[k] = (gained[k] || 0) + (v as number)
+  return { ...r, count: r.count + b.count, gained, split: [r.count, b.count], note: [r.note, 'две печи'].filter(Boolean).join('; ') }
+}
+
 async function smelt (session, ctl, { item, count = 1, fuel = null, timeoutSeconds = 120 }: any = {}) {
+  if (process.env.ND_SMELT_SPLIT === '1') {
+    const { from } = resolveSmelt(session.bot, item)
+    const n = Math.min(Math.floor(Number(count)), countOf(session.bot, from), 64)
+    if (/^raw_(iron|gold|copper)$|_ore$/.test(from) && n >= 4) return smeltSplit(session, ctl, { item, fuel, timeoutSeconds }, n)
+  }
   const order = smeltOrder(session, { item, count, fuel, timeoutSeconds })
   const sm = await openForSmelt(session, ctl, order)
   try {

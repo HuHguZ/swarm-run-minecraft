@@ -216,7 +216,12 @@ async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs =
               : await placeBlockAt(bot, p, { timeoutMs, item, honest: true, steady: true, ctl: local })
             if (local.aborted) break
             if (r.ok && !r.already) placed++
-            else if (!r.ok) { failed.push(r.reason); why = r.reason; break }
+            else if (!r.ok) {
+              // sr27 full: где именно отказал сервер (клетка плана, смещение тела в клетке, пол) — 520+ безымянных отказов.
+              const b = bot.entity.position, under = bot.blockAt(b.offset(0, -0.2, 0))?.name
+              failed.push(`${r.reason} [клетка ${p.x - cell.x},${p.y - cell.y},${p.z - cell.z}; тело ${(b.x - cell.x - .5).toFixed(2)},${(b.y - cell.y).toFixed(2)},${(b.z - cell.z - .5).toFixed(2)}; пол ${under}]`)
+              why = r.reason; break
+            }
           } catch (e) { failed.push(e.message); why = e.message; break }
         }
       })(), interrupted])

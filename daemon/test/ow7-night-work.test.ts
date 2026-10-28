@@ -211,6 +211,17 @@ test('portal is an immediate alternative to overnight mining when ready', async 
   assert.equal(f.calls.some(c => c.method === 'dig_down'), false)
 })
 
+test('a portal is not a night job once the Nether owes nothing (end: enter/LeaveNether ping-pong at night)', async () => {
+  const f = fixture(); f.ctx.known.portal = { x: 3, y: 16, z: 0 }
+  Object.assign(f.inventory, { ender_eye: 12 })
+  await f.ctx.work()
+  assert.equal(f.calls.some(c => c.method === 'enterNether'), false)
+  const g = fixture(); g.ctx.known.portal = { x: 3, y: 16, z: 0 }
+  Object.assign(g.inventory, { ender_pearl: 12, blaze_rod: 3 })
+  await g.ctx.work()
+  assert.equal(g.calls.at(-1).method, 'enterNether', 'rods still owed: the portal stays a night job')
+})
+
 test('unready portal uses remaining local preparation, then explains the lack of work', async () => {
   const f = fixture(); f.ctx.known.portal = { x: 3, y: 16, z: 0 }; f.ctx.READY.nether = () => false
   f.inventory.shield = 1; f.inventory.iron_pickaxe = 1; f.inventory.stone_pickaxe = 2; f.inventory.coal = 2

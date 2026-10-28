@@ -297,6 +297,12 @@ defStage('iron', () => (!known.portal && have(/bucket$/) < portalBuckets()) ||
     await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: Math.min(8, ironLook()), radius: 32, dry: true, timeoutSeconds: 120 })
     if (died || strategyInterrupted) return
   }
+  // ND_OW_FLINT_BELOW: внизу колодца/у пещеры видимый гравий — сразу (кремень нужен набору так же, как железо; потом — штреки
+  // FLINT_BELOW или ночь). Невидимый — отказ сразу, без хода.
+  if (process.env.ND_OW_FLINT_BELOW === '1' && !known.portal && dim() === 'overworld' && y() < 56 && !lighter() && !have('flint') && !have('gravel')) {
+    await act('mine', { block: 'gravel', dry: true, count: 3, radius: 24, timeoutSeconds: 30 })
+    if (died || strategyInterrupted) return
+  }
   if (OW_DEEP && OW_HEAR && !known.portal && y() < 40) await listenForLava('низ колодца')
   if (OW_DEEP && ironNow() < want) await act('mine', { block: 'iron_ore,deepslate_iron_ore', count: want - ironNow(), radius: process.env.ND_IRON_WIDE !== '0' ? 24 : 14, timeoutSeconds: 120 })
   if (died) return

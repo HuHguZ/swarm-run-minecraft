@@ -131,6 +131,14 @@ function install (bot) {
   if (!bot || bot._ndFastDig || typeof bot.dig !== 'function') return
   const raw = bot.dig
   bot._ndFastDig = true
+  // ND_DIG_TRACE=1 — диагностика «Digging aborted» (sr27-end: спуск к крепости рвётся на каждом блоке): событие шлёт сам
+  // stopDigging синхронно, значит стек здесь называет того, кто оборвал копку.
+  if (process.env.ND_DIG_TRACE === '1' && typeof bot.on === 'function') {
+    bot.on('diggingAborted', (b) => {
+      const st = String(new Error().stack || '').split('\n').slice(2, 12).map(s => s.trim().replace(/^at /, '')).join(' < ')
+      console.log('[dig-abort]', JSON.stringify({ block: b && b.name, at: b && b.position && `${b.position.x},${b.position.y},${b.position.z}`, doing: bot._ndDoing || null, stack: st }))
+    })
+  }
   bot.dig = async function (block, forceLook, digFace, ctl = null) {
     const me = bot.entity && bot.entity.position
     if (block && block.position && me && me.offset(0, 1.62, 0).distanceTo(block.position.offset(0.5, 0.5, 0.5)) > DIG_REACH) {

@@ -7,6 +7,7 @@ import { strategyExecuting, tacticalRevision, state, sit, known, heardLava, setD
 import { seamSnapshot, log } from './log'
 import * as gameClock from '../src/game-clock'
 let lastDeathSeen
+let goldSeenLogged = false
 function acceptResult (r) {
   const event = r.by?.type === 'death' ? r.by : (r.events || []).find(e => e.type === 'death')
   const stamp = r.state?.lastDeathAt
@@ -22,6 +23,11 @@ function acceptResult (r) {
     if (strategyExecuting && revision !== tacticalRevision) setStrategyInterrupted(true)
     setTacticalRevision(revision)
     setState(r.state)
+    // Телеметрия (bast2 27.10, поведение не меняет): первая золотая броня на теле — минута в журнал (доля и минута ботинок в сериях).
+    if (!goldSeenLogged && /golden_(helmet|chestplate|leggings|boots)/.test(JSON.stringify(r.state.armor || {}))) {
+      goldSeenLogged = true
+      log(`ВЕХА золото на теле: ${JSON.stringify(r.state.armor)} (${r.state.dimension || '?'})`)
+    }
   }
   if (strategyExecuting && (r.status === 'interrupted' || [...(r.by ? [r.by] : []), ...(r.events || [])].some(e => /^(tactical|tactical_released|emergency)$/.test(e.type)))) setStrategyInterrupted(true)
   if (E2E && (event || changed)) {

@@ -100,6 +100,15 @@ const FIGHT_NOAVOID = () => process.env.ND_FIGHT_NOAVOID !== '0'
 // зомби рядом). Ни одного удара за 4 с при потере ≥ 4 хп, или за 8 с при ≥ 8 — бросить бой: дальше отвечает тот, кто
 // звал (кампания, автопилот EMERGENCY — бой самоохраняемый, его он не рвёт).
 const FIGHT_WATCH = () => process.env.ND_FIGHT_WATCH !== '0'
+// ND_OW2_CORRIDOR_DUEL=1 (ow2 27.10, выкл.): ходячий моб в штреке — тот же бой pvp.duel, что в поле (удар с края, w-tap, отход в
+// перезарядке): старая доктрина fightCorridor (GoalFollow 2 и удар раз в 650 мс) стоит в его досягаемости — скамья try-ow2-duel
+// SHAPE=tunnel, зомби при 12 хп: 0 взмахов, 12 → 3–6 или смерть; в комнате pvp.duel тот же зомби убивает за 3–4 с без урона.
+// Стрелок в штреке — прежняя ветка (печать штрека fightSealFirst).
+const CORRIDOR_DUEL = () => process.env.ND_OW2_CORRIDOR_DUEL === '1'
+// Бой с мобом в поле (pvp.duel), а не старой доктриной штрека: corridor() — форма места, считается только когда нужна.
+function fightsInOpen ({ lastStand = false, repelLava = false, ranged = false }: any, corridor: () => boolean) {
+  return lastStand || repelLava || (CORRIDOR_DUEL() && !ranged) || !corridor()
+}
 function watchFight (bot, parent) {
   const sub: any = { aborted: false, onAbort: [], why: null }
   sub.abort = () => {
@@ -261,7 +270,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
   const early = await fightPrepare(fb)
   if (early) return early
   if (isPlayerEntity(entity)) return fightPlayer(fb)
-  if (lastStand || repelLava || !corridorShape(bot, threatPoint(entity)).corridor) return fightOpen(fb)
+  if (fightsInOpen({ lastStand, repelLava, ranged }, () => corridorShape(bot, threatPoint(entity)).corridor)) return fightOpen(fb)
   const sealed = await fightSealFirst(fb)
   if (sealed) return sealed
   return fightCorridor(fb)
@@ -543,7 +552,7 @@ async function fightCorridor (fb: FightCtx) {
   return { timeout: true, target: label, swings, targetAlive: entity.isValid, stoodGround: stood || undefined }
 }
 
-export { fight, requestStrategicYield, requestFightGuard, watchFight, dressForFight, ARMOR_GAP, SWING_MS }
+export { fight, requestStrategicYield, requestFightGuard, watchFight, dressForFight, fightsInOpen, ARMOR_GAP, SWING_MS }
 export { HOSTILES, RANGED, trackAttackers, liveAttacker, findTarget, nearestHostile, countHostiles } from './combat/foes'
 export { corridorShape, sealCorridor, openRun, headroomAt, openSides, shieldFlanks } from './combat/corridor'
 export { retreat, coverSpots } from './combat/retreat'

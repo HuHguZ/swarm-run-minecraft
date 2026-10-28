@@ -40,7 +40,7 @@ export function acceleratedDigArgs(java: string, server: string, env = process.e
   }
   // Farm-only native options: lockstep (ND_LOCKSTEP=1: tick gate + update_time every tick; window and stall valve from
   // ND_LOCKSTEP_WINDOW / ND_LOCKSTEP_STALL_MS), else the update_time cadence PoC. Ordinary startup only patches digging.
-  if (env.ND_LOCKSTEP === '1') return [`-javaagent:${agent}=lockstep:${lockstepNumber(env.ND_LOCKSTEP_WINDOW, 2, 1, 20)}:${lockstepNumber(env.ND_LOCKSTEP_STALL_MS, 2000, 50, 60000)}`]
+  if (env.ND_LOCKSTEP === '1') return [`-javaagent:${agent}=lockstep:${lockstepNumber(env.ND_LOCKSTEP_WINDOW, 2, 1, 20)}:${lockstepNumber(env.ND_LOCKSTEP_STALL_MS, 30000, 50, 60000)}`]
   return [`-javaagent:${agent}${env.ND_FARM_TIME_EVERY_TICK === '1' ? '=time-every-tick' : ''}`]
 }
 

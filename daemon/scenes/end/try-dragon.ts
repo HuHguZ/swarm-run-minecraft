@@ -477,6 +477,18 @@ function e2eKit () {
     if (pearls) out.push(`ender_pearl ${pearls}`)
     return out
   }
+  // real (sr27-end, 27.10) — что выносит Ад в спидране (как KIT_SET=real у try-lab-end): брони нет, кроме золотых ботинок,
+  // каменный меч, железная кирка, щит, лук и 12 спектральных стрел бартера, 128 блоков, 8 еды, одно ведро; кровати —
+  // E2E_BEDS, обсидиан — E2E_OBSIDIAN, жемчуг — E2E_PEARLS.
+  if (process.env.E2E_KIT === 'real') {
+    const out = ['golden_boots', 'shield', 'stone_sword', 'stone_axe', 'iron_pickaxe', 'bow', 'spectral_arrow 12',
+      'cobblestone 64', 'netherrack 64', 'cooked_porkchop 8', 'water_bucket']
+    for (const [k, item] of [['E2E_OBSIDIAN', 'obsidian'], ['E2E_PEARLS', 'ender_pearl'], ['E2E_GAPPLES', 'golden_apple']]) {
+      const n = Number(process.env[k] || 0)
+      if (n) out.push(`${item} ${n}`)
+    }
+    return out
+  }
   if (process.env.E2E_KIT === 'campaign') {
     const out = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots', 'iron_sword', 'shield', 'iron_pickaxe',
       'bow', 'arrow 64', 'cobblestone 64', 'cooked_beef 16', 'water_bucket']

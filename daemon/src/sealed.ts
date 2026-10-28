@@ -138,13 +138,17 @@ class Heap {
 async function plan (o) {
   const { cls, dig, own = new Set(), starts, goal, h, box, maxNodes = 60000, targets = new Set(), breachOk = () => false, digW = 4, openOk = new Set(), breachCost = 0 } = o
   const inBox = (x, y, z) => x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1 && z >= box.z0 && z <= box.z1
+  // ND_BAST2_PLAN_W=w (поток bast2 27.10, выкл.): взвешенный A* (f = g + w·h) — путь не дороже оптимального в w раз, узлов на порядки меньше:
+  // цена шага с копкой (1 + digW·сек на 2–3 клетки ≈ 3–5) много выше манхэттена h, и A* раскрывал объём: штрек к золоту бастиона —
+  // 76 тыс. узлов, 21 с на план, 74 плана = 27 мин стояния за прогон (sr27-bast2-A слот 11, r0-s2; без пошагового мира — 21 с замершего тела).
+  const W = Math.max(1, Number(process.env.ND_BAST2_PLAN_W) || 1)
   const open = new Heap()
   const best = new Map()
   let nodes = 0
   const why = { fluid: 0, foreign: 0, hard: 0, floor: 0, box: 0, gravel: 0 }
   for (const s of starts) {
     const k = key(s.x, s.y, s.z)
-    const n = { x: s.x, y: s.y, z: s.z, g: s.g || 0, f: (s.g || 0) + h(s.x, s.y, s.z), parent: null, move: null, clear: [], k, start: true }
+    const n = { x: s.x, y: s.y, z: s.z, g: s.g || 0, f: (s.g || 0) + W * h(s.x, s.y, s.z), parent: null, move: null, clear: [], k, start: true }
     if (best.has(k) && best.get(k) <= n.g) continue
     best.set(k, n.g)
     open.push(n)
@@ -209,7 +213,7 @@ async function plan (o) {
       const g = cur.g + cost
       if (best.has(tk) && best.get(tk) <= g) continue
       best.set(tk, g)
-      open.push({ x: t.x, y: t.y, z: t.z, g, f: g + h(t.x, t.y, t.z), parent: cur, move: mv, clear: clearK, k: tk })
+      open.push({ x: t.x, y: t.y, z: t.z, g, f: g + W * h(t.x, t.y, t.z), parent: cur, move: mv, clear: clearK, k: tk })
     }
   }
   return { ok: false, nodes, why }

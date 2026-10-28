@@ -92,6 +92,16 @@ export async function goToCorner (gx: GoRun) {
         stopped: `крепость под морем: над лестницей старта вода, сухой земли в 14 блоках нет — копать не с чего. Другие крепости кольца 0 — на ${sea.alternatives.map(a => a.bearingDeg + '°').join(' и ')} от 0,0 (радиус 1408..2688): туда и бросать око`
       }
     }
+    // ND_SH_BORE=1 (sr27-end): под землёй у крепости (выход из Ада в пещеру) поверху не дошёл — штрек к лестнице старта на своей
+    // высоте, как игрок: кирпич в забое — это крепость (дальше вход, как у штрека под морем). sr27-end-a slot 20: «хода нет: 4 витков
+    // на месте» в 48 бл. от угла, 30 мин до конца срока.
+    if (!w.ok && !gx.seaAround && process.env.ND_SH_BORE === '1' && !skyAbove(bot) && !ctl.aborted && gameClock.now() < deadline - 30000) {
+      const b = await boreToStairs(gx)
+      walks.push({ bore: b })
+      log('под землёй у крепости — штреком к лестнице старта', b)
+      if (b.bricks) gx.seaAround = { ok: true, dug: b.dug, bricks: b.bricks }
+      if (b.ok) return
+    }
     if (!w.ok && !gx.seaAround) {
       return {
         went: false,
@@ -101,6 +111,39 @@ export async function goToCorner (gx: GoRun) {
       }
     }
   }
+}
+
+// Штрек под землёй к лестнице старта (угол + 4): ниже y 5 — сперва ступенями к y 20 (крепость выше), дальше по осям шагами
+// honestTunnelStep; кирпич в забое — стоп, это крепость. { ok, dug, moved, bricks?, why? }
+export async function boreToStairs (gx: GoRun) {
+  const { session, ctl, bot, deadline, corner } = gx
+  const D: typeof import('../endportal-descent') = require('../endportal-descent')
+  const T = { x: corner.x + 4, z: corner.z + 4 }
+  const p0 = bot.entity.position
+  const far = Math.abs(T.x - p0.x) + Math.abs(T.z - p0.z)
+  if (far > 160) return { ok: false, dug: 0, moved: 0, why: `до лестницы ${Math.round(far)} бл. — далеко для штрека` }
+  let dug = 0; let moved = 0; let why = null
+  if (p0.y < 5) {
+    const u = await D.toLevel(session, ctl, 20, { deadline, bricks: BRICKS, maxSteps: 40 })
+    dug += u.dug || 0
+  }
+  for (let s = 0; s < far + 40 && !ctl.aborted && gameClock.now() < deadline; s++) {
+    const f = bot.entity.position.floored()
+    const dx = T.x - f.x; const dz = T.z - f.z
+    if (Math.abs(dx) <= 1 && Math.abs(dz) <= 1) return { ok: true, dug, moved }
+    const axes = (Math.abs(dx) >= Math.abs(dz) ? [[Math.sign(dx), 0], [0, Math.sign(dz)]] : [[0, Math.sign(dz)], [Math.sign(dx), 0]]).filter(([x, z]) => x || z)
+    let stepped = false
+    for (const [sx, sz] of axes) {
+      const cell = f.offset(sx, 0, sz)
+      const r = await D.honestTunnelStep(session, ctl, cell, { bricks: BRICKS, throughBricks: false })
+      dug += r.dug || 0
+      if (r.brick) return { ok: true, dug, moved, bricks: { found: r.brick, at: xyz(cell), dug } }
+      if (r.ok) { moved++; stepped = true; break }
+      why = r.why
+    }
+    if (!stepped) return { ok: false, dug, moved, why: why || 'штрек не пошёл' }
+  }
+  return { ok: false, dug, moved, why: why || 'время вышло' }
 }
 
 // --- 2. уточнить оком: ближе 12 блоков оно летит в точный угол чанка старта.
@@ -148,20 +191,28 @@ export async function chooseShaft (gx: GoRun) {
     try {
       const S: typeof import('../perception/senses') = require('../perception/senses')
       const sample = () => { const a = S.pieArcs(bot, 'spawner', { fov: 20, step: 2 }); return a.length && !a[0].all && a[0].center !== null ? { x: bot.entity.position.x, z: bot.entity.position.z, yaw: a[0].center } : null }
-      const s1 = sample()
+      // ND_END2_PIE=1: все дуги спавнеров по трекам (два отсчёта: здесь и в 10 бл. вбок), данж и спавнер выше крепости — мимо.
+      const tracked = process.env.ND_END2_PIE === '1'
+      const P: typeof import('./pie-track') = require('./pie-track')
+      const store = tracked ? P.pieStore(session, pieKey) : null
+      if (tracked) P.pieObserve(bot, store, { minStep: 0 })
+      const t1 = tracked ? store.tracks.find(t => !t.notRoom && !t.dungeon) : null
+      const s1 = tracked ? (t1 ? t1.samples[t1.samples.length - 1] : null) : sample()
       if (s1) {
         const v = S.vecOf(s1.yaw)
         const w = await travelXZ(bot, ctl, Math.round(s1.x - v.z * 10), Math.round(s1.z + v.x * 10), { range: 2, retries: 1, deadline: Math.min(deadline, gameClock.now() + 30000) })
-        const s2 = w.ok ? sample() : null
-        const est = s2 ? S.triangulate([s1, s2]) : null
+        if (tracked && w.ok) P.pieObserve(bot, store, { minStep: 0 })
+        const best = tracked ? P.pieBest(bot, store, { x: corner.x + 4, z: corner.z + 4 }) : null
+        const s2 = tracked ? null : w.ok ? sample() : null
+        const est = tracked ? (best && best.precise ? { ...best.est, x: best.at.x, z: best.at.z } : null) : s2 ? S.triangulate([s1, s2]) : null
         const off = est ? Math.hypot(est.x - gx.shaft.x, est.z - gx.shaft.z) : null
-        log('«пирог» с поверхности: спавнер', { s1: s1.yaw, s2: s2 && s2.yaw, est, fromStairs: off && Math.round(off) })
+        log('«пирог» с поверхности: спавнер', { s1: s1.yaw, s2: s2 && s2.yaw, est, fromStairs: off && Math.round(off), ...(tracked ? { tracks: P.pieSummary(store) } : {}) })
         if (est && est.spread <= 4 && off <= 80) {
           // Высота спавнера — «пирогом» по вертикали; колонка шахты — сухая по видимому (нет воды в 4 бл. на поверхности), в 5–24 бл.
           // от оценки, ближе к лестнице (вода у лестницы: s5e-Q-1/R-1 — лестница у озера затопилась). Спуск — до этой высоты, потом
           // штрек к оценке (без поиска по коридорам).
           const me = bot.entity.position
-          const el = (require('../endportal-descent') as typeof import('../endportal-descent')).pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z))
+          const el = tracked ? (Number.isFinite(best.y) ? { y: best.y } : null) : (require('../endportal-descent') as typeof import('../endportal-descent')).pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z))
           const stairs = { x: corner.x + 4, z: corner.z + 4 }
           const pick = pickDryShaft(bot, est, stairs, session._wetAvoid || [])
           const k = off > 6 ? 5 / off : 0
@@ -206,7 +257,9 @@ export async function reachShaft (gx: GoRun) {
     // Над лестницей вода (озеро, река): шахта сюда зальётся. Спуститься с
     // ближайшей сухой клетки и подойти под водой штреком ниже её дна
     // (прогон у -3760,-3408: «под ногами вода — дальше вниз не копаю»).
-    gx.around = await goAround(session, ctl, shaft, { deadline, why: wet, far: process.env.ND_SEA_TUNNEL !== '0' ? 48 : 20 })
+    // ND_END2_FAR=1: суша для шахты — до 112 бл. (e2-rA/rB 3292: лестница старта под озером, суши в 48 бл. нет — «обойти не вышло»
+    // ×108 за 30 мин; штрек под дном 100 бл. — 2–3 мин).
+    gx.around = await goAround(session, ctl, shaft, { deadline, why: wet, far: process.env.ND_END2_FAR === '1' ? 112 : process.env.ND_SEA_TUNNEL !== '0' ? 48 : 20 })
     walks.push({ around: gx.around.from, ok: gx.around.ok, why: gx.around.why })
   } else if (!underground) {
     const w2 = await travelXZ(bot, ctl, shaft.x, shaft.z, { range: 1, retries: 2, deadline })
@@ -256,7 +309,10 @@ export async function digDown (gx: GoRun) {
     try {
       const eb = await enterByBricks(session, ctl, { deadline })
       log('вход по кирпичу', eb)
-      gx.broke = eb.inside ? { inside: true, steps: (eb.tries || []).map(t => `к ${t.to.x},${t.to.y},${t.to.z}`) } : await breakIn(session, ctl, { deadline, toward: refined ? shaft : null })
+      // ND_SH_PIE_STAY=1: шахта «пирога» уже на высоте спавнера — пробиваться внутрь без спуска (s-B 5730: штрек к оценке в 6 бл. от
+      // комнаты прервал рефлекс, вход «честно» ушёл ступенями с y 36 до −1, в тупик под крепостью; комната — на y 34–41).
+      const pieStay = process.env.ND_SH_PIE_STAY === '1' && (gx.dig as any).found === 'pie'
+      gx.broke = eb.inside ? { inside: true, steps: (eb.tries || []).map(t => `к ${t.to.x},${t.to.y},${t.to.z}`) } : await breakIn(session, ctl, { deadline, toward: refined ? shaft : null, ...(pieStay ? { allowDescent: false } : {}) })
     } finally { restore() }
   }
 }

@@ -6,11 +6,11 @@ import * as worlds from '../worlds'
 import { PLACE, BRICKS, clamp, placeOf, visibleOf } from './common'
 import { goStronghold } from './go'
 import { type RoomRun, type RoomTick, type Turn, roomMark, openExplore, enterExplore, roomReport } from './room-state'
-import { torchIfDark, roomHeal, roomEyes, roomFrontier, roomLure, roomLureMove, roomPick, roomWalk } from './room-steps'
+import { torchIfDark, roomHeal, roomEyes, roomVProbe, roomFrontier, roomLure, roomLureMove, roomPick, roomWalk } from './room-steps'
 
 // Порядок шагов оборота — порядок веток прежнего тела while: первая сработавшая ветка решает оборот.
 const ROOM_STEPS: ((rx: RoomRun, t: RoomTick) => Turn | void | Promise<Turn | void>)[] = [
-  roomHeal, roomEyes, roomFrontier, roomLure, roomLureMove, roomPick, roomWalk
+  roomHeal, roomEyes, roomVProbe, roomFrontier, roomLure, roomLureMove, roomPick, roomWalk
 ]
 
 // Разведка крепости: идти туда, где ещё не был, по клеткам, которые связаны с

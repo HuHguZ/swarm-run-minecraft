@@ -244,7 +244,9 @@ async function highLook (session, ctl, glance, { up = 20, walkBlocks = null }: a
   const goldWorn = [5, 6, 7, 8].some(s => /^golden_/.test(bot.inventory.slots[s]?.name || ''))
   // Без золотой вещи открытый столб — цена выше пользы (c19-5-1, d4-5-1: вышка у портала, арбалеты, смерть на 1-й мин): обзор —
   // из устьев закрытого штрека и «пирогом» (Codex q5/q9).
-  if (!goldWorn && process.env.ND_NE_COVER !== '0') return { skipped: 'без золота вышку не строю — обзор из устьев штрека' }
+  // ND_GRAPH2_OPEN_WALK=1: поиск идёт ногами (устьев штрека нет) — вышка и без золота, если пиглинов не видно (стрелки ниже) и не слышно ближе 16.
+  if (!goldWorn && process.env.ND_NE_COVER !== '0' && (process.env.ND_GRAPH2_OPEN_WALK !== '1' ||
+    (require('../perception/senses') as typeof import('../perception/senses')).heard(bot, { sinceMs: 10000 }).some(h => h.who === 'piglin' && h.band !== 'далеко'))) return { skipped: 'без золота вышку не строю — обзор из устьев штрека' }
   const shootersNow = () => (require('../perception/eyes') as typeof import('../perception/eyes')).entities(bot, { radius: 48 }).filter(e => e.seen && e.dist != null && (
     (e.name === 'piglin' && !goldWorn && e.dist <= 24) || (/^(skeleton|blaze|piglin_brute)$/.test(e.name) && e.dist <= 24) || (e.name === 'ghast' && e.dist <= 48)))
   const shooters = shootersNow()

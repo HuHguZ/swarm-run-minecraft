@@ -230,7 +230,11 @@ async function nightWorkStepInner () {
       ? nightWorkSafety.price({ ...sit.work, hp: state.health, night: sit.night, fight: sit.fight }, seconds) : 0
     jobs.push({ id, seconds, extra, price: seconds + (nightWorkSafe ? extra : risk * (Number(process.env.ND_DEATH_COST_MIN) || 60) * 60), cause, run })
   }
-  if (known.portal && READY.nether() && portalFar() < 96) add('enter', portalFar() / 2.5 + 10, null,
+  // Ад ещё что-то должен (как EnterNether графа): жемчуг или стержни на очи. Иначе ночной вход — пинг-понг с LeaveNether графа
+  // (поток end sr27, sn-A слот 18: ×6 за минуту, смерть у портала).
+  const eyesNeed = Math.max(1, Math.min(12, Number(process.env.ND_EYES_NEED) || 12))
+  const netherOwes = have('ender_pearl') + have('ender_eye') < eyesNeed || 2 * have('blaze_rod') + have('blaze_powder') + have('ender_eye') < eyesNeed
+  if (known.portal && netherOwes && READY.nether() && portalFar() < 96) add('enter', portalFar() / 2.5 + 10, null,
     () => JSON.stringify([known.portal, state.dimension]), () => enterNether())
   const castJob = () => add('cast', 120, 'LavaPoolPortal',
     nightWorkCastCause, async () => {

@@ -11,6 +11,7 @@ import { sleep, xyz } from './movement'
 import { countOf } from './items'
 import { OTHER_FOES } from './blaze/targets'
 import { knownEntities } from './perception/eyes'
+const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 const REACH = 2.95
 const isWeapon = it => !!it && /_(sword|axe)$|^(mace|trident)$|_spear$/.test(it.name)
@@ -62,7 +63,17 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
   // ND_BLZ_DODGE=1 (blz 21.10, пользователь: «спидраннеры уворачиваются и мечом быстро забивают; для сильного бота нет разницы, есть
   // огнестойкость или нет»): без FR — уклонение от шара (видимая сущность со скоростью, радар: прямая проходит у тела, долёт ≤ 0.8 с) рывком
   // поперёк линии огня, и бой дальше без FR (не стоп «без неё бой не веду», подъём на помост и без зелья).
-  const dodge = process.env.ND_BLZ_DODGE === '1'
+  // ND_BLZ_REFLEX=1 (blaze 27.10): рефлекс уклонения каждый тик (blaze/dodge.ts) вместо ветки DODGE цикла; пока он ведёт ноги, цикл
+  // только бьёт того, кто в досягаемости, и не ходит (base1-s15: без FR 67 урона из 67 — шары и огонь, 29 из них «жду ифритов» стоя).
+  const reflexOn = process.env.ND_BLZ_REFLEX === '1'
+  // ND_BLZ_UNDERHIT=1 (blaze 27.10): без FR — и к ифритам на 2..4.2 выше глаз (смещение высоты triangle(0.5, 6.891) держит их над
+  // целью): из-под них удар достаёт, ближний удар ифрита — нет. rx8: «жду ифритов» 119 с из 225 — ифриты рядом, но выше ±2.
+  const underHit = process.env.ND_BLZ_UNDERHIT === '1'
+  const coverOn = process.env.ND_BLZ_COVER === '1'
+  const wallOn = process.env.ND_BLZ2_WALL === '1'
+  const wall = { nextAt: 0, skip: new Map<any, number>() }
+  const fillerCount = () => bot.inventory.items().filter(i => /^(cobblestone|cobbled_deepslate|netherrack|blackstone|basalt|smooth_basalt|stone|dirt|nether_bricks|soul_soil|andesite|diorite|granite|tuff)$/.test(i.name)).reduce((n, i) => n + i.count, 0)
+  const dodge = process.env.ND_BLZ_DODGE === '1' && !reflexOn
   // Клетки шага по (ux, uz) на 1 и 2: ноги и голова пусты, без лавы/огня, пол не глубже 3, не магма.
   const safeStep = (ux: number, uz: number) => {
     const me = bot.entity.position
@@ -102,7 +113,8 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
     const sp = bot.registry.blocksByName.spawner; if (sp && m.blocksCantBreak) m.blocksCantBreak.add(sp.id)
   }
   // rests/foes/shieldMs — те же поля, что у holdSpawner: farmRods собирает из них итог (doctrine).
-  const out: any = { mode: 'melee', melee: 0, hits: 0, approaches: 0, rests: [], foes: [], shieldMs: 0, arrows: 0, eats: 0, collects: 0 }
+  const out: any = { mode: 'melee', melee: 0, hits: 0, approaches: 0, rests: [], foes: [], shieldMs: 0, arrows: 0, eats: 0, collects: 0,
+    ...(process.env.ND_BLZ2_WALL === '1' ? { walls: { tries: 0, placed: 0, shut: 0, open: 0 } } : {}) }
   const dead0 = dead.size
   const onHurt = e => { if (e && e.name === 'blaze') out.hits++ }
   bot.on('entityHurt', onHurt)
@@ -117,6 +129,35 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
     out.phaseS = out.phaseS || {}; out.phaseS[k] = Math.round(((out.phaseS[k] || 0) + (t - phaseAt) / 1000) * 10) / 10
     phaseAt = t; phase = s; setPhase(s)
   }
+  // REFLEX: в прыжке ноги не управляют (уклониться нечем) — не прыгать за критом, пока заряжен видящий нас ифрит в 10 бл. (rx1-s16:
+  // шары с 2–4 бл. попадали в прыжке-крите, onGround=false).
+  const jumpOk = (blazes: any[]) => !reflexOn || !blazes.some(e => e.position.distanceTo(bot.entity.position) < 10 && radar.charged(e) && B.seesMe(bot, e))
+  // Шаг рефлекса — на 1 бл. (ход за залп ≤ 1.2 бл.; проверка на 2 бл. на помосте трона закрывала почти все стороны: rx2-s15 stuck 20),
+  // пол не глубже 4 (спрыгнуть с помоста — 1 урона против 9 от шара с огнём).
+  // Проверка — по коробке тела 0.6 (все клетки, которые она займёт на 0.4 и 0.8 бл. хода, на уровне ног и головы): по одной клетке
+  // центра тело упиралось краем в стену и стояло под шарами с нажатой клавишей (rx5-s16: x 73.3 шесть тиков, v = 0).
+  const reflexStep = (ux: number, uz: number) => {
+    const me = bot.entity.position, y = Math.floor(me.y + 0.01)
+    for (const k of [0.4, 0.8]) {
+      const cx = me.x + ux * k, cz = me.z + uz * k
+      for (const x of new Set([Math.floor(cx - 0.3), Math.floor(cx + 0.3)])) for (const z of new Set([Math.floor(cz - 0.3), Math.floor(cz + 0.3)])) for (const dy of [0, 1]) {
+        const b = bot.blockAt(new Vec3(x, y + dy, z))
+        if (!b || b.boundingBox !== 'empty' || /lava|fire/.test(b.name)) return false
+      }
+    }
+    const q = new Vec3(Math.floor(me.x + ux * 0.8), y, Math.floor(me.z + uz * 0.8))
+    // Пол — не глубже 2 (спуск на 1): с высокого трона рефлекс сбрасывал тело вниз, и ифриты над головой были недосягаемы
+    // (cv10-s15, −2642: трон в 9 бл. над землёй, 0 убийств за 1211 с на y62 при спавнере y70).
+    for (let d = 1; d <= 2; d++) { const f = bot.blockAt(q.offset(0, -d, 0)); if (!f || /lava|fire|magma/.test(f.name)) return false; if (f.boundingBox === 'block') return true }
+    return false
+  }
+  const reflex = reflexOn ? (require('./blaze/dodge') as typeof import('./blaze/dodge')).attachReflex(bot, radar, reflexStep, {
+    onStart: () => { stopWalk(); bot.setControlState('jump', false) },
+    // Окно — с 0.5 с до первого шара (quietFor ≤ 500: телу набрать ход) и до конца залпа; в 10 бл. (rx7: шары с 2–4 бл. появлялись
+    // уже в зазоре < 0 по всем сторонам — уйти можно только заранее).
+    preempt: () => B.liveBlazes(bot, dead, 10).filter(e => radar.charged(e) && radar.quietFor(e) <= 500 && B.seesMe(bot, e))
+      .sort((a, b) => feetDist(a) - feetDist(b))[0]?.position || null,
+    near: () => B.liveBlazes(bot, dead, 4).filter(e => B.seesMe(bot, e) && !(underHit && eyeDy(e) >= 2.4)).map(e => e.position) }) : null
   const shieldTrace = process.env.ND_BLAZE_SHIELD_TRACE === '1' ? (require('./blaze/shield-trace') as typeof import('./blaze/shield-trace')).attachShieldTrace(bot, guard, radar, () => phase) : null
   const fr = () => B.hasEffect(bot, 'fire_resistance')
   // Цель хода — заново, только если сменилась клетка цели или ход стоит дольше 1.5 с: setGoal с той же целью сбрасывает путь и рвёт копку
@@ -146,7 +187,15 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
   // съедал 25–53 с зелья до первого убийства (jA11/jA12-s17-1: подъём ×5/×14, первое убийство на 25-й/53-й с FR). Горение от шара
   // гасит автопилот тем же зельем (frSpendOk у трона) — худший случай как прежде.
   let hurtAt = 0, hp1 = bot.health ?? 20
-  const onHealth = () => { const h = bot.health ?? 20; if (h < hp1) hurtAt = gameClock.now(); hp1 = h }
+  const onHealth = () => {
+    const h = bot.health ?? 20
+    if (h < hp1) {
+      hurtAt = gameClock.now()
+      // Разбор REFLEX: урон, пока рефлекс ведёт ноги, и вне его — по фазам цикла.
+      if (reflex) { const k = reflex.active() ? 'рефлекс' : phase || 'начало'; const m = (reflex.stats as any).hp ||= {}; m[k] = Math.round(((m[k] || 0) + hp1 - h) * 10) / 10 }
+    }
+    hp1 = h
+  }
   bot.on('health', onHealth)
   const frClimb = process.env.ND_BLZ_FR_CLIMB === '1'
   const climbDefer = () => {
@@ -229,6 +278,47 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
         (Object.values(bot.entities) as any[]).filter(e => e && /^(wither_skeleton|magma_cube)$/.test(e.name) && e.position && e.isValid !== false)
       const archer = skeletons && others.filter(e => /^(skeleton|stray|wither_skeleton)$/.test(e.name) &&
         e.equipment?.[0]?.name === 'bow' && B.reachTo(bot, e) > REACH).sort((a,b) => B.reachTo(bot,a)-B.reachTo(bot,b))[0]
+      // REFLEX: ноги ведёт рефлекс — удар по тому, кто в досягаемости и на откате, без шага и прыжка; иначе ждать тик.
+      if (reflex?.active()) {
+        phaseTo('уклонение')
+        const e = [...blazes, ...others].filter(x => B.reachTo(bot, x) <= REACH && pick.canHit(bot, x) && !B.sweepRisk(bot, x)).sort((a, b) => B.reachTo(bot, a) - B.reachTo(bot, b))[0]
+        if (e && now - Math.max(lastSwing, swapAt) >= (require('./pvp') as typeof import('./pvp')).cooldownMs(bot.heldItem)) {
+          if (!isWeapon(bot.heldItem)) await sword()
+          const aim = pick.aim(bot, e)
+          if (aim?.point) { try { await bot.lookAt(aim.point, true); reflex.reapply(); bot.attack(e); lastSwing = gameClock.now(); out.melee++; out.dodgeHits = (out.dodgeHits || 0) + 1 } catch {} }
+        } else if (!e && process.env.ND_BLZ_REFLEX_SPRINT === '1') {
+          // Бить некого — лицом по ходу: бег (×1.3, только вперёд) вместо шага вбок/назад (трассы pt2: разгон 0.05 → 0.14 за 5 т).
+          const d = reflex.dir()
+          if (d && (d[0] || d[1])) { try { await bot.look(Math.PI - Math.atan2(-d[0], d[1]), 0, true); reflex.reapply(); out.sprintTurns = (out.sprintTurns || 0) + 1 } catch {} }
+        }
+        await sleep(50)
+        continue
+      }
+      // ND_BLZ2_WALL (blaze2 27.10): заслон вместо уклонения. Заряженный ифрит с лучом к глазам, чей первый шар через ≤ 2.5 с
+      // (≤ 1.5 с, когда есть кого бить), — блок (с подпоркой) на луче глаз → глаз у тела: нет луча — нет выстрела, через 3 с цель забыта
+      // (blaze/wall.ts). Рефлекс остаётся для шаров, уже летящих (A sr27-blz2: урон под рефлексом — больше половины всего).
+      if (wallOn && !fr() && bot.entity.onGround && now >= wall.nextAt && fillerCount() >= 6) {
+        const urgent = blazes.some(e => B.reachTo(bot, e) <= REACH) ? 1500 : 2500
+        const shooter = blazes.filter(e => B.reachTo(bot, e) > REACH && feetDist(e) >= 2.3 && radar.charged(e) && radar.quietFor(e) <= urgent &&
+          (wall.skip.get(e.id) ?? 0) <= now && B.seesMe(bot, e)).sort((a, b) => radar.quietFor(a) - radar.quietFor(b))[0]
+        if (shooter) {
+          stopWalk(); bot.setControlState('jump', false)
+          phaseTo('заслон')
+          const W: typeof import('./blaze/wall') = require('./blaze/wall')
+          const build: typeof import('./build') = require('./build')
+          const cells = W.screenCells(p => bot.blockAt(p), bot.entity.position, B.blazeEye(shooter))
+          let placed = 0
+          for (const c of cells) {
+            const r: any = await build.placeBlockAt(bot, c, { honest: true, timeoutMs: 700, ctl }).catch(e => ({ ok: false, reason: e.message }))
+            if (!r.ok) { out.walls.why = String(r.reason || '').slice(0, 60); break }
+            if (!r.already) placed++
+          }
+          out.walls.tries++; out.walls.placed += placed
+          if (B.seesMe(bot, shooter)) { out.walls.open++; wall.skip.set(shooter.id, gameClock.now() + 1500) } else out.walls.shut++
+          wall.nextAt = gameClock.now() + 150
+          continue
+        }
+      }
       // Уклонение: ближайший по времени шар с прямой у тела — рывок бегом поперёк его хода (сторона с полом), на исходе — прыжок.
       if (dodge && !fr()) {
         const inc = radar.incoming(now).filter(b => b.eta <= 800 && b.dir).sort((a, b) => a.eta - b.eta)
@@ -297,7 +387,8 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
       }
       // 1. Ифрит в досягаемости — бить на откате (смена предмета обнуляет откат — Player.resetAttackStrengthTicker).
       // Иссушитель и магмовый куб у спавнера бьют вплотную (bnf4-5974-603: смерть от иссушителя, пока цикл бил только ифритов).
-      const inReach = [...blazes, ...others].filter(e => B.reachTo(bot, e) <= REACH && pick.canHit(bot, e)).sort((a, b) => B.reachTo(bot, a) - B.reachTo(bot, b))
+      // REFLEX: не бить с размахом, когда у цели нейтрал (зомби-пиглин злит всю группу — rx3-s17 смерть от зомби-пиглинов).
+      const inReach = [...blazes, ...others].filter(e => B.reachTo(bot, e) <= REACH && pick.canHit(bot, e) && !(reflexOn && B.sweepRisk(bot, e))).sort((a, b) => B.reachTo(bot, a) - B.reachTo(bot, b))
       if (inReach.length) {
         stopWalk()
         // Бить одного до смерти (отбрасывание и смена цели размазывали урон: bn-5974-601 — 26 попаданий, 1 убийство).
@@ -314,7 +405,7 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
         const v = bot.entity.velocity, falling = !bot.entity.onGround && v.y < -0.08 && !bot.entity.isInWater
         if (!ready && bot.entity.onGround && now - jumpAt > 500 && now - Math.max(lastSwing, swapAt) >= (require('./pvp') as typeof import('./pvp')).cooldownMs(bot.heldItem) - 350) {
           const head = bot.blockAt(bot.entity.position.offset(0, 2.2, 0))
-          if (!head || head.boundingBox === 'empty') { jumpAt = now; bot.setControlState('jump', true); gameClock.setTimeout(() => bot.setControlState('jump', false), 100) }
+          if ((!head || head.boundingBox === 'empty') && jumpOk(blazes)) { jumpAt = now; bot.setControlState('jump', true); gameClock.setTimeout(() => bot.setControlState('jump', false), 100) }
         }
         // STANCE: два ифрита и больше вплотную (ближний только с 2 бл., по 6 раз в 20 тиков каждый) — сперва шаг назад, потом удар:
         // bzF1-s17-1 21.10 под FR — 14 → 8.8 → 3.3 → 0 за 4 тика от трёх ифритов у спавнера.
@@ -352,7 +443,7 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
       }
       // 1б. Ифрит чуть выше досягаемости (до +1.2 по высоте, рядом по горизонтали) — прыжок: удар на спуске, он же крит.
       const overhead = blazes.find(e => pick.canHit(bot, e, { range: REACH + 1.2 }) && B.reachTo(bot, e) <= REACH + 1.2 && eyeDy(e) > 0.3)
-      if (overhead && bot.entity.onGround && now - jumpAt > 450 && now - Math.max(lastSwing, swapAt) >= (require('./pvp') as typeof import('./pvp')).cooldownMs(bot.heldItem) - 300) {
+      if (overhead && bot.entity.onGround && now - jumpAt > 450 && jumpOk(blazes) && now - Math.max(lastSwing, swapAt) >= (require('./pvp') as typeof import('./pvp')).cooldownMs(bot.heldItem) - 300) {
         stopWalk()
         focus = overhead.id
         try { await guard.raise(false); await bot.lookAt(B.blazeEye(overhead), true) } catch {}
@@ -411,7 +502,41 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
         continue
       }
       // 2. Без огнестойкости и мало хп, вплотную никого — отлёжка в коробке (поесть, отлечиться) и назад.
-      if (!fr() && hp < 9 && !close) {
+      // ND_BLZ_PIT=1: без FR и хп < 10 — яма с крышкой на месте (post.digInPlace: 3 вниз, крышка над головой; ~2 с копки), там еда и
+      // регенерация до 18 (не дольше 60 с), потом крышку снять и столбом наверх. В укрытии/коробке под шарами огонь и залпы добивали
+      // (cv13: смерть «сгорел» с уроном под рефлексом 33–40 — отлечиться было негде).
+      if (process.env.ND_BLZ_PIT === '1' && !fr() && hp < 10 && now >= (out.pitOffUntil || 0) && !blazes.some(e => feetDist(e) < 2.3) && !groundFoe && bot.entity.onGround) {
+        stopWalk()
+        phaseTo('яма: копка')
+        const t1 = gameClock.now(), hp1 = hp
+        const r: any = await B.digInNear(bot, ctl).catch(e => ({ ok: false, why: e.message }))
+        const rec: any = { ok: !!r.ok, why: r.why, sealed: r.sealed, hp0: Math.round(hp1) }
+        if (r.ok) {
+          phaseTo('яма: лечение')
+          const tr = gameClock.now()
+          while (!ctl.aborted && (bot.health ?? 0) > 0 && (bot.health ?? 0) < 18 && gameClock.now() - tr < 60000) {
+            if ((bot.food ?? 20) < 20 && (bot.health ?? 20) < 18) { try { await actions.eat(session, {}); out.eats++ } catch {} }
+            await sleep(500)
+            if ((bot.food ?? 20) < 18 && !bot.inventory.items().some(i => /cooked|bread|apple|carrot|potato|steak|porkchop|mutton|chicken|rabbit|cod|salmon|beef/.test(i.name))) break
+          }
+          rec.hp1 = Math.round(bot.health ?? 0)
+          phaseTo('яма: выход')
+          const SL: typeof import('./sealed') = require('./sealed')
+          const top = bot.entity.position.floored().offset(0, 2, 0)
+          try { if (bot.blockAt(top)?.boundingBox === 'block') await SL.digCell(bot, top) } catch {}
+          const up = await (require('./build') as typeof import('./build')).towerUp(bot, ctl, r.depth || 3, { sneak: true }).catch(e => ({ ok: false, reason: e.message }))
+          rec.up = !!(up && up.ok)
+        }
+        rec.s = Math.round((gameClock.now() - t1) / 1000)
+        // Не вышло (мост/помост тонкий: «под ногами: air») — 10 с не пробовать (pt1: попытка на каждом обороте цикла).
+        if (!rec.ok) out.pitOffUntil = gameClock.now() + 10000
+        ;(out.pits ||= []).push(rec)
+        if ((out.pits as any[]).length > 20) (out.pits as any[]).shift()
+        await sword()
+        continue
+      }
+      // COVER: отлёжка — в укрытии с едой (ветка 7), не в коробке (cv5: «отлёжка» до 108 с, коробка «не закрылась»).
+      if (!fr() && hp < 9 && !close && !coverOn) {
         stopWalk()
         try { await guard.raise(false) } catch {}
         phaseTo('отлёжка')
@@ -434,12 +559,12 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
       // Под огнестойкостью — и при ифритах в 3+ бл. (bnf4-7564-604: 22 убийства, подобрано 4 стержня).
       // ND_BLAZE_FR_PICK=1: под FR мешает сбору только ифрит в досягаемости своего удара (d < 2.5), а не любой в 3.45 (bf09 21.10: 10–14
       // убийств и «ещё 4 стержня лежат рядом» — сбор не начинался).
-      const pickupClear = fr() ? !blazes.some(e => process.env.ND_BLAZE_FR_PICK === '1' || stance ? e.position.distanceTo(bot.entity.position) < (stance ? 2.2 : 2.5) : B.reachTo(bot, e) <= REACH + 0.5) : !close
+      const pickupClear = fr() ? !blazes.some(e => process.env.ND_BLAZE_FR_PICK === '1' || stance ? e.position.distanceTo(bot.entity.position) < (stance ? 2.2 : 2.5) : B.reachTo(bot, e) <= REACH + 0.5) : reflexOn ? !groundFoe && !blazes.some(e => feetDist(e) < 2.3) : !close
       if (pickupClear && B.droppedRods(bot, 12, { reachable: true }) > 0) {
         try { await guard.raise(false) } catch {}
         phaseTo('сбор')
         const rods0 = countOf(bot, 'blaze_rod'), at0 = bot.entity.position.clone()
-        await B.collectRods(bot, ctl, 12, 5000, { stopIf: () => B.liveBlazes(bot, dead, fr() ? (stance ? 1.9 : 2) : 3).length > 0 })
+        await B.collectRods(bot, ctl, 12, 5000, { stopIf: () => B.liveBlazes(bot, dead, fr() ? (stance ? 1.9 : 2) : reflexOn ? 2.2 : 3).length > 0 || !!reflex?.active() })
         out.collects++
         // Сбор вернулся сразу без стержня и без шага — уступить игровой тик, а не крутить цикл без ожидания (bf04-s17-2 21.10).
         if (countOf(bot, 'blaze_rod') <= rods0 && bot.entity.position.distanceTo(at0) < 0.5) { out.idleCollects = (out.idleCollects || 0) + 1; await sleep(250) }
@@ -515,11 +640,37 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
       const stay = process.env.ND_BLZ_PLINTH_STAY === '1' && !!spawner && onPlinth(bot, spawner)
       // ND_BLZ_CHASE_CAP=1 (blz 21.10): за ифритом, к которому 6 с не стало ближе на 1 бл., — не гнаться 20 с (выбрать другого или ждать у
       // спавнера): «к ифриту» съедал 132 с из 180 FR (vN1-s19-1 — первое убийство на 146-й с), 63–82 с (pA03/pA14).
-      const chaseCap = process.env.ND_BLZ_CHASE_CAP === '1'
-      const target = blazes.filter(e => !(chaseCap && (chase.skip.get(e.id) ?? 0) > now) && B.seesMe(bot, e) && eyeDy(e) >= -2 && eyeDy(e) <= (stay || chaseCap && spawner ? 3 : fr() ? (stance ? 12 : 5) : 2) && e.position.distanceTo(bot.entity.position) <= (stance && fr() ? 16 : 12) &&
+      // COVER: и предел погони (cv5-s16: «к ифриту» 266 с из 396 за недостижимыми).
+      const chaseCap = process.env.ND_BLZ_CHASE_CAP === '1' || coverOn
+      // COVER: при хп ≥ 14 — вылазка и к ифриту, который нас не видит (в 8 бл.): из укрытия иначе ни одной цели (cv1-s15: 300 с
+      // «в укрытии», 5 убийств за 400 с). Хп < 14 — только видящие (остальное время — в укрытии, отлечиться).
+      const sortie = coverOn && !fr() && hp >= 14
+      // COVER: бой по одному — к ифриту, только если клетку подхода не видит ни один другой ифрит (cv6: шары двух-трёх ифритов с разных
+      // сторон — рефлекс метался, урон под ним 21–37 за сцену). Иначе — укрытие (ветка 7).
+      // COVER: стержень падает отвесно — к ифриту над лавой/пустотой не идти (radar.floorBelow: пол не глубже 12 и не ниже нас на 5):
+      // cv12-s17 «убил 10, выпало 1» — бой над лавовым морем у моста.
+      const dropOk = (e: any) => !coverOn || fr() || (require('./blaze/radar') as typeof import('./blaze/radar')).floorBelow(bot, e, bot.entity.position)
+      const loneOk = (e: any) => {
+        if (!coverOn || fr()) return true
+        const C: typeof import('./blaze/cover') = require('./blaze/cover')
+        const me = bot.entity.position, tp = e.position, dx = me.x - tp.x, dz = me.z - tp.z, L = Math.hypot(dx, dz) || 1
+        const R = underHit && eyeDy(e) >= 2.4 ? 0.9 : 2.8
+        const f = B.floorUnder(bot, tp.offset(dx / L * R, 0, dz / L * R))
+        // Без боя 15 с — допуск растёт на одного видящего (до 3): иначе укрытие навсегда, когда шесть ифритов спавнера видят все
+        // клетки подхода, а новые не родятся — лимит 6 (cv8-s16: два вызова по 392 с «в укрытии», 0 убийств).
+        const allow = Math.min(3, 1 + Math.floor((now - (out.engagedAt ?? t0)) / 15000))
+        return !!f && C.exposure(bot, f, blazes.filter(x => x !== e)).n <= allow
+      }
+      // WALL: к ифриту, чей залп вот-вот (заряжен, первый шар < 2 с), не идти — в упор шар не обойти; бить после залпа (откат 5 с + заряд 3).
+      const target = blazes.filter(e => !(chaseCap && (chase.skip.get(e.id) ?? 0) > now) && (B.seesMe(bot, e) || sortie && feetDist(e) <= 14) && loneOk(e) && dropOk(e) &&
+        !(wallOn && !fr() && radar.charged(e) && radar.quietFor(e) < 2000) && eyeDy(e) >= -2 && eyeDy(e) <= (underHit && !fr() ? 4.2 : stay || chaseCap && spawner ? 3 : fr() ? (stance ? 12 : 5) : 2) && e.position.distanceTo(bot.entity.position) <= (stance && fr() ? 16 : 12) &&
         (!stay || flat(e.position, spawner.offset(0.5, 0, 0.5)) <= 3.5))
         .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
-      if (target && (fr() || hp >= 12)) {
+      // COVER: два и больше заряженных ифрита с лучом к телу — не подходить (залпы с разных сторон, рефлекс мечется: cv11 урон под
+      // рефлексом 20–45 за сцену), а в укрытие (ветка 7); бить того, кто уже в досягаемости, — ветка 1 выше.
+      const pinned = coverOn && !fr() && blazes.filter(e => radar.charged(e) && B.seesMe(bot, e)).length >= 2
+      if (pinned) out.pinned = (out.pinned || 0) + 1
+      if (target && !pinned && (fr() || hp >= 12)) {
         // Без огнестойкости — подход со щитом к цели: шар спереди гасится целиком и не поджигает (BlocksAttacks, фронт 90°); шаг медленнее,
         // зато очередь на подходе не жжёт (bn5: смерть за 25–570 с от шаров и горения).
         if (!fr()) {
@@ -531,13 +682,18 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
           else if (d < chase.best - 1) { chase.best = d; chase.at = now }
           else if (now - chase.at > 6000) { chase.skip.set(target.id, now + 20000); chase.id = null; out.chaseSkips = (out.chaseSkips || 0) + 1; stopWalk(); continue }
         }
+        out.engagedAt = now
         if (now - goalAt > 400) {
           goalAt = now
           phaseTo('к ифриту')
           out.approaches++
           // STANCE: точка в 2.4 от ифрита по горизонтали со своей стороны — удар достаёт, его удар (d < 2) — нет.
           const me = bot.entity.position, tp = target.position, dx = me.x - tp.x, dz = me.z - tp.z, L = Math.hypot(dx, dz) || 1
-          const aimAt = stance ? tp.offset(dx / L * 2.4, 0, dz / L * 2.4) : tp
+          // UNDERHIT: ифрит на 1.9+ выше глаз — встать почти под него (0.9 бл.): удар вверх достаёт низ рамки, а его удар вплотную —
+          // нет (ноги ифрита выше наших на 2+, d² ≥ 4).
+          // REFLEX: подход на 2.7 (рефлекс держит 2.6 по ногам; ближе 2 ифрит бьёт сам и летит к телу — cv3-s17: 34 урона вплотную).
+          const R = underHit && eyeDy(target) >= 2.4 ? 0.9 : reflexOn ? 2.8 : 2.4
+          const aimAt = stance ? tp.offset(dx / L * R, 0, dz / L * R) : tp
           const f = B.floorUnder(bot, aimAt) || aimAt.floored()
           steer(f.x, f.y, f.z, 1)
         }
@@ -546,7 +702,7 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
       }
       // 6. Без огнестойкости — щит к заряженному с лучом.
       // Без щита стоять лицом к заряженному бессмысленно (raise — пустой): при уклонении — дальше (к спавнеру/ждать, шары — уклонением).
-      const charged = !fr() && !(dodge && !guard.stats?.worn) && blazes.find(e => B.seesMe(bot, e) && radar.charged(e))
+      const charged = !fr() && !((dodge || reflexOn) && !guard.stats?.worn) && blazes.find(e => B.seesMe(bot, e) && radar.charged(e))
       if (charged) {
         stopWalk()
         phaseTo('щит')
@@ -576,6 +732,41 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
       }
       // 7. Никого в досягаемости — стоять у спавнера (спавн в ±4 от него, работает при игроке в 16).
       try { await guard.raise(false) } catch {}
+      // ND_BLZ_COVER=1: без FR ждать не на виду — в ближней клетке, куда не смотрит ни один ифрит (blaze/cover.ts), в 13 бл. от спавнера;
+      // в укрытии — стоять (не к помосту). Пересчёт раз в секунду.
+      if (coverOn && !fr()) {
+        const C: typeof import('./blaze/cover') = require('./blaze/cover')
+        // И скелеты-лучники (cv8-s15: смерть от стрел скелета, 21 урона).
+        const all = [...B.liveBlazes(bot, dead, 32), ...others.filter(e => /^(skeleton|stray)$/.test(e.name))]
+        if (now - (out.coverAt || 0) > 1000) {
+          out.coverAt = now
+          const c = C.coverCell(bot, all, { spawner, minSpawner: 3.5, charged: e => radar.charged(e) })
+          out.coverCell = c ? c.pos : null
+          if (c) out.covers = (out.covers || 0) + 1
+        }
+        if (out.coverCell && !bot.entity.position.floored().equals(out.coverCell)) {
+          goalAt = now
+          phaseTo('в укрытие')
+          steer(out.coverCell.x, out.coverCell.y, out.coverCell.z, 0)
+          await sleep(100)
+          continue
+        }
+        const farSp = !spawner || Math.hypot(bot.entity.position.x - spawner.x - 0.5, bot.entity.position.z - spawner.z - 0.5) >= 3.5
+        if (farSp && (!all.length || C.exposure(bot, bot.entity.position.floored(), all).w === 0)) {
+          stopWalk()
+          phaseTo('в укрытии')
+          // В укрытии — лечение едой: при хп < 16 и сытости < 20 (быстрая регенерация — только при 20 и насыщении, FoodData 1.21.11;
+          // ветка «еда» ест лишь при сытости < 17 — хп годами шло по 1 за 4 с или стояло).
+          if ((bot.health ?? 20) < 16 && (bot.food ?? 20) < 20 && now - (out.coverEatAt || 0) > 3000) {
+            out.coverEatAt = now
+            try { await actions.eat(session, {}); out.eats++; out.coverEats = (out.coverEats || 0) + 1 } catch {}
+            await sword()
+            continue
+          }
+          await sleep(150)
+          continue
+        }
+      }
       // 7а. Ифритов не видно долго, но их слышно (субтитры: сторона и примерная дальность) — шаг на звук за новым лучом. Иначе стойка:
       // шесть ифритов висят за стенами, лимит спавнера (6 в коробке 9³) полон, новые не родятся (bz06-s19-1 21.10: 25 мин у спавнера с
       // FR-набором — 0 убийств, vis 0 при 6 ифритах в 5–12 бл.). ND_BLAZE_SEEK_HEARD=1.
@@ -618,6 +809,11 @@ async function meleeCamp (session, ctl, { spawner, want, deadline, dead, setPhas
     try { await guard.raise(false) } catch {}
     try { out.shield = guard.report() } catch {}
     shieldTrace?.close()
+    if (reflex) {
+      reflex.stop()
+      const rs = radar.stats, r1 = (x: number) => Math.round(x * 100) / 100
+      out.reflex = { ...reflex.stats, radar: { balls: rs.balls, offMax: rs.offMax, offAvg: rs.offN ? r1(rs.offSum / rs.offN) : null, lagAvg: rs.lagN ? r1(rs.lagSum / rs.lagN) : null } }
+    }
     try { radar.stop() } catch {}
     bot.removeListener('entityHurt', onHurt)
     bot.removeListener('heldItemChanged', onHeld)

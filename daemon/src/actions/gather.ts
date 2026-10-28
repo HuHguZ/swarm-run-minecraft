@@ -349,6 +349,11 @@ async function explore (session, ctl, {
     const dug = mv ? mv.canDig : undefined
     const scaffold = mv ? mv.scafoldingBlocks : undefined
     if (walkTop && mv) { mv.canDig = false; mv.scafoldingBlocks = [] }
+    // ND_GRAPH2_EXPLORE_NODIG=1 (поток graph2 sr27, выкл.): в Аду разведка (стебли, камень кирки, эндермены) — взгляд по открытому, а не
+    // копка pathfinder'ом сквозь незерак к точке луча: AcquireNetherTools ел 16 % взмахов Ада (7.2 тыс. на 127 прогонов sr27), ища дерево
+    // на кирки. Нет пути без копки — следующий луч.
+    const noDig = !walkTop && !!mv && process.env.ND_GRAPH2_EXPLORE_NODIG === '1' && (require('../worlds') as typeof import('../worlds')).worldOf(bot) === 'the_nether'
+    if (noDig) mv.canDig = false
     try {
       const result = await travelXZ(bot, ctl, x, z, { ...options, retries: 1, deadline })
       if (result.surfaceDrop && sw) return { ...result, recovered: await sw.recoverSurface(session, ctl, deadline) }
@@ -358,6 +363,7 @@ async function explore (session, ctl, {
       session.surfaceWalk = false
       session.scoutFromY = null
       if (walkTop && mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
+      if (noDig) mv.canDig = dug
     }
   }
   let failStreak = 0

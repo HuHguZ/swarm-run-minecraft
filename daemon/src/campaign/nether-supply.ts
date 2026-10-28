@@ -39,7 +39,7 @@ export function netherToolsReady(state: NetherSupplyState): boolean {
   return process.env.ND_NE_TOOLS_SOFT === '1' && state.pickSwings >= 100 && !pickCraftable(state)
 }
 // Кирка крафтится из принесённого сейчас, без похода за деревом: палки (или доска на палки), камень/железо, верстак (или 4 доски).
-function pickCraftable(state: NetherSupplyState): boolean {
+export function pickCraftable(state: NetherSupplyState): boolean {
   const sticks = quantity(state, /^stick$/) >= 2 || planks(state) >= 1
   const head = stone(state) >= 3 || quantity(state, /^iron_ingot$/) >= 3
   const table = quantity(state, /^crafting_table$/) > 0 || planks(state) >= 4 + (quantity(state, /^stick$/) >= 2 ? 0 : 1)
@@ -49,10 +49,13 @@ function pickCraftable(state: NetherSupplyState): boolean {
 export async function replenishNetherTools(port: NetherSupplyPort): Promise<NetherSupplyResult> {
   const deadline = port.now() + 240000
   let state = await port.observe()
-  const safe = (): boolean => !port.interrupted() && port.now() < deadline && state.dimension === 'the_nether' && state.health >= 12
+  // ND_GRAPH_HP_PRICE=1 (поток graph sr27, выкл.): крафт из принесённого — при любом хп (физике хп не нужно; риск — в цене графа),
+  // ходьба и копка за стеблями/камнем — по-прежнему с хп ≥ 12.
+  const hpFree = process.env.ND_GRAPH_HP_PRICE === '1'
+  const safe = (): boolean => !port.interrupted() && port.now() < deadline && state.dimension === 'the_nether' && (hpFree || state.health >= 12)
   const refresh = async (): Promise<void> => { state = await port.observe() }
   const act = async (method: string, params: Record<string, unknown>): Promise<void> => {
-    if (safe()) {
+    if (safe() && state.health >= 12) {
       const left = (deadline - port.now()) / 1000
       await port.act(method, { ...params, timeoutSeconds: Math.min(Number(params.timeoutSeconds ?? left), left) })
       await refresh()

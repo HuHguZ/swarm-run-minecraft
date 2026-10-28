@@ -366,7 +366,7 @@ async function boxShelter (session, ctl, explain = false) {
     const box = await fortify.boxIn(bot, { roof: true, ctl, timeoutMs: 800, hard: false })
     if (!ctl.aborted && !box.sealed && box.plan) await fortify.patch(bot, box.plan, { timeoutMs: 800, ctl }).catch(() => 0)
     if (!box.cell || !fortify.enclosure(bot, box.cell).sealed) return explain
-      ? { stopped: `не удалось закрыться на месте: ${box.why || box.failed?.join('; ') || 'остались открытые стены или крыша'}`, sealed: false }
+      ? { stopped: `не удалось закрыться на месте: ${box.failed?.join('; ') || box.why || 'остались открытые стены или крыша'}`, sealed: false }
       : null
     session.shelterBox = box.cell
     const note = 'закрылся коробкой из блоков на месте'

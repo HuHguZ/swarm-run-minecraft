@@ -68,8 +68,47 @@ export async function roomEyes (rx: RoomRun, t: RoomTick): Promise<Turn> {
     legs.push({ to: xyz(rx.spawner), why: 'спавнер', ok: w.ok })
     rx.seenFrames = visibleOf(bot, [frameId], 48, 24)
     if (rx.seenFrames.length) return 'stop'
+    // ND_END2_PIE: дошёл до видимого спавнера, рамок нет — его трек «пирога» не комната.
+    if (process.env.ND_END2_PIE === '1' && w.ok && rx.session._pieTrack) {
+      for (const tr of rx.session._pieTrack.tracks) if (!tr.notRoom && tr.est && Math.hypot(tr.est.x - rx.spawner.x, tr.est.z - rx.spawner.z) <= 8) { tr.notRoom = 'дошёл до спавнера — рамок нет'; log('«пирог»: спавнер не комната', { track: tr.id, why: tr.notRoom }) }
+    }
+    // ND_SH_PIE_SKIP=1: дошёл до видимого спавнера, а рамок не видно — это не комната портала (данж: −9170, «пирог» вёл к спавнеру у
+    // лестницы старта, комната — в 50 бл.; там же 8 зомби). Игрок это запоминает: из «пирога» этот спавнер больше не считать.
+    if (process.env.ND_SH_PIE_SKIP === '1' && w.ok) {
+      const ex = rx.session._roomExplore
+      const nr = ex.notRoom || (ex.notRoom = [])
+      if (!nr.some(p => p.distanceTo(rx.spawner) < 2)) { nr.push(rx.spawner.clone()); ex.pie = []; log('спавнер без рамок — не комната, из «пирога» вон', { at: xyz(rx.spawner) }) }
+    }
   }
   rx.bricksSeen = Math.max(rx.bricksSeen, visibleOf(bot, brickIds, 16, 200).length)
+}
+
+// ND_SH_VPROBE=1 (sr27-end): стою у оценки «пирога» по горизонтали (надёжной), а рамок не видно — комната выше или ниже этажа
+// коридоров. Высота «пирогом» на близкой дальности врёт на 5–10 бл. (p8-B −2642: оценка спавнера в комнате по x/z, высота −14…−17,
+// тело штрекует на y −17, пол комнаты −11 — 34 мин под полом). Как игрок: ступенями вверх по 3 бл. (до +12), потом вниз (до −12) —
+// сквозь кирпич, рамки/спавнер не копаются; каждый оборот глаза (roomEyes) смотрят рамки. Состояние — на крепость, через вызовы.
+export async function roomVProbe (rx: RoomRun, t: RoomTick): Promise<Turn> {
+  const { session, ctl, bot, deadline, legs } = rx
+  if (process.env.ND_SH_VPROBE !== '1' || !honestDescent() || !rx.lure || !rx.lurePie || !rx.lurePrecise) return
+  const me = bot.entity.position
+  if (Math.hypot(rx.lure.x - me.x, rx.lure.z - me.z) > 4 || ctl.aborted || gameClock.now() > deadline - 20000) return
+  const ex = session._roomExplore
+  const key = `${Math.round(rx.lure.x / 6)},${Math.round(rx.lure.z / 6)}`
+  if (!ex.vprobe || ex.vprobe.key !== key) ex.vprobe = { key, base: Math.floor(me.y), dir: rx.lure.y < me.y - 2 ? -1 : 1, turns: 0, flipped: false }
+  const vp = ex.vprobe
+  if (vp.turns >= 14) return
+  vp.turns++
+  const y = Math.floor(me.y)
+  if ((vp.dir > 0 && y - vp.base >= 12) || (vp.dir < 0 && vp.base - y >= 12)) {
+    if (vp.flipped) { vp.turns = 14; return }
+    vp.dir = -vp.dir; vp.flipped = true
+  }
+  const D: typeof import('../endportal-descent') = require('../endportal-descent')
+  const v = await D.toLevel(session, ctl, y + 3 * vp.dir, { deadline: Math.min(deadline, gameClock.now() + 30000), bricks: null, maxSteps: 4 })
+  legs.push({ why: 'проба по высоте у «пирога»', dir: vp.dir, from: y, to: Math.floor(bot.entity.position.y), ok: v.ok, stop: v.why })
+  log('проба по высоте у «пирога»', { dir: vp.dir, from: y, to: Math.floor(bot.entity.position.y), base: vp.base, ok: v.ok, why: v.why })
+  if (!v.ok && !v.moved) { if (vp.flipped) vp.turns = 14; else { vp.dir = -vp.dir; vp.flipped = true } }
+  return 'next'
 }
 
 export function roomFrontier (rx: RoomRun, t: RoomTick): void {
@@ -104,10 +143,28 @@ function roomPieLure (rx: RoomRun, me) {
   // ND_ROOM_PIE=0 — без «пирога».
   let pieLure = null
   let pieLurePrecise = false
+  // ND_END2_PIE=1: каждая дуга спавнера — свой трек; данж и спавнер выше крепости — не комната (endportal/pie-track.ts).
+  if (process.env.ND_ROOM_PIE !== '0' && process.env.ND_END2_PIE === '1') {
+    try {
+      const P: typeof import('./pie-track') = require('./pie-track')
+      const notRoom = process.env.ND_SH_PIE_SKIP === '1' ? (session._roomExplore.notRoom || []) : []
+      const store = P.pieStore(session, session._roomExplore.key)
+      const fresh = P.pieObserve(bot, store, { skip: notRoom.length ? c => notRoom.some(p => Math.abs(p.x - c.x) <= 1 && Math.abs(p.y - c.y) <= 1 && Math.abs(p.z - c.z) <= 1) : null })
+      const b = P.pieBest(bot, store, rx.origin)
+      if (b) {
+        pieLurePrecise = b.precise
+        pieLure = new Vec3(b.at.x, b.precise && b.y !== null ? b.y : me.y, b.at.z)
+        if (usedLures.some(u => Math.hypot(u.x - pieLure.x, u.z - pieLure.z) < 6)) pieLure = null
+        if (pieLure && fresh && (!rx.lure || pieLure.distanceTo(rx.lure) > 6)) log('«пирог»: спавнер', { track: b.track, precise: b.precise, lure: xyz(pieLure.floored()), tracks: P.pieSummary(store) })
+      }
+    } catch (e) { log('«пирог»: ошибка', { error: e.message }) }
+    return { pieLure, pieLurePrecise }
+  }
   if (process.env.ND_ROOM_PIE !== '0') {
     try {
       const S: typeof import('../perception/senses') = require('../perception/senses')
-      const arcs = S.pieArcs(bot, 'spawner', { fov: 20, step: 2 })
+      const notRoom = process.env.ND_SH_PIE_SKIP === '1' ? (session._roomExplore.notRoom || []) : []
+      const arcs = S.pieArcs(bot, 'spawner', { fov: 20, step: 2, skip: notRoom.length ? c => notRoom.some(p => Math.abs(p.x - c.x) <= 1 && Math.abs(p.y - c.y) <= 1 && Math.abs(p.z - c.z) <= 1) : null })
       const ps = session._roomExplore.pie || (session._roomExplore.pie = [])
       if (arcs.length && !arcs[0].all && arcs[0].center !== null) {
         const last = ps[ps.length - 1]
@@ -118,7 +175,7 @@ function roomPieLure (rx: RoomRun, me) {
         // Высота — «пирогом» по вертикали (наклон камеры) при известной горизонтальной дальности (s5e-Q-2: комната на 3 бл. выше
         // штрека — 4 штрека «за 24 шагов не дошёл»).
         let ly = me.y
-        if (pieLurePrecise) { const el = (require('../endportal-descent') as typeof import('../endportal-descent')).pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z)); if (el) ly = el.y; if (process.env.ND_PIE_YCAP === '1') ly = Math.min(ly, 52) }
+        if (pieLurePrecise) { const el = (require('../endportal-descent') as typeof import('../endportal-descent')).pieElevation(bot, Math.hypot(est.x - me.x, est.z - me.z), { skip: notRoom.length ? c => notRoom.some(p => Math.abs(p.x - c.x) <= 1 && Math.abs(p.y - c.y) <= 1 && Math.abs(p.z - c.z) <= 1) : null }); if (el) ly = el.y; if (process.env.ND_PIE_YCAP === '1') ly = Math.min(ly, 52) }
         if (pieLurePrecise) pieLure = new Vec3(est.x, ly, est.z)
         else { const v = S.vecOf(arcs[0].center); pieLure = new Vec3(me.x + v.x * 24, me.y, me.z + v.z * 24) }
         // Дошёл до оценки, а рамок не видно — спавнер выше/ниже: эту точку не повторять (дальше звук лавы и обход).

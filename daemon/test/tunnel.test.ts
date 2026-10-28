@@ -317,3 +317,24 @@ test('бюджет кирок: одно бревно даёт 4 доски, а �
   inv.push({ name: 'crafting_table', count: 1 })
   assert.equal(T.pickBudget(bot).craftable, 14, 'с готовым верстаком все 13 досок доступны')
 })
+
+test('ND_BAST_IRON_SPARE: каменных нет — железная копает незерак, пока у неё больше запаса; запас — только золоту', () => {
+  const tools: typeof import('../src/tools') = require('../src/tools')
+  const T: typeof import('../src/tunnel') = require('../src/tunnel')
+  const mcBlock = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
+  const iron = { name: 'iron_pickaxe', type: data.itemsByName.iron_pickaxe.id, maxDurability: 250, durabilityUsed: 100, slot: 11, count: 1 }
+  const bot: Record<string, any> = { inventory: { items: () => [iron] }, entity: { onGround: true, effects: {} as Record<string, any> }, heldItem: iron }
+  const netherrack = mcBlock.fromStateId(data.blocksByName.netherrack.defaultState, 0)
+  const gold = mcBlock.fromStateId(data.blocksByName.gold_block.defaultState, 0)
+  bot._ndToolFilter = T.makeToolFilter(bot, true)
+  const prev = process.env.ND_BAST_IRON_SPARE
+  try {
+    delete process.env.ND_BAST_IRON_SPARE
+    assert.equal(tools.bestFor(bot, netherrack).item, null, 'без флага — железная бережётся целиком')
+    process.env.ND_BAST_IRON_SPARE = '60'
+    assert.equal(tools.bestFor(bot, netherrack).item?.name, 'iron_pickaxe', '150 взмахов > 60 — копает')
+    iron.durabilityUsed = 200
+    assert.equal(tools.bestFor(bot, netherrack).item, null, '50 взмахов ≤ 60 — запас золоту')
+    assert.equal(tools.bestFor(bot, gold).item?.name, 'iron_pickaxe')
+  } finally { if (prev === undefined) delete process.env.ND_BAST_IRON_SPARE; else process.env.ND_BAST_IRON_SPARE = prev }
+})

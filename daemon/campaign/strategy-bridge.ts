@@ -24,7 +24,7 @@ import { spares } from './kit'
 import { runDeepLava } from '../src/campaign/deep-lava'
 import { dayLavaStep, lavaLookout, skyLavaLook, lavaAtSeenRuins, structureValue, dayLeft } from './scout'
 import { routeMod, routeStep } from './route-wiring'
-import { enterNether, replenishNetherSupply } from './nether-trip'
+import { enterNether, replenishNetherSupply, goldUp } from './nether-trip'
 import { checkEndEntry, SH_NETHER, canLink } from './endgame'
 import * as gameClock from '../src/game-clock'
 import { createCampaignIntelligence } from '../src/campaign/intelligence'
@@ -44,6 +44,7 @@ async function intelligenceObservation () {
   graphFact('nether_ready', READY.nether())
   if (process.env.ND_OW_DEEP_LAVA === '1') graphFact('deep_lava_pick_swings', sit.pickLeft ?? 0)
   graphFact('nether_tools_ready', netherSupply.netherToolsReady(netherSupplyState()))
+  graphFact('nether_wood_seen', !!netherSupplyState().woodAt)
   graphFact('nether_pick_swings', sit.pickLeft ?? 0)
   graphFact('fortress_explored', netherExplored)
   if (process.env.ND_NE_RECOVER === '1' || process.env.ND_NE_NO_GIVEUP === '1') graphFact('nether_search_state', netherRetryState())
@@ -134,6 +135,8 @@ async function executeStrategy (command, signal) {
       const supply = await replenishNetherSupply()
       if (!supply.ready) return { outcome: supply.interrupted ? 'INTERRUPTED' : 'FAILURE', reason: supply.reason, events: [] }
     } else if (skill === 'bastionSupply') {
+      // ND_BAST_GOLD_ON: ботинки до торга — граф ведёт шаги плана подряд, мимо loopSelect (R2-P слот 14: 27 слитков → seek без брони).
+      if (process.env.ND_BAST_GOLD_ON === '1' && dim() === 'the_nether') await goldUp()
       if (have('gold_block') && have('gold_ingot') < 8) await craft('gold_ingot', 9 * have('gold_block'))
       if (have('gold_ingot') >= 8) {
         const barter = await act('bastion', { ...barterSite(), mode: 'barter', pearls: have('ender_pearl'), fireRes: 1, timeoutSeconds: 540, sealed: true })
@@ -183,6 +186,13 @@ async function executeStrategy (command, signal) {
       if (have('obsidian') >= 10) await stageRun('portal')()
       else if (!known.portal) await stageRun('cast')()
       graphFact('ruined_portal_exhausted', true)
+    } else if (skill === 'bedsNear') {
+      // ND_GRAPH2_BEDS: овцы на виду — шерсть сейчас (fauna.wool: стадо одного цвета, убой или стрижка); кровати скуёт набор на дракона.
+      const w0 = have(/_wool$/)
+      const r = await act('wool', { count: Math.max(3, Number(command.params?.wool) || 3), radius: 32, timeoutSeconds: 90 })
+      await refresh()
+      log(`кровати по пути: шерсти ${w0} → ${have(/_wool$/)}; овец на виду ${r.detail?.seen ?? 0}, убито ${r.detail?.killed ?? 0}, острижено ${r.detail?.sheared ?? 0}`)
+      if (have(/_wool$/) <= w0 && !strategyInterrupted) return { outcome: 'FAILURE', reason: 'шерсти не прибавилось', events: [] }
     } else if (skill === 'enterNether') await enterNether()
     // LeaveNether к точке выхода у крепости Края, а не домой (COORD 00:55 S5c: s5c-f3-1 — граф уводил к порталу дома, 12 мин
     // впустую, дальше пешком): при ND_SH_NETHER и известной крепости выход ведёт этап stronghold (viaNetherTo; не вышло — он сам домой).
@@ -202,6 +212,7 @@ async function executeStrategy (command, signal) {
       if (price) log(price.line)
       if (price?.action === 'endermen') await stageRun('pearls')()
       else {
+      if (process.env.ND_BAST_GOLD_ON === '1' && dim() === 'the_nether') await goldUp()
       if (have('gold_block') && have('gold_ingot') < 8) await craft('gold_ingot', 9 * have('gold_block'))
       if (have('gold_ingot') < 8) return { outcome: 'FAILURE', reason: 'сервер не подтвердил восемь слитков для бартера', events: [] }
       // ND_BARTER_SEEK (по умолчанию): торг принесённым — сперва у видимых пиглинов на открытом (pearls seek), как этап bastion. Граф звал

@@ -131,7 +131,20 @@ async function goldFirstStep () {
 // (Block.playerWillDestroy, 1.21.11) — враги в 24 бл. на виду, значит не трогать; без брони в бастион — закрытым штреком.
 // Самородки — в слитки, броня — как хватит на 4 слитка. Пустая попытка — пауза 2 игр. мин.
 let netherGoldNext = -Infinity
+// ND_BAST_GOLD_ON=1 (поток bast 27.10, выкл.): золото в рюкзаке в любом виде (самородки, блок, слитки) → золотые ботинки до торга и
+// хода к бастиону. Граф торговал (pearls seek) без брони: 32 слитка в рюкзаке, ботинок нет — пиглины бьют (sr27-bast-b0f слот 12:
+// хп 20 → 7, «домой» и смерть в огне); 43 самородка лежали не сплавленными (b0s слот 13).
+async function goldUp () {
+  await refresh()
+  if (goldOn()) return true
+  if (have('gold_ingot') < 4 && have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))
+  if (have('gold_ingot') < 4 && have('gold_block')) await craft('gold_ingot', 9)
+  if (have('gold_ingot') >= 4) { await wearGold(); await refresh() }
+  return goldOn()
+}
+
 async function netherGold () {
+  if (process.env.ND_BAST_GOLD_ON === '1' && await goldUp()) return
   await refresh()
   if (!goldOn() && have('gold_block') && have('gold_ingot') < 5) {
     await craft('gold_ingot', 9 * have('gold_block'))
@@ -299,5 +312,5 @@ async function replenishNetherSupply () {
   })
 }
 
-export { enterNether, wearGold, netherArrival, netherGold, fedForBlazes, continueFortressChoice, changeNetherCause,
+export { enterNether, wearGold, goldUp, netherArrival, netherGold, fedForBlazes, continueFortressChoice, changeNetherCause,
   replenishNetherSupply }

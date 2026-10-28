@@ -60,6 +60,8 @@ export async function sit (session, ctl, ms, { swing = false, hitStop = false, s
     ...(remembered?.count ? { bruteMemory: remembered, requiresExitPlan: true } : {}) }
 }
 
+export const chaseShooter = f => process.env.ND_BAST2_CROSSBOW_CHASE === '1' && !!f && f.name === 'piglin' && f.equipment?.[0]?.name === 'crossbow'
+
 // в прицеле (pick) — щит вниз, удар, щит снова. Враг дальше 3.2 и виден дольше 2 с — шаг к нему (щит поднят: арбалет).
 export async function duel (session, ctl, target, ms = 15000, { crowdOk = false, lastStand = false }: any = {}) {
   const bot = session.bot
@@ -104,8 +106,12 @@ export async function duel (session, ctl, target, ms = 15000, { crowdOk = false,
       // Мало хп — уйти в коробку, если есть чем (иначе бой до конца: B2-3 03.10 — хп 7, стоп, коробки нет, смерть стоя).
       const canBox = guardCount(bot) >= 4
       if (((bot.health ?? 20) < 7 && canBox && !lastStand) || (!crowdOk && meleeFoes(bot, 6).length >= 3)) { out.stopped = (bot.health ?? 20) < 7 ? 'хп' : 'толпа'; break }
+      // ND_BAST2_CROSSBOW_CHASE=1 (поток bast2 27.10, выкл.): пиглин с арбалетом пятится (BackUpIfTooClose 5) и стреляет — догнать бегом
+      // сразу, с прыжком через ступень, и ждать удара 8 с, а не 4: шаг «вперёд» через 2 с без бега не догонял, «не достать» → контакт
+      // помечен недостижимым и стрелы дальше без ответа (sr27-bast B5 слот 11: 6 стрел за 22 с, 20 → 0; bast2 B слот 14: 20 → 5).
+      const chase = chaseShooter(foe)
       // Не достать 4 с (за стеной, в щели, не подходит) — не стоять: бой не задался.
-      if (gameClock.now() - Math.max(last, t0) > 4000 && !swings) { out.stopped = 'не достать'; break }
+      if (gameClock.now() - Math.max(last, t0) > (chase ? 8000 : 4000) && !swings) { out.stopped = 'не достать'; break }
       const shot = imminent()
       if (shot) {
         // Fight держит руки: ближайший снаряд встречаем щитом, затем продолжаем того же врага.
@@ -134,10 +140,12 @@ export async function duel (session, ctl, target, ms = 15000, { crowdOk = false,
       if (d > 3.2 && sees(bot, foe)) { if (!far) far = gameClock.now() } else far = 0
       // Шаг к врагу — только если шаг безопасен (S4c 07.10, замечание проверки г): клавиша «вперёд» к ифриту/иссушителю за краем
       // моста вела тело в пустоту или лаву; moves.stepSafe — обрыв > 3, лава/огонь/магма под шагом.
-      bot.setControlState('forward', !!(far && gameClock.now() - far > 2000 && d > 3.2 && d < 10) && (require('../moves') as typeof import('../moves')).stepSafe(bot, (require('../moves') as typeof import('../moves')).keyDir(bot, 'forward')))
+      const go = !!(chase ? d > 2.8 && d < 14 && sees(bot, foe) : far && gameClock.now() - far > 2000 && d > 3.2 && d < 10) && (require('../moves') as typeof import('../moves')).stepSafe(bot, (require('../moves') as typeof import('../moves')).keyDir(bot, 'forward'))
+      bot.setControlState('forward', go)
+      if (chase) { bot.setControlState('sprint', go); bot.setControlState('jump', go && !!bot.entity.isCollidedHorizontally) }
       await sleep(60)
     }
-  } finally { bot.setControlState('forward', false); shield?.close(); bot.removeListener('entitySwingArm', onSwing) }
+  } finally { bot.setControlState('forward', false); if (process.env.ND_BAST2_CROSSBOW_CHASE === '1') { bot.setControlState('sprint', false); bot.setControlState('jump', false) } shield?.close(); bot.removeListener('entitySwingArm', onSwing) }
   out.swings = swings
   out.s = Math.round((gameClock.now() - t0) / 1000)
   return out

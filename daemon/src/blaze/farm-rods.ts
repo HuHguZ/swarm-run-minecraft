@@ -35,6 +35,7 @@ const detail: any = {
   rods: { before: fr.rods0, now: rods, gained, want: fr.want },
   dugIn: fr.dugIn && fr.dugIn.ok ? fr.dugIn : undefined,
   kills: fr.kills.length,
+  lostKills: fr.kills.filter(k => k.lost).length,
   killsAt: fr.kills.slice(0, 12),
   perKill: fr.kills.length ? Math.round(gained / fr.kills.length * 100) / 100 : null,
   fights: fr.fights.slice(-8),

@@ -46,6 +46,23 @@ export function normalizeSkillSample(value: unknown, legacyTps?: number): CostSa
     ticks, ok: sample.ok, outcome: sample.outcome, death: sample.death, before: sample.before, ...(gained ? { gained } : {}) }
 }
 
+/** Graph strategy rows whose body died within `seconds` of game time after the attempt ended (sr27 graph: tactics interrupt the
+ *  skill and the body dies in refuge/flee after it — the strategy row itself says alive, so mortality was undercounted). */
+export function tacticalDeaths(rows: readonly unknown[], seconds = 180): Set<number> {
+  const marked = new Set<number>()
+  let last: { index: number; at: number; rate: number } | null = null
+  rows.forEach((value, index) => {
+    const row = record(value)
+    const at = Date.parse(String(row.at))
+    if (row.level === 'strategy') { last = Number.isFinite(at) && record(row.after).alive !== false ? { index, at, rate: number(row.tickRate) ?? 20 } : null; return }
+    if (row.death !== true || !last) return
+    // Wall time × target rate / 20 bounds game time from above on a lockstep world: only nearer deaths are attributed.
+    if ((at - last.at) / 1000 * last.rate / 20 <= seconds) marked.add(last.index)
+    last = null
+  })
+  return marked
+}
+
 function knownLegacyRate(directory: string): number | undefined {
   const filename = resolve(directory, 'batch.json')
   if (!existsSync(filename)) return undefined
@@ -70,15 +87,19 @@ export function collectCosts(directories: readonly string[], root = REPO_ROOT): 
       const source = readFileSync(filename, 'utf8')
       hash.update(file).update('\0').update(source)
       modified = Math.max(modified, statSync(filename).mtimeMs)
+      const rows: unknown[] = []
       for (const line of source.split(/\r?\n/)) {
         if (!line.trim()) continue
         records++
-        let value: unknown
-        try { value = JSON.parse(line) } catch { malformed++; continue }
+        try { rows.push(JSON.parse(line)) } catch { malformed++ }
+      }
+      const died = tacticalDeaths(rows)
+      rows.forEach((value, index) => {
         const sample = normalizeSkillSample(value, legacyTps)
+        if (sample && died.has(index)) sample.death = true
         if (sample) samples.push(sample)
         else skipped++
-      }
+      })
     }
     sourceDirectories.push({ directory: relative(root, directory).replaceAll('\\', '/'), files: files.length,
       modifiedAt: new Date(modified).toISOString(), sha256: hash.digest('hex'), legacyTps: legacyTps ?? null })

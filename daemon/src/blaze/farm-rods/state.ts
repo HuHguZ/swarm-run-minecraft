@@ -128,7 +128,10 @@ export function openRods (session, ctl, p: any = {}): RodsFarm {
     if (e.position.distanceTo(bot.entity.position) > 24) return
     if (how === 'gone' && !(gameClock.now() - (fr.hurtAt.get(e.id) || 0) < 3000)) return
     fr.dead.add(e.id)
-    fr.kills.push({ at: xyz(e.position), t: Math.round((gameClock.now() - fr.t0) / 100) / 10 })
+    // Разбор (blaze2 27.10): убит над лавой/пустотой/водой — стержню падать некуда (radar.dropCell: пола до 12 вниз нет).
+    let lost = false
+    try { lost = !(require('../radar') as typeof import('../radar')).dropCell(bot, e.position) } catch {}
+    fr.kills.push({ at: xyz(e.position), t: Math.round((gameClock.now() - fr.t0) / 100) / 10, ...(lost ? { lost: true } : {}) })
   }
   fr.onGone = e => fr.onDead(e, 'gone')
   // entityDead приходит не всегда (pvp.js: «сущность снимается с мира через

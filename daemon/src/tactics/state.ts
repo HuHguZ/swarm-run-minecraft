@@ -347,7 +347,11 @@ export function candidates(state: TacticalState, level = threatLevel(state)): Ca
   // и такого фармлю»; 69 shields at level 1 against people in 10 min, none at a shot in flight, a second human 6-14 blocks
   // off). Without a shot the skill's own fight or retreat goes on.
   const flankers = state.enemies.filter(enemy => enemy.player && (enemy.threatening || enemy.foe) && enemy.distance <= 12).length
-  add('Shield', state.owGuard ? 110 : 80, state.owGuard ? 'visible draw or incoming shot' : 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat &&
+  // ND_OW2_ARCHER_MELEE (ow2 27.10, выкл.): лучник в досягаемости меча — бой (90), а не щит (110): вплотную скелет бьёт и в поднятый
+  // щит сбоку, а щит его не убивает (скамья try-ow2-duel: скелет у тела после убитого зомби, щит/коробка 8 → 0 хп за 12 с).
+  const archerAtSword = process.env.ND_OW2_ARCHER_MELEE === '1' && !!state.owGuard && state.canFight && state.weapon &&
+    state.enemies.some(enemy => enemy.id === state.owGuard!.id && !enemy.player && enemy.distance <= 3.5)
+  add('Shield', archerAtSword ? 70 : state.owGuard ? 110 : 80, state.owGuard ? 'visible draw or incoming shot' : 'incoming threat', state.shield && !state.dangerousFall && !state.aerialCombat &&
     (state.owGuard !== undefined ? !!state.owGuard : playerFoe ? state.incomingProjectiles > 0 && flankers <= 1 : level === 1 || state.incomingProjectiles > 0))
   add('Heal', 105, 'recover behind cover', state.cover && !creeperNear && state.health < 16 && state.edible && !state.dangerousFall && !state.aerialCombat && !state.lava && !state.lavaEscapePending && !playerFoe)
   const recoverBurn = burnRecovery(state)

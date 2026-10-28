@@ -21,6 +21,10 @@ import { routeMod, ROUTE_SLEEP, routeSleep } from './route-wiring'
 import * as gameClock from '../src/game-clock'
 const REFUGE_PASS = new Set(['status', 'situation', 'recall', 'remember', 'stop', 'connect', 'disconnect', 'play_mode'])
 const NO_REPEAT = new Set(['wait', 'flee', 'fight', 'refuge', 'shelter', 'sleep', 'eat', 'escape_fire', 'surface'])
+// ND_OW_NIGHT_TRIP=1: ночной заход поверху, уже оценённый ценой (loop/night: набор есть, озеро под небом — вода и литьё ночью),
+// общий ночной запрет наземных ходов не отменяет (f1 27.10, −2642: заход отклонён трижды, литьё на рассвете — Ад на 25.7 мин).
+let nightTrip = false
+function setNightTrip (v: boolean) { nightTrip = v }
 
 async function act (method, params: any = {}, again = 0) {
   const wallEmergency = method === 'unstuck' && params.cause === 'in_wall' && process.env.ND_OW_BURIAL_STEP === '1' && dim() === 'overworld'
@@ -42,7 +46,7 @@ async function act (method, params: any = {}, again = 0) {
   // начинаю — назад в главный цикл, там ночь идёт под землёй (nightHold). cl-m 14.10: MineIron/вода в болоте ещё 2 мин после
   // темноты, хп 20 → 1 и смерть утром.
   if (sit.surface && (/^(goto|explore|loot|mine|structure)$/.test(method) || (method === 'fight' && /^(food|resource)$/.test(params.purpose || ''))) &&
-      !params.netherWood && stage !== '-' && !fighting && !resting && !died && !NIGHT_STAGES.has(stage) && !(/^(cast|nightWork)$/.test(stage) && castNear() && method !== 'explore') && nightHold()) {
+      !params.netherWood && stage !== '-' && !fighting && !resting && !died && !NIGHT_STAGES.has(stage) && !(/^(cast|nightWork)$/.test(stage) && castNear() && method !== 'explore') && !nightTrip && nightHold()) {
     throw Object.assign(new Error(`ночь, брони нет — наверху ${method} не начинаю, работа под землёй`), { strategyInterrupted: true })
   }
   // Вход своей лестницы с поверхности: наверх потом — ею, без копки нового колодца (cl-q 14.10: подъём столбом с y 16 съел
@@ -286,4 +290,4 @@ const SELF_GUARDED = new Set(['fight', 'flee', 'refuge', 'blaze', 'pearls', 'dra
 // Этапы, которые ночь ведут сами (iron: вниз и штреки) или не ходят поверху (крафт, еда, лечение).
 const NIGHT_STAGES = new Set(['iron', 'MineIron', 'stone', 'AcquireStoneTools', 'CraftPortalKit', 'EatFood', 'Heal', 'PrepareBread'])
 
-export { act }
+export { act, setNightTrip }

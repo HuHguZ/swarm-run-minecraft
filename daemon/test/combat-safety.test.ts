@@ -229,3 +229,34 @@ test('shieldDuel: пиглин при еде 17 — бой, без щита — 
   assert.equal(duel.trade, true)
   assert.equal(evaluate({ ...fed, health: 11, shieldDuel: true }).action, 'recover', 'после размена хп меньше половины порога — отход')
 })
+
+// ND_OW_FIGHT_TRADE (ow 27.10): один скелет в 10 бл., 11 хп, меч, еды нет — в sr27 это «нечем восстановить здоровье» → CORNERED → смерть.
+test('ND_OW_FIGHT_TRADE: a lone skeleton at 11 hp with a sword and no food is a fight, priced by the expected damage', () => {
+  const prev = process.env.ND_FIGHT_COST
+  try {
+    delete process.env.ND_FIGHT_COST
+    const lone = { health: 11, food: 14, foodPoints: 0, weapon: true, expected: 4, threats: [{ name: 'skeleton', hit: 3.5, distance: 10 }] }
+    assert.equal(evaluate(lone).action, 'leave', 'old rule: no food to heal, so leave')
+    assert.equal(evaluate({ ...lone, owTrade: true }).action, 'fight')
+    assert.equal(evaluate({ ...lone, owTrade: true, health: 6 }).action, 'leave', 'cannot afford the expected damage')
+    assert.equal(evaluate({ ...lone, owTrade: true, threats: [...lone.threats, { name: 'creeper', hit: 20, distance: 3 }] }).action, 'leave')
+    assert.equal(evaluate({ ...lone, owTrade: true, weapon: false }).action, 'leave')
+  } finally { if (prev === undefined) delete process.env.ND_FIGHT_COST; else process.env.ND_FIGHT_COST = prev }
+})
+
+// ND_OW2_TRADE_HOLD (ow2 27.10): два зомби, после первого удара 9 хп — начатый размен с ходячим у тела держится, пока ×1.5
+// ожидаемого остатка оставляет 1 хп; уход от него — тоже под ударами (скамья try-ow2-duel: коробка 6–9 хп или смерть).
+test('ND_OW2_TRADE_HOLD: a started trade with walkers at the body is held down to one spare heart', () => {
+  const prev = process.env.ND_OW2_TRADE_HOLD
+  try {
+    const pair = { health: 9, food: 14, foodPoints: 0, weapon: true, expected: 4, owTrade: true,
+      threats: [{ name: 'zombie', hit: 3, distance: 1.5 }, { name: 'zombie', hit: 3, distance: 3 }] }
+    delete process.env.ND_OW2_TRADE_HOLD
+    assert.equal(evaluate(pair).action, 'leave', 'flag off: 9 - 6 < 4')
+    process.env.ND_OW2_TRADE_HOLD = '1'
+    assert.equal(evaluate(pair).action, 'fight', 'held: 9 - 6 >= 1')
+    assert.equal(evaluate({ ...pair, phase: 'start' }).action, 'leave', 'a start keeps the old margin')
+    assert.equal(evaluate({ ...pair, health: 6 }).action, 'leave', 'the remainder would kill')
+    assert.equal(evaluate({ ...pair, threats: pair.threats.map(t => ({ ...t, distance: 6 })) }).action, 'leave', 'not at the body')
+  } finally { if (prev === undefined) delete process.env.ND_OW2_TRADE_HOLD; else process.env.ND_OW2_TRADE_HOLD = prev }
+})

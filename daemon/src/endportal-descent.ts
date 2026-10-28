@@ -404,11 +404,24 @@ async function honestTunnelStep (session, ctl, cell, { bricks = null, throughBri
 
 // Штрек к точке на своём уровне (к приманке: спавнер по «пирогу», звук лавы) — шагами honestTunnelStep по главной оси, при отказе
 // — по второй. Кирпич крепости копается (throughBricks), заражённый — при хп ≥ 12. Ответ в форме nether.bore: { ok, dug, moved, why }.
+// ND_SH_PICKS=1 (sr27-end): штрек и ступени к комнате без кирки вставали («deepslate голыми руками не ломается … можно скрафтить
+// stone_pickaxe» ×4, p7-B 27.10: железная стёрлась винтовым спуском на 70 уровней) — кирок нет вовсе, а булыжник и палки/доски
+// есть: каменные из рюкзака (tunnel.restockPicks), как перед шахтой.
+async function picksForDig (session, ctl) {
+  if (process.env.ND_SH_PICKS !== '1') return
+  // Нет каменных/деревянных — копка обычной породы встаёт и с железной в рюкзаке (tunnel.makeToolFilter бережёт её для руды:
+  // q-B −9170 «deepslate голыми руками … кирки нет вовсе» при железной на 184 взмаха).
+  const T: typeof import('./tunnel') = require('./tunnel')
+  if (T.lowPicks(session.bot) > 0) return
+  try { await T.restockPicks(session, ctl, 2) } catch {}
+}
+
 async function honestBore (session, ctl, target, { deadline, maxSteps = 24, bricks = null }: any) {
   const bot = session.bot
   let dug = 0; let moved = 0; let why = null
   for (let s = 0; s < maxSteps; s++) {
     if (ctl.aborted) return { ok: false, dug, moved, why: 'прервано' }
+    await picksForDig(session, ctl)
     if (gameClock.now() > deadline) return { ok: false, dug, moved, why: 'время вышло' }
     const f = bot.entity.position.floored()
     const ddx = target.x - f.x; const ddz = target.z - f.z
@@ -416,7 +429,13 @@ async function honestBore (session, ctl, target, { deadline, maxSteps = 24, bric
     const axes = (Math.abs(ddx) >= Math.abs(ddz) ? [[Math.sign(ddx), 0], [0, Math.sign(ddz)]] : [[0, Math.sign(ddz)], [Math.sign(ddx), 0]]).filter(([x, z]) => x || z)
     let stepped = false
     for (const [sx, sz] of axes) {
-      const r = await honestTunnelStep(session, ctl, f.offset(sx, 0, sz), { bricks, throughBricks: true })
+      let r = await honestTunnelStep(session, ctl, f.offset(sx, 0, sz), { bricks, throughBricks: true })
+      // ND_SH_PIE_STAY=1: удар рефлекса (чешуйница у комнаты, s-B 5730 ×2) рвёт копку, а не штрек: подождать и тот же шаг ещё раз.
+      for (let k = 0; k < 3 && !r.ok && process.env.ND_SH_PIE_STAY === '1' && /reflex|прервано/.test(String(r.why || '')) && !ctl.aborted && gameClock.now() < deadline; k++) {
+        dug += r.dug || 0
+        await sleep(1500)
+        r = await honestTunnelStep(session, ctl, f.offset(sx, 0, sz), { bricks, throughBricks: true })
+      }
       dug += r.dug || 0
       if (r.ok) { moved++; stepped = true; break }
       why = r.why
@@ -429,7 +448,8 @@ async function honestBore (session, ctl, target, { deadline, maxSteps = 24, bric
 // «Пирог» по вертикали: игрок наклоняет камеру и смотрит, при каком наклоне в доле blockentities есть спавнер (как pieArcs по
 // горизонтали, шаг 2°, поле 20°). Наружу — только угол возвышения (центр дуги) → высота по известной горизонтальной дальности
 // (оценка пеленгами). null — спавнера в прорисовке нет. { pitch, y } (y — оценка высоты спавнера).
-function pieElevation (bot, flat, { range = 64, fov = 20, step = 2 }: any = {}) {
+// yaw (ND_END2_PIE) — наклон смотрю, повернувшись к этому пеленгу (спавнеры в стороне в дугу наклона не входят).
+function pieElevation (bot, flat, { range = 64, fov = 20, step = 2, skip = null, yaw = null }: any = {}) {
   const e = bot._ndEyes || new eyes.Eyes(bot)
   e.syncDim()
   const read = eyes.reader(bot)
@@ -440,9 +460,10 @@ function pieElevation (bot, flat, { range = 64, fov = 20, step = 2 }: any = {}) 
     const ent = e.section(read, sc.cx, sc.cz, sc.sy)
     if (!ent) continue
     for (const c of ent.cells) {
-      if (!c.pie || c.name !== 'spawner') continue
+      if (!c.pie || c.name !== 'spawner' || (skip && skip(c))) continue
       const dx = c.x + 0.5 - o.x; const dy = c.y + 0.5 - o.y; const dz = c.z + 0.5 - o.z
       if (dx * dx + dy * dy + dz * dz > range * range) continue
+      if (yaw !== null) { const d = ((Math.atan2(-dx, dz) * 180 / Math.PI - yaw) % 360 + 540) % 360 - 180; if (Math.abs(d) > fov / 2) continue }
       angles.push(Math.atan2(dy, Math.hypot(dx, dz)) * 180 / Math.PI)
     }
   }
@@ -496,6 +517,7 @@ async function toLevel (session, ctl, ty, { deadline, bricks = null, maxSteps = 
   const bot = session.bot
   let k = 0; let moved = 0; let dug = 0; let why = null
   for (let s = 0; s < maxSteps && !ctl.aborted && gameClock.now() < deadline; s++) {
+    await picksForDig(session, ctl)
     const F = bot.entity.position.floored()
     if (Math.abs(F.y - ty) <= 1) return { ok: true, moved, dug }
     if (F.y > ty) {
@@ -519,8 +541,8 @@ async function toLevel (session, ctl, ty, { deadline, bricks = null, maxSteps = 
   return { ok: Math.abs(bot.entity.position.floored().y - ty) <= 1, moved, dug, why }
 }
 
-module.exports = { honestShaft, honestEnter, honestTunnelStep, honestBore, stairStep, judgeStep, visibleDrop, seen, SPIRAL, pieElevation, upStep, toLevel, digCell, placeAt, walkInto, waterSource }
+module.exports = { picksForDig, honestShaft, honestEnter, honestTunnelStep, honestBore, stairStep, judgeStep, visibleDrop, seen, SPIRAL, pieElevation, upStep, toLevel, digCell, placeAt, walkInto, waterSource }
 export {
   honestShaft, honestEnter, honestTunnelStep, honestBore, stairStep, judgeStep, visibleDrop, seen, SPIRAL,
-  pieElevation, upStep, toLevel, digCell, placeAt, walkInto, waterSource
+  pieElevation, upStep, toLevel, digCell, placeAt, walkInto, waterSource, picksForDig
 }

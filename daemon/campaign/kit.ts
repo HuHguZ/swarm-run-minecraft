@@ -39,6 +39,12 @@ async function ensureTable () {
     if (died || strategyInterrupted) return false
     if (have(/_planks$/) < 4) { const p = planksFor(); if (p) await act('craft', { item: p, count: 4 }) }
   }
+  // ND_BAST_TABLE_BACK=1 (поток bast 27.10): досок нет — свой брошенный верстак (память тела, до 64 бл.), а не поход за стеблями.
+  if (have(/_planks$/) < 4 && process.env.ND_BAST_TABLE_BACK === '1' && (state.health ?? 20) >= 12) {
+    await act('craft', { item: 'crafting_table', ownTableBack: true, timeoutSeconds: 60 })
+    await refresh()
+    if (have('crafting_table')) return true
+  }
   if (have(/_planks$/) < 4) return false
   for (let k = 0; k < 3 && !have('crafting_table'); k++) {
     const r = await act('craft', { item: 'crafting_table', count: 1 })
@@ -252,7 +258,10 @@ async function smeltAll (from, into, { fetchCoal = false, max = Infinity } = {})
   const inv = () => Object.keys(state.inventory || {})
   const cooking = RAW.test(from)
   const fireLogs = inv().filter(k => LOGS.test(k) && !/crimson|warped/.test(k)).reduce((n, k) => n + have(k), 0)
-  if (!have(/^(coal|charcoal)$/) && !have('lava_bucket') && left() >= 4 && fireLogs >= 5) {
+  // ND_OW_PLANK_FUEL=1 (ow 27.10): руду набора — прямо на досках (доска — 1.5 предмета), без угля из досок: древесный уголь — лишняя
+  // плавка 10–26 с у печи ради экономии одного бревна (телеметрия sr27: в каждом прогоне перед железом).
+  if (!have(/^(coal|charcoal)$/) && !have('lava_bucket') && left() >= 4 && fireLogs >= 5 &&
+      !(process.env.ND_OW_PLANK_FUEL === '1' && /^raw_(iron|gold)$/.test(from) && dim() === 'overworld')) {
     const want = Math.min(Math.ceil(left() / 8), fireLogs - 4)
     if (want > 0) {
       if (have(/_planks$/) * 1.5 < want) { const p = planksFor(); if (p) await craft(p, 4) }
@@ -281,7 +290,9 @@ async function smeltAll (from, into, { fetchCoal = false, max = Infinity } = {})
     const keepPlanks = cooking ? 0 : metal ? 2 : 8
     // Бревно в доски перед печью: доска горит 1.5 предмета, бревно — тоже 1.5, а досок из него четыре.
     if (metal && !coal && have(LOGS) >= 1 && (have(/_planks$/) - keepPlanks) * 1.5 < left()) {
-      const p = planksFor(); if (p) { await craft(p, 4); plankK = inv().find(k => /_planks$/.test(k) && !/^(crimson|warped)_/.test(k) && have(k) > 0) }
+      // ND_OW_PLANK_FUEL: досок сразу на всю плавку (8 руды — 6 досок), а не по 4 — иначе вторая плавка на остаток.
+      const boards = process.env.ND_OW_PLANK_FUEL === '1' ? Math.min(4 * have(LOGS), 4 * Math.ceil((Math.ceil(left() / 1.5) + keepPlanks - have(/_planks$/)) / 4)) : 4
+      const p = planksFor(); if (p) { await craft(p, Math.max(4, boards)); plankK = inv().find(k => /_planks$/.test(k) && !/^(crimson|warped)_/.test(k) && have(k) > 0) }
     }
     const stickK = metal && have('stick') > 4 ? 'stick' : null
     const wood = have('lava_bucket') ? 'lava_bucket'

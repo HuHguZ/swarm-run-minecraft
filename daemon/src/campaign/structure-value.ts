@@ -76,7 +76,9 @@ export const PRIOR: Record<string, Prior> = {
 // храм в 66 бл. «−25 с — мимо» (g1-1) при настоящих ~25 с работы.
 export const CHEST_WORK: Record<string, number> = { shipwreck: 6, shipwreckWet: 22, ocean_ruin: 22, desert_pyramid: 2, jungle_pyramid: 6, igloo: 25, village: 6, ruined_portal: 3, buried_treasure: 15 }
 // goldBoots — старый априор защиты; g4/g5 обе с lsgold, поэтому это не замер эффекта золота (R5).
-export const SECONDS = { iron: 22, ironSpare: 6, lighter: 90, obsidian: 6, food: 11, gold: 2, goldBoots: 480, goldenApple: 20, diamond: 20, bed: 15 }
+// bed: ND_END2_VILLAGE_BEDS — кровать на дракона дороже ночлега: без неё бой не начинается, позже — 3 овцы и поиск (75 с, как
+// BED_LATER_S графа ND_GRAPH2_BEDS; end sr27: набор перед Краем 0 кроватей из 92 попыток).
+export const SECONDS = { iron: 22, ironSpare: 6, lighter: 90, obsidian: 6, food: 11, gold: 2, goldBoots: 480, goldenApple: 20, diamond: 20, bed: process.env.ND_END2_VILLAGE_BEDS === '1' ? 75 : 15 }
 export const WALK_BPS = 2.5 // ход с обходами и прыжками; крюк — туда и половина обратно
 export const DETOUR = 1.5
 export const CHEST_SECONDS = 4 // открыть и взять, стоя у сундука (замер: 4 сундука храма — ~8 с после колодца)

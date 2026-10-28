@@ -20,7 +20,7 @@ import { netherVia, goToward, returnFromNether } from '../travel'
 import { ensureTable, craft, sticks, sticksReserve, spares, netherFillers, lumber, mineSeenAll, smeltAll } from '../kit'
 import { makeBed, cook } from '../food'
 import { ensureFlint } from '../portal-kit'
-import { enterNether, wearGold, netherGold, fedForBlazes, replenishNetherSupply } from '../nether-trip'
+import { enterNether, wearGold, netherGold, fedForBlazes, replenishNetherSupply, goldUp } from '../nether-trip'
 import * as gameClock from '../../src/game-clock'
 let prepRuns = 0
 defStage('prep', () => !!known.portal && dim() === 'overworld' && rodsNow() < 7 && (prepRuns < 1 || !lighter()) &&
@@ -154,6 +154,9 @@ defStage('bastion', () => !!known.portal && (!!nextBastion() || bastionSearchWan
     if (price?.action === 'endermen') { await stageRun('pearls')(); return }
     // ND_BARTER_SEEK (по умолчанию вкл., =0 — выкл.): золото на руках — сперва к видимым пиглинам на открытом без брутов рядом (pearls mode=seek), как спидраннер
     // в золотой броне; защищённое место бастиона (яма/окно) — только если так не вышло ни слитка (nbs32-5974: 27 слитков, «ни ямы, ни окна»).
+    // ND_BAST_GOLD_ON: золото пришло внутри этапа (заход bastion) — ботинки до торга: цикл этапа шёл в seek без брони (R-P слот 13: 32 слитка,
+    // ботинок нет, seek рвала тактика ×N).
+    if (carriedTrade && process.env.ND_BAST_GOLD_ON === '1' && !goldOn()) await goldUp()
     if (carriedTrade && process.env.ND_BARTER_SEEK !== '0') {
       bastionWantsSeek = false
       const sk = await act('pearls', { mode: 'seek', pearls: Math.max(0, eyesWant() - have('ender_eye')), timeoutSeconds: 360, avoid: { x: b.x, z: b.z, r: 20 } })

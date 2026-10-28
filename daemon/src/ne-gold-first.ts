@@ -22,6 +22,7 @@ export async function goldFirst (session, ctl, p: any = {}) {
   const nuggets = () => countOf(bot, 'gold_nugget') + 9 * countOf(bot, 'gold_ingot') + 81 * countOf(bot, 'gold_block')
   const out: any = { ores: 0, legs: 0, nuggets0: nuggets(), worn: T.goldWorn(bot), tried: [] }
   const tried = new Set<string>()
+  const openGold = process.env.ND_BAST2_OPEN_GOLD === '1'
   // Железной кирки нет, а сырое железо есть — расплавить сейчас, в кармане прибытия (bastion.makeIronPick: печь, плавка, кирка): блок золота
   // бастиона ломается только железной и лучше (gold_block harvestTools 1.21.11); int2-s20/int6 несли сырое железо без плавки.
   if (!bot.inventory.items().some(i => /^(iron|diamond|netherite)_pickaxe$/.test(i.name)) && countOf(bot, 'raw_iron') + countOf(bot, 'iron_ingot') >= 3) {
@@ -62,12 +63,35 @@ export async function goldFirst (session, ctl, p: any = {}) {
     const cand = [...sight.visibleOf(bot, [oreId], 32, { max: 12 }).map(b => b.position),
       ...E.nearest(bot, 'nether_gold_ore', { max: 16, maxDist: 40 }).map(r => new Vec3(r.x, r.y, r.z))]
       .filter(q => !tried.has(q.x + ',' + q.y + ',' + q.z) && bot.blockAt(q)?.name === 'nether_gold_ore' && !bruteNear(BM.spots(bot), q, 12) && !bruteNear(posts, q, 10) &&
-        !bruteNear(seenFoes, q, 10) && !bastionSeen.some(b => b.distanceTo(q) < 6) && q.distanceTo(home0) <= 40)
+        !bruteNear(seenFoes, q, 10) && !bastionSeen.some(b => b.distanceTo(q) < 6) && q.distanceTo(home0) <= (openGold ? 64 : 40))
       .sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position))
+    // ND_BAST2_OPEN_GOLD: руды не видно (−9170: прибытие в лесу/долине, 0 руд в памяти) — до 2 коротких разведок ногами за рудой
+    // (actions.explore: память глаз, затем лучи по 24 бл.), пока стражи не видно; потом — как прежде, дело поиска бастиона.
+    if (!cand.length && openGold && (out.explores || 0) < 2 && openSafe(bot) && deadline - gameClock.now() > 60000) {
+      out.explores = (out.explores || 0) + 1
+      const w = await watched(bot, ctl, sub => (require('./actions') as typeof import('./actions')).explore(session, sub, { block: 'nether_gold_ore', radius: 32, stepDistance: 24, timeoutSeconds: 60 }))
+      const ex: any = w.result || {}
+      out.explored = { found: !!ex.found, note: w.alarm || w.err || ex.note, at: ex.now }
+      if (w.alarm) break
+      continue
+    }
     if (!cand.length) { out.stopped = 'золотой руды не видно и в памяти нет'; break }
     const ore = cand[0]
     tried.add(`${ore.x},${ore.y},${ore.z}`)
     const before = nuggets()
+    // ND_BAST2_OPEN_GOLD=1 (поток bast2 27.10, выкл.): пиглинов, брутов и хоглинов не видно и не слышно — к руде ногами, как спидраннер.
+    // Закрытый штрек к руде у открытого почти не доходит (sr27-bast R-P: «к руде вплотную пути нет», «ближе не подойти», «время» —
+    // ботинки 1 раз из 20); ногами с тех же снимков r0-s2: 14 руд в памяти глаз, 56 самородков за 2 подхода. Видна стража — штрек, как был.
+    const safe = openGold && openSafe(bot)
+    if (openGold && !safe) out.guarded = (out.guarded || 0) + 1
+    if (safe) {
+      const op = await openOre(session, ctl, bot, ore, deadline)
+      const got = nuggets() - before
+      if (got > 0) out.ores += op.dug || 1
+      out.open = (out.open || 0) + 1
+      out.tried.push({ ore: { x: ore.x, y: ore.y, z: ore.z }, open: true, ok: op.ok, why: op.why, dug: op.dug, got })
+      if (op.ok || got > 0 || ctl.aborted) continue
+    }
     // Штрек по Аду целится в круг 3 бл. (последний кусок: допуск ≥ 3) — к руде вплотную добирает короткий закрытый план.
     const tr: any = await tunnel.tunnelTo(session, ctl, ore, { radius: 3, bonus: true, deadline: Math.min(deadline, gameClock.now() + 90000) }).catch(e => ({ ok: false, why: e.message }))
     out.legs++
@@ -83,6 +107,51 @@ export async function goldFirst (session, ctl, p: any = {}) {
   out.tried = out.tried.slice(-6)
   log('итог', out)
   return { ...out, note: out.worn ? `Золото на теле (${out.ores} руд, самородков ${out.nuggets})` : `Золотой брони нет: самородков ${out.nuggets}/36; ${out.stopped || 'время'}` }
+}
+
+// ND_BAST2_OPEN_GOLD: стражи золота на виду (пиглин, хоглин в 20; брут в 24 — сенсор пиглина 16 бл. + запас) или слышны ближе 8 за
+// 10 с — открыто не копать. 32 «на виду» у бастиона −2642 закрывали открытую копку на весь заход (sr27-bast2-s1: 0 открытых подходов).
+export const guardsNear = (seen: Array<{ name: string, seen?: boolean, dist?: number }>, heard: Array<{ who?: string, band?: string }>) =>
+  seen.some(e => e.seen && HOSTILE.test(e.name) && (e.dist ?? 0) <= (e.name === 'piglin_brute' ? 24 : 20)) ||
+  heard.some(h => HOSTILE.test(h.who || '') && /рядом|близко/.test(h.band || ''))
+export function openSafe (bot) {
+  try {
+    return !guardsNear((require('./perception/eyes') as typeof import('./perception/eyes')).entities(bot, { radius: 32 }),
+      (require('./perception/senses') as typeof import('./perception/senses')).heard(bot, { sinceMs: 10000 }))
+  } catch { return false }
+}
+
+// Открытый ход под присмотром (подход к руде, разведка): стража показалась или ударили (стрела пиглина из-за угла: sr27-bast2-B
+// слот 14, −2642 gA — подход шёл дальше под стрелами, 20 → 5 хп) — путь бросить; дальше штрек или конец ботинок.
+async function watched (bot, ctl, run) {
+  const hp0 = bot.health ?? 20
+  let alarm = ''
+  let timer = null
+  const sub = Object.create(ctl, { aborted: { get: () => ctl.aborted || !!alarm } })
+  const watch = () => {
+    if (!openSafe(bot)) alarm = 'стража на виду'
+    else if ((bot.health ?? 20) < hp0 - 1) alarm = 'удар на открытом'
+    if (alarm) { try { bot.pathfinder.setGoal(null) } catch {} ; return }
+    timer = gameClock.setTimeout(watch, 250)
+  }
+  watch()
+  let result = null, err = ''
+  try { result = await run(sub) } catch (e) { err = e.message } finally { if (timer) gameClock.clearTimeout(timer) }
+  return { alarm, result, err }
+}
+
+// Ногами к руде (pathfinder до точки, откуда грань видна), затем видимую руду рядом (вскрытые соседи жилы тоже) — actions.mine с
+// осторожной проверкой пиглинов. Подход прервала стража — штрек к следующей.
+async function openOre (session, ctl, bot, ore, deadline) {
+  const A: typeof import('./actions') = require('./actions')
+  const b = bot.blockAt(ore)
+  if (!b || b.name !== 'nether_gold_ore') return { ok: false, why: 'на месте руды ' + (b && b.name) }
+  const w = await watched(bot, ctl, sub => A.reachBlock(bot, b, sub))
+  if (w.alarm || w.err) return { ok: false, why: w.alarm || w.err }
+  if (ctl.aborted || gameClock.now() > deadline) return { ok: false, why: 'прервано' }
+  if (!openSafe(bot)) return { ok: false, why: 'стража на виду' }
+  const r: any = await A.mine(session, ctl, { block: 'nether_gold_ore', count: 6, radius: 6, avoidPiglinAggro: true }).catch(e => ({ error: e.message }))
+  return { ok: !!r.dug, dug: r.dug || 0, why: r.error || r.stopped }
 }
 
 // Вплотную к руде (sealed.plan к соседней клетке, свои клетки штрека), сломать её через видимую грань: видимая руда — в стене у открытого,

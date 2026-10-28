@@ -331,7 +331,8 @@ async function lootSeenStructures (radius = 160) {
     return true
   }
   const e = await act('structure', { mode: 'explore', kind: best.x.kind, x: best.x.at.x, z: best.x.at.z, ...(Number.isFinite(best.x.at.y) ? { y: best.x.at.y } : {}),
-    ...(best.x.kind === 'village' && needs.beds > 0 ? { beds: 1 } : {}), maxDistance: Math.ceil(far(best.x)) + 24, timeoutSeconds: Math.round(Math.min(420, best.w.cost * 2 + 60)) })
+    // ND_END2_VILLAGE_BEDS: в деревне — все недостающие кровати на дракона (5), а не одна на ночь (end2 sr27: без кроватей бой не начинается).
+    ...(best.x.kind === 'village' && needs.beds > 0 ? { beds: process.env.ND_END2_VILLAGE_BEDS === '1' ? BEDS_END : 1 } : {}), maxDistance: Math.ceil(far(best.x)) + 24, timeoutSeconds: Math.round(Math.min(420, best.w.cost * 2 + 60)) })
   await refresh()
   if (have('gold_block')) await craft('gold_ingot', 9 * have('gold_block'))
   if (have('gold_nugget') >= 9) await craft('gold_ingot', Math.floor(have('gold_nugget') / 9))

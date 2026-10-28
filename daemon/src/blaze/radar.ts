@@ -295,6 +295,35 @@ function makeRadar (bot) {
       return !c || c.since === null ? 0 : Math.max(0, CHARGE_MS - (now - c.since))
     },
     charged (e) { const c = charge.get(e.id); return c ? c.on : chargedNow(bot, e, idx) },
+    // Все летящие шары для рефлекса уклонения (blaze/dodge): ещё не пролетели тело и без стены между шаром и телом. [{ p0, dir, age }].
+    flying (now = gameClock.now()) {
+      const out = []
+      const body = bot.entity.position.offset(0, 0.9, 0)
+      for (const [id, b] of balls) {
+        let age = (now - b.t0) / 50
+        if (age > 60) continue
+        // Возраст — по живой позиции шара (пакеты движения), а не по часам от пакета появления: появление приходит с опозданием
+        // на тик-два, и модель отставала — «зазор 0.58» при попадании (rx6-s17). +1 тик — позиция из прошлого пакета.
+        const cur = bot.entities[id]?.position
+        if (cur) {
+          const d = cur.minus(b.p0); const s = d.x * b.dir.x + d.y * b.dir.y + d.z * b.dir.z
+          if (s > 0.05) age = Math.max(age, fbTicksTo(s) + 1)
+          // Разбор: насколько живой шар ушёл с прямой модели (поперёк) и насколько возраст по часам отстаёт от возраста по пути.
+          if (s > 1) {
+            const off = Math.hypot(d.x - b.dir.x * s, d.y - b.dir.y * s, d.z - b.dir.z * s)
+            stats.offMax = Math.max(stats.offMax || 0, Math.round(off * 100) / 100); stats.offN = (stats.offN || 0) + 1; stats.offSum = (stats.offSum || 0) + off
+            const lag = fbTicksTo(s) + 1 - (now - b.t0) / 50
+            stats.lagN = (stats.lagN || 0) + 1; stats.lagSum = (stats.lagSum || 0) + lag
+          }
+        }
+        const flown = FB_PATH[Math.min(FB_PATH.length - 1, Math.floor(age))] || 0
+        const r = body.minus(b.p0)
+        if (r.x * b.dir.x + r.y * b.dir.y + r.z * b.dir.z < flown - 1.5) continue
+        if (!losClear(bot, b.p0.plus(b.dir.scaled(flown)), body)) continue
+        out.push({ p0: b.p0, dir: b.dir, age })
+      }
+      return out
+    },
     // Шары, чья прямая проходит у нашего тела и ещё не прилетели: [{ from, eta }].
     incoming (now = gameClock.now(), readOnly = false) {
       const out = []
@@ -320,6 +349,6 @@ function makeRadar (bot) {
 }
 
 export {
-  SHIELD_LEAD_MS, MELEE, swingMs, BOW_MIN, BOW_MAX, NEAR, losClear, losClearBut, myEye, floorBelow, aimFrac,
+  SHIELD_LEAD_MS, MELEE, swingMs, BOW_MIN, BOW_MAX, NEAR, losClear, losClearBut, myEye, floorBelow, dropCell, aimFrac,
   blazeEye, seesMe, blazeShieldPrice, makeRadar
 }

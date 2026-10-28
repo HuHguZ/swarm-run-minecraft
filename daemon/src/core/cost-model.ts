@@ -90,9 +90,17 @@ export function applyCosts(registry: StrategyRegistry, entries: CostModel[]): vo
       const weight = model.samples / (model.samples + 5)
       return weight * model.medianTicks / Math.max(0.1, successEstimate(model)) + (1 - weight) * (estimate(state) - travel) + travel
     }
+    // ND_GRAPH_RISK_PER_DONE (graph sr27, выкл.): смерти телеметрии — на попытку, а план берёт шаг один раз до конца; шаг, которому
+    // нужно 1/успех попыток, несёт и их смерти: 1 − (1 − смерти/n)^(1/успех). Цена времени это уже делает (медиана / успех).
+    const perDone = process.env.ND_GRAPH_RISK_PER_DONE === '1'
     strategy.estimateRisk = state => {
       const model = modelFor(strategy, state, models)
-      return model ? (model.deaths + 5 * risk(state)) / (mortalitySamples(model) + 5) : risk(state)
+      if (!model) return risk(state)
+      const extra = strategy.extraRisk?.(state) ?? 0, prior = risk(state) - extra
+      const n = mortalitySamples(model)
+      if (!perDone || !n) return Math.min(1, (model.deaths + 5 * prior) / (n + 5) + extra)
+      const done = 1 - (1 - model.deaths / n) ** (1 / Math.max(0.05, successEstimate(model)))
+      return Math.min(1, (n * done + 5 * prior) / (n + 5) + extra)
     }
   }
 }

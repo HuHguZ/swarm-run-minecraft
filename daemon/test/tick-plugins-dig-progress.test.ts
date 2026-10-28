@@ -87,6 +87,48 @@ test('a count-only stack update keeps mining, but changed components abort its e
   assert.equal(clock.pending(), 0)
 })
 
+test('ND_DIG_RESTART: the same tool with new damage restarts the block (vanilla startDestroyBlock), never aborts', async () => {
+  const Item = require('prismarine-item')(data)
+  const prev = process.env.ND_DIG_RESTART
+  process.env.ND_DIG_RESTART = '1'
+  const { clock, bot, web, task } = mining(true, new Item(data.itemsByName.iron_pickaxe.id, 1))
+  try {
+    await clock.advanceGame(5000)
+    bot.heldItem = new Item(data.itemsByName.iron_pickaxe.id, 1)
+    bot.heldItem.components = [{ type: 'damage', data: 1 }]
+    await clock.advanceGame(50)
+    assert.equal(bot.targetDigBlock, web, 'damage arriving mid-dig is not a reason to give the block up')
+    await clock.advanceGame(19800)
+    assert.equal(bot.targetDigBlock, web, 'the restarted dig earns no credit from before the change')
+    await clock.advanceGame(300)
+    assert.equal(bot.targetDigBlock, null)
+    await task
+    assert.deepEqual(bot.packets.filter(p => p.name === 'block_dig').map(p => p.status), [0, 0, 2])
+  } finally { if (prev === undefined) delete process.env.ND_DIG_RESTART; else process.env.ND_DIG_RESTART = prev; task.catch(() => {}); bot.emit('end') }
+  assert.equal(clock.pending(), 0)
+})
+
+test('ND_DIG_RESTART: a drop picked up into the empty hand restarts, another tool still aborts', async () => {
+  const Item = require('prismarine-item')(data)
+  const prev = process.env.ND_DIG_RESTART
+  process.env.ND_DIG_RESTART = '1'
+  try {
+    const a = mining(true, null)
+    await a.clock.advanceGame(1000)
+    a.bot.heldItem = new Item(data.itemsByName.dirt.id, 1)
+    await a.clock.advanceGame(50)
+    assert.equal(a.bot.targetDigBlock, a.web)
+    a.bot.emit('end'); a.task.catch(() => {})
+    const b = mining(true, new Item(data.itemsByName.iron_pickaxe.id, 1))
+    const rejected = assert.rejects(b.task, /aborted/)
+    await b.clock.advanceGame(1000)
+    b.bot.heldItem = new Item(data.itemsByName.iron_sword.id, 1)
+    await b.clock.advanceGame(50)
+    await rejected
+    b.bot.emit('end')
+  } finally { if (prev === undefined) delete process.env.ND_DIG_RESTART; else process.env.ND_DIG_RESTART = prev }
+})
+
 test('a native inventory packet removing an item component cannot keep the old dig progress', async () => {
   const clock = testClock(), bot = testBot(), plugins = createTickPlugins(clock).plugins
   plugins.inventory(bot)

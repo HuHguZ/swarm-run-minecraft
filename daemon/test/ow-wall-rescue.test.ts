@@ -89,6 +89,17 @@ test('fast gravel-column dig reserves enough time to confirm a real side exit',a
   const r=await f.auto.freeIfBuried(f.bot,{force:true})
   assert.equal(f.digging(),0,'do not dig the old head cell after moving clear');assert.equal(r.freed,true)
 })
+test('a gravel column in a 1x1 shaft probes the side exit once, then only digs (ow 27.10: 19 -> 3 hp on three gravel)',async()=>{
+  const f=fixture({fresh:false})
+  let left=3, digs=0, probes=0
+  const gravel=p=>{const b=Block.fromStateId(registry.blocksByName.gravel.defaultState,0);b.position=p.floored();return b}
+  await f.bot.dig(); const read=f.bot.blockAt
+  f.bot.blockAt=p=>{const q=p.floored();if(q.x===0&&q.z===0&&q.y>=65&&q.y<65+left)return gravel(p);return read(p)}
+  f.bot.dig=async()=>{digs++;left--}
+  f.auto.stepOutOfWall=async()=>{probes++;return false}
+  const r=await f.auto.freeIfBuried(f.bot,{force:true})
+  assert.equal(digs,3,'the whole column is dug');assert.equal(probes,1,'the same walls are not probed again for every falling block');assert.equal(r.freed,true)
+})
 test('flag 0 retains original no-geometry behaviour',()=>{
   process.env.ND_OW_BURIAL_STEP='0';try{const f=fixture({solid:false});assert.equal(f.auto.buriedBy(f.bot),null)}finally{process.env.ND_OW_BURIAL_STEP='1'}
 })

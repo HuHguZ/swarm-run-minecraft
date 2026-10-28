@@ -314,7 +314,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const wetBody = waterSafety ? !dryMountedBoat && movement.inWater(bot) : !!bot.entity.isInWater
   const breathBlock = waterSafety ? bot.blockAt(pick.eyeOf(bot)) : null
   const breathing = !!breathBlock && breathBlock.boundingBox === 'empty' && (!movement.waterCell(breathBlock) || breathBlock.name === 'bubble_column')
-  const safeSupport = waterSafety && bot.entity.onGround && bot.blockAt(bot.entity.position.offset(0, -0.2, 0))?.boundingBox === 'block' && (!wetBody || refuge?.pocket && breathing)
+  const safeSupport = waterSafety && bot.entity.onGround && bot.blockAt(bot.entity.position.offset(0, -0.2, 0))?.boundingBox === 'block' && (!wetBody || breathing)
   const clearAir = breathing && (bot.oxygenLevel ?? 20) >= 18 && !hot && !recentHit && !enemies.some(enemy => enemy.threatening)
   if (!waterSafety || safeSupport || clearAir || session._tacticalWaterWorld !== dimension) session._tacticalWaterEscape = false
   session._tacticalWaterWorld = dimension

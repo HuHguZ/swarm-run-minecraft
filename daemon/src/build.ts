@@ -63,14 +63,29 @@ function ghastThreat (bot) {
   bot._ndGhastFiller = { at: now, v }
   return v
 }
+// ND_GRAPH2_KEEP_STONE=1 (поток graph2 sr27, выкл.): булыжник и чернокамень в Аду — головы каменных кирок (3 на кирку), а кладка шла ими
+// первой при каждом слышном гасте (BLAST_NETHER): sr27-graph2-A1 — 107 булыжника → 0 к 20-й мин при 651 незераке, кирки стёрты, скрафтить
+// нечем. Базальт и камень держат шар так же (стойкость 4.2 и 6 при силе 1, jar 1.21.11) — они первыми; последние 6 (две кирки) — не в кладку.
+const PICK_STONE = /^(cobblestone|cobbled_deepslate|blackstone)$/
+const KEEP_STONE = 6
+const keepStone = () => process.env.ND_GRAPH2_KEEP_STONE === '1'
+const STONE_LAST = (list: string[]) => [...list.filter(n => !PICK_STONE.test(n)), ...list.filter(n => PICK_STONE.test(n))]
+const BLAST_KEEP = [...STONE_LAST(BLAST_NETHER.slice(0, BLAST_NETHER.indexOf('basalt') + 1)), ...FILLER_NETHER]
+const FILLER_KEEP = STONE_LAST(FILLER_NETHER)
 function pickFiller (bot, { steady = false }: any = {}) {
   let nether = false
   try { nether = (require('./worlds') as typeof import('./worlds')).worldOf(bot) === 'the_nether' } catch {}
-  for (const name of (nether ? (ghastThreat(bot) ? BLAST_NETHER : FILLER_NETHER) : FILLER)) {
+  const keep = nether && keepStone()
+  const list = nether ? (ghastThreat(bot) ? (keep ? BLAST_KEEP : BLAST_NETHER) : (keep ? FILLER_KEEP : FILLER_NETHER)) : FILLER
+  const stoneLeft = keep ? bot.inventory.items().filter(i => PICK_STONE.test(i.name)).reduce((n, i) => n + i.count, 0) : 0
+  for (const name of list) {
     if (steady && FALLING.has(name)) continue
+    if (keep && PICK_STONE.test(name) && stoneLeft <= KEEP_STONE) continue
     const found = itemNamed(bot, name)
     if (found) return found
   }
+  // Запас кирок — лучше в кладку, чем «нечем строить» (доска дороже: палки на кирку — из неё).
+  if (keep) { const stone = itemMatching(bot, PICK_STONE); if (stone) return stone }
   return itemMatching(bot, /_planks$/) || (scaffoldAny() ? itemMatching(bot, ARENA_FILLER) : null)
 }
 
@@ -84,6 +99,10 @@ function withTimeout (p, ms, message = 'ответа от сервера нет'
   })
   return Promise.race([p, guard]).finally(() => clock.clearTimeout(timer))
 }
+
+// data/minecraft/tags/block/replaceable.json (server-1.21.11.jar); снег — только в 1 слой (SnowLayerBlock.canBeReplaced).
+const REPLACEABLE = /^(air|cave_air|void_air|water|lava|short_grass|fern|dead_bush|bush|short_dry_grass|tall_dry_grass|seagrass|tall_seagrass|fire|soul_fire|snow|vine|glow_lichen|resin_clump|light|tall_grass|large_fern|structure_void|bubble_column|warped_roots|nether_sprouts|crimson_roots|leaf_litter|hanging_roots)$/
+const unreplaceable = b => !!b && b.boundingBox === 'empty' && b.hardness === 0 && !REPLACEABLE.test(b.name) && !/portal|gateway/.test(b.name)
 
 // The two blocks our own body occupies. Placing into them is rejected by the
 // server, and on the rare occasion it lands the bot suffocates.
@@ -221,6 +240,13 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   if (isOurOwnSpace(bot, pos) && item !== 'torch') return { ok: false, reason: 'это моя же клетка' }
   const squatter = occupiedByEntity(bot, pos)
   if (squatter) return { ok: false, reason: `в клетке стоит ${squatter}` }
+  // Незаменимое с пустой рамкой (факел, цветок, саженец): сервер в такую клетку не ставит и не отвечает (canBeReplaced,
+  // тег minecraft:replaceable 1.21.11) — «ответа от сервера нет» у коробки (sr27 full: 520+). Сорвать, как игрок.
+  if (unreplaceable(target) && item !== 'torch') {
+    try { await withTimeout(bot.dig(target, true), 1500) } catch {}
+    const now = bot.blockAt(pos)
+    if (!now || now.name === target.name) return { ok: false, reason: `в клетке ${target.name} — не сорвал` }
+  }
 
   const cannot = await holdFiller(bot, item, steady)
   if (cannot) return { ok: false, reason: cannot }

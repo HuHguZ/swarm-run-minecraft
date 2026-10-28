@@ -5,7 +5,7 @@ import { strategyInterrupted, state, sit, died, known, stairEntrance, waterSearc
   surfaceShaft, knownWater, lavaSourceKnown, setKnownWater, setWaterSearchView } from './state'
 import { log } from './log'
 import { have, y, dim, portalFar, portalBuckets, lighter } from './queries'
-import { refresh } from './observe'
+import { refresh, sense } from './observe'
 import { act } from './act'
 import { craft, smeltAll } from './kit'
 import { structureValue } from './scout'
@@ -156,6 +156,21 @@ async function earlyFlint () {
   return r.status !== 'interrupted' && !died && !strategyInterrupted
 }
 
+// Гравий под землёй: видимый в 24 — копать; нет — штрек 16 по новой породе (север, восток, север, восток: ни одно колено не идёт
+// по своему ходу) и снова взгляд. Четыре колена ≈ 2 мин — дешевле подъёма и поиска поверху в сумерках.
+async function flintBelow (until: number) {
+  const legs = ['north', 'east', 'north', 'east']
+  for (let k = 0; k <= legs.length && !have('flint') && !have('gravel') && !died && !strategyInterrupted && gameClock.now() < until; k++) {
+    const g = await act('mine', { block: 'gravel', dry: true, count: 4, radius: 24, timeoutSeconds: 45 })
+    await refresh()
+    if (g.status === 'interrupted' || have('gravel') || have('flint') || k === legs.length) break
+    if (k === 0) log('кремень: я под землёй — гравий ищу здесь штреками, а не поверху')
+    const t = await act('tunnel', { direction: legs[k], length: 16, torchEvery: have('torch') ? 8 : 0, timeoutSeconds: 90 })
+    await refresh()
+    if (t.status === 'interrupted' || (t.detail?.need)) break
+  }
+}
+
 const flintSearchSeen = new Set<string>()
 let flintSearchViews = 0
 async function ensureFlint () {
@@ -166,6 +181,13 @@ async function ensureFlint () {
   const initialView = view()
   if (initialView) flintSearchSeen.add(initialView)
   const until = gameClock.now() + 180000
+  // ND_OW_FLINT_BELOW=1 (ow 27.10): кремень нужен, а я под землёй — гравий здесь (видимый в стенах; нет — короткие штреки по новой
+  // породе: ore_gravel 1.21 — 14 жил до 33 бл. на чанк по всей высоте), а не подъём к разведке поверху (b1 27.10: к 8–9-й мин
+  // железо, ведро и кирка готовы на y15, подъём 44 бл. 1–2 мин, наверху сумерки — ночь без кремня впустую).
+  if (process.env.ND_OW_FLINT_BELOW === '1' && dim() === 'overworld' && !have('flint') && !have('gravel') && !died) {
+    await sense()
+    if (!sit.surface && y() < 56) await flintBelow(until)
+  }
   if (!have('flint') && have('gravel') && !died) {
     const r = await act('flint_grind', { max: 40, timeoutSeconds: 90 })
     await refresh()

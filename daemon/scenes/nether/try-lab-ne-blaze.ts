@@ -36,6 +36,12 @@ const KITS = {
   // nofr / nofri — настоящий вход без огнестойкости (blz 21.10, бой без FR как спидраннер): каменный / железный меч, без брони и щита.
   nofr: ['stone_sword', 'stone_axe', 'stone_pickaxe 2', 'flint_and_steel', 'water_bucket', 'golden_boots', 'cooked_mutton 8',
     'cobblestone 107', 'stick 11', 'crafting_table'],
+  // entry — настоящий набор входа в Ад полного прохода (бриф sr27; как entry в try-lab-ne-run): без золота, брони, щита и FR.
+  entry: ['water_bucket', 'flint_and_steel', 'stone_pickaxe 2', 'stone_axe', 'stone_sword', 'cobblestone 107', 'stick 11', 'cooked_mutton 4',
+    'crafting_table'],
+  // entryf (blaze2 27.10) — тот же вход, но еды как у сытых входов полного прохода (r3-s2: 10 жареной говядины): цена еды для боя без FR.
+  entryf: ['water_bucket', 'flint_and_steel', 'stone_pickaxe 2', 'stone_axe', 'stone_sword', 'cobblestone 107', 'stick 11', 'cooked_beef 8',
+    'crafting_table'],
   nofri: ['iron_sword', 'stone_axe', 'stone_pickaxe 2', 'flint_and_steel', 'water_bucket', 'golden_boots', 'cooked_mutton 8',
     'cobblestone 107', 'stick 11', 'crafting_table'],
   // lsfr — ls + 2 зелья огнестойкости (бартер бастиона удался: FR — бонус, поток blz 21.10).
@@ -191,7 +197,9 @@ async function main () {
     const lk = await call('fortress', { mode: 'look', timeoutSeconds: 20 }).catch(e => ({ error: e.message }))
     console.log('взгляд на месте', JSON.stringify({ seen: lk.detail?.fortress?.seen, spawners: (lk.detail?.spawners || []).length, error: lk.error }))
     // UNDER: ифриты зала остаются — тело приходит к трону, где они уже висят (кампания: «ифриты видны — бой отсюда»).
-    for (const t of process.env.UNDER === '1' ? ['wither_skeleton', 'skeleton', 'magma_cube'] : ['blaze', 'wither_skeleton', 'skeleton', 'magma_cube']) await kit.cmd(`/execute in minecraft:the_nether run kill @e[type=minecraft:${t},x=${sp.x},y=${sp.y},z=${sp.z},distance=..24]`)
+    // Зомби-пиглины — тоже (blz 27.10): злость с прошлой сцены на том же мире (обрыв серии посреди боя) убивала тело за 10 с.
+    // И предметы на полу: рюкзак погибшего в прошлой сцене (со стержнями) лежит у спавнера — cv2-s16: «стержней 4, убил 1».
+    for (const t of process.env.UNDER === '1' ? ['wither_skeleton', 'skeleton', 'magma_cube', 'zombified_piglin', 'item'] : ['blaze', 'wither_skeleton', 'skeleton', 'magma_cube', 'zombified_piglin', 'item']) await kit.cmd(`/execute in minecraft:the_nether run kill @e[type=minecraft:${t},x=${sp.x},y=${sp.y},z=${sp.z},distance=..${t === "item" ? 64 : 24}]`)
   }
   await kit.cmd('/effect give @s minecraft:instant_health 1 5 true')
   await kit.cmd('/effect give @s minecraft:saturation 1 20 true')
@@ -222,9 +230,12 @@ async function main () {
     // Потолок по реальному времени: демон завис (игровые часы стоят — bf04-s17-2 21.10: 16 мин) — сцена не ждёт вечно.
     const r: any = await Promise.race([
       call('blaze', { rods: 7, timeoutSeconds: 400, ...(process.env.LOW === '1' ? { lowWindow: true } : {}), ...(process.env.BOX === '0' ? { box: false } : {}), ...(process.env.LEGACY === '1' ? { legacy: true } : {}) }).catch(e => ({ error: e.message })),
-      gameClock.wall.sleep(300000).then(() => ({ error: 'ЗАВИС: blaze не ответил за 300 с реального времени', hung: true }))])
+      gameClock.wall.sleep(480000).then(() => ({ error: "ЗАВИС: blaze не ответил за 480 с реального времени", hung: true }))])
     const d = r.detail || {} as Record<string, any>
-    steps.push({ s: Math.round((gameClock.now() - t) / 1000), code: r.code, rods: d.rods && d.rods.now, kills: Array.isArray(d.kills) ? d.kills.length : d.kills, stopped: String(d.stopped || r.error || '').slice(0, 160), dmg: d.damage && d.damage.byType, climb: d.camp && d.camp.climb, at: d.camp && d.camp.at, spawnerSeen: d.camp && d.camp.spawnerSeen })
+    steps.push({ s: Math.round((gameClock.now() - t) / 1000), code: r.code, rods: d.rods && d.rods.now, kills: Array.isArray(d.kills) ? d.kills.length : d.kills, stopped: String(d.stopped || r.error || '').slice(0, 160), dmg: d.damage && d.damage.byType, climb: d.camp && d.camp.climb, at: d.camp && d.camp.at, spawnerSeen: d.camp && d.camp.spawnerSeen,
+      // Разбор боя без FR (blz 27.10): секунды по фазам, удары/криты/уклонения, урон по фазам.
+      phaseS: d.camp && d.camp.phaseS, melee: d.camp && d.camp.melee, crits: d.camp && d.camp.crits, dodges: d.camp && d.camp.dodges,
+      byPhase: d.damage && d.damage.byPhase, killSec: d.camp && d.camp.killSec, lostKills: d.lostKills, walls: d.camp && d.camp.walls, reflex: d.camp && d.camp.reflex, dodgeHits: d.camp && d.camp.dodgeHits, rests: d.camp && d.camp.rests, pits: d.camp && d.camp.pits, pinned: d.camp && d.camp.pinned })
     if (r.hung) break
     const s1 = await status()
     if (s1.dimension !== 'the_nether') break

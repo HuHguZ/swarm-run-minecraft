@@ -19,7 +19,7 @@ const { REPO_ROOT }: typeof import('../daemon/src/paths') = require('../daemon/s
 //   node dist/farm/farm.js up 8 --fresh              стереть миры и память слотов (чистый старт)
 //   node dist/farm/farm.js up 1 --lockstep           пошаговый мир (ND_LOCKSTEP=1 — то же): тик идёт, только когда боты
 //                                               обсчитали предыдущие (FarmLockstep.java); демоны и сцены слота — тоже
-//                                               в этом режиме; окно ND_LOCKSTEP_WINDOW (2), клапан ND_LOCKSTEP_STALL_MS (2000)
+//                                               в этом режиме; окно ND_LOCKSTEP_WINDOW (2), клапан ND_LOCKSTEP_STALL_MS (30000)
 //   node dist/farm/farm.js up 8 --world server-twin  миры — копия чужой папки (тот сервер должен
 //                                               стоять или быть в save-off; сид — из level.dat)
 //   node dist/farm/farm.js status
@@ -311,6 +311,12 @@ function prepareSlot (s, { seed, fresh, world }: any) {
       if (fs.existsSync(src)) copyDir(src, path.join(s.dir, w))
     }
     for (const lock of ['world/session.lock', 'world_nether/session.lock', 'world_the_end/session.lock']) rmrf(path.join(s.dir, lock))
+    // Снимок этапа (sr27/full/stage-snap.js): память бота — из снимка, игрок другого слота — под имя этого слота.
+    if (fs.existsSync(path.join(from, 'memory'))) copyDir(path.join(from, 'memory'), s.mem)
+    const pd = path.join(s.dir, 'world', 'playerdata')
+    const dats = fs.existsSync(pd) ? fs.readdirSync(pd).filter(f => /^[0-9a-f-]{36}\.dat$/.test(f)) : []
+    const own = offlineUuid(s.name) + '.dat'
+    if (dats.length === 1 && dats[0] !== own) fs.copyFileSync(path.join(pd, dats[0]), path.join(pd, own))
   }
   fs.mkdirSync(s.mem, { recursive: true })
   let p = props(s.dir) || props(TEMPLATE)

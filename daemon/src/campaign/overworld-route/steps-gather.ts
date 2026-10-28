@@ -174,7 +174,7 @@ async function stepVillage (s) {
     }
   }
   if (rs.golemEncounter && !(await retreatFromGolem())) return false
-  await ctx.act('structure', { mode: 'explore', kind: 'village', x: s.at.x, z: s.at.z, ...(Number.isFinite(s.at.y) ? { y: s.at.y } : {}), fromMap: true, maxDistance: 120, beds: 1, timeoutSeconds: 100 })
+  await ctx.act('structure', { mode: 'explore', kind: 'village', x: s.at.x, z: s.at.z, ...(Number.isFinite(s.at.y) ? { y: s.at.y } : {}), fromMap: true, maxDistance: 120, beds: ctx.process.env.ND_GRAPH2_BEDS === '1' ? 5 : 1, timeoutSeconds: 100 })
   if (ctx.died) return false
   await ctx.sense()
   if (!ctx.sit.surface && !ctx.sit.night) await ctx.toSurface()

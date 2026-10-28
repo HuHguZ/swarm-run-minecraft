@@ -4,6 +4,9 @@
 
 const IDLE = Object.freeze({ forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false })
 const FILLER = /^(cobblestone|cobbled_deepslate|dirt|netherrack|stone|deepslate|andesite|diorite|granite|tuff|blackstone|nether_bricks|basalt|obsidian|crying_obsidian|[a-z_]+_planks)$/
+// Обсидиан — последним (sr27-end 27.10: клатч ставил обсидиан рамы выхода из Ада при булыжнике в рюкзаке — 9 из 10, путь Адом
+// к крепости закрыт, тело шло поверху 1300 бл.). Нет другого — им, жизнь дороже.
+const LAST = /^(crying_)?obsidian$/
 const REPLACE = /^(air|cave_air|void_air|water|lava|short_grass|tall_grass|fern|large_fern|dead_bush|snow)$/
 const INTERACTIVE = /chest|barrel|furnace|crafting_table|enchanting_table|anvil|door|trapdoor|button|lever|bed|shulker|hopper|dispenser|dropper|smoker|loom|stonecutter|grindstone|cartography_table|smithing_table|composter|note_block|jukebox|respawn_anchor/
 const key = p => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`
@@ -27,12 +30,13 @@ function intersects (cell, pos, width = 0.6, height = 1.8) {
 // Паутина — последней (пользователь 14.10: «паутину себе могут ставить, когда в обрыв летят, если ничего другого нет —
 // погасит скорость»): твёрдого блока нет — паутина под ноги; в ней скорость падения ×0.05 и fallDistance сброшен (тег
 // FALLDAMAGE_RESETTING), а дальше клатч молчит (climbing).
+const rank = n => LAST.test(n) ? 2 : /_planks$/.test(n) ? 1 : 0
 function selectBlock (slots: any, reserve: any = 0, pending: any = 0) {
   return selectOf(slots, FILLER, reserve, pending) || selectOf(slots, /^cobweb$/, 0, pending)
 }
 function selectOf (slots: any, kind: RegExp, reserve: any, pending: any) {
   // S1f: доски — последними (в Аду дерево — палки и кирки: s1f-FB-1 «нет безопасного дерева на 4 доски», доски ушли в клатч и мост).
-  const items = slots.filter(i => i && kind.test(i.name)).sort((p, q) => (/_planks$/.test(p.name) ? 1 : 0) - (/_planks$/.test(q.name) ? 1 : 0))
+  const items = slots.filter(i => i && kind.test(i.name)).sort((p, q) => rank(p.name) - rank(q.name))
   const total = pending instanceof Map ? [...pending.values()].reduce((n, v) => n + v, 0) : pending
   if (items.reduce((s, i) => s + i.count, 0) - total <= reserve) return null
   let left = total
@@ -65,4 +69,4 @@ function copyState (s, control = s.control || IDLE) {
   return Object.assign(Object.create(Object.getPrototypeOf(s)), s, { pos: s.pos.clone(), vel: s.vel.clone(), control: { ...control }, jumpQueued: false })
 }
 
-export { IDLE, FILLER, REPLACE, INTERACTIVE, key, replaceable, othersOf, occupied, fullReference, blockReference, intersects, selectBlock, selectOf, decide, copyState }
+export { IDLE, FILLER, LAST, REPLACE, INTERACTIVE, key, replaceable, othersOf, occupied, fullReference, blockReference, intersects, selectBlock, selectOf, decide, copyState }

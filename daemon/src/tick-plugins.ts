@@ -309,11 +309,22 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
   if (name === 'digging') {
     // Rounded digTime gives conservative per-tick progress when landing, water or effects change mid-dig.
     source = source.replace('    waitTimeout = setTimeout(finishDigging, waitTime)', `    let progress = 0, creditedAt = Date.now(), previousDigTime = bot.digTime(block)
-    const diggingItem = bot.heldItem
+    let diggingItem = bot.heldItem
     const advanceDigging = () => {
       const item = bot.heldItem
       if (diggingItem !== item && (diggingItem?.type !== item?.type || diggingItem?.metadata !== item?.metadata ||
         !require('node:util').isDeepStrictEqual([diggingItem?.nbt, diggingItem?.components, diggingItem?.removedComponents], [item?.nbt, item?.components, item?.removedComponents]))) {
+        if (process.env.ND_DIG_TRACE === '1') console.log('[dig-abort-item]', JSON.stringify({ from: diggingItem && [diggingItem.name, diggingItem.count, diggingItem.slot, diggingItem.components, diggingItem.nbt], to: item && [item.name, item.count, item.slot, item.components, item.nbt] }))
+        // ND_DIG_RESTART=1 (ow 27.10): тот же предмет с новыми компонентами (урон кирки за прошлый блок пришёл, когда копка
+        // следующего уже началась) или подобранный в пустую руку — ваниль (MultiPlayerGameMode.continueDestroyBlock: не
+        // sameDestroyTarget → startDestroyBlock) начинает этот блок заново, а не бросает копку: прогресс 0, START снова.
+        // Обрыв копки рвал каждый второй блок штрека/лестницы/колодца («Digging aborted»). Другой предмет в руке — обрыв, как был.
+        if (process.env.ND_DIG_RESTART === '1' && (!diggingItem || diggingItem.type === item?.type)) {
+          diggingItem = item; progress = 0; creditedAt = Date.now(); previousDigTime = bot.digTime(block)
+          bot._client.write('block_dig', { status: 0, location: block.position, face: bot.targetDigFace })
+          waitTimeout = setTimeout(advanceDigging, 50)
+          return
+        }
         bot.stopDigging()
         return
       }

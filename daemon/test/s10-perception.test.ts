@@ -184,6 +184,10 @@ test('«пирог»: счёт по типу в прорисовке без кл
   assert.ok(north, JSON.stringify(arcs))
   const truth = senses.yawOf(0.5 - 0.5, -6 + 0.5 - 0.5) // от глаз к центру сундука 0,64,-6
   assert.ok(Math.abs(Math.abs(north.center) - Math.abs(truth)) <= 2, `${north.center} vs ${truth}`)
+  // skip (sr27-end): опознанный глазами (0,64,-6) из пеленгов вон — дуги на север больше нет, остальные на месте.
+  const skipped = senses.pieArcs(bot, 'chest', { fov: 30, step: 2, skip: c => c.x === 0 && c.y === 64 && c.z === -6 })
+  assert.ok(!skipped.some(a => Math.abs(Math.abs(a.center) - 180) < 4), JSON.stringify(skipped))
+  assert.equal(skipped.length, arcs.length - 1)
   // Два пеленга из разных точек — место с точностью до пары блоков.
   const target = { x: 40, z: -25 }
   const s = [{ x: 0, z: 0 }, { x: 24, z: 10 }].map(q => ({ ...q, yaw: Math.round(senses.yawOf(target.x - q.x, target.z - q.z) / 2) * 2 }))

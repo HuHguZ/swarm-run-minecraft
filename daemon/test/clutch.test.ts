@@ -117,6 +117,17 @@ test('только полные негравитационные блоки, з�
   assert.equal(clutch.selectBlock(slots, 3), null)
   assert.equal(clutch.selectBlock(slots.slice(0, 38)), null)
 })
+test('обсидиан рамы — последним из твёрдых (sr27-end: клатч тратил обсидиан выхода из Ада при булыжнике в хотбаре)', () => {
+  const slots = []
+  slots[36] = { name: 'obsidian', count: 10, slot: 36 }
+  slots[39] = { name: 'oak_planks', count: 4, slot: 39 }
+  slots[41] = { name: 'cobblestone', count: 8, slot: 41 }
+  assert.equal(clutch.selectBlock(slots).name, 'cobblestone')
+  delete slots[41]
+  assert.equal(clutch.selectBlock(slots).name, 'oak_planks', 'доски раньше обсидиана')
+  delete slots[39]
+  assert.equal(clutch.selectBlock(slots).name, 'obsidian', 'больше нечем — обсидианом: жизнь дороже')
+})
 test('паутина — последний клатч, когда твёрдых нет или они в запасе (14.10: «паутину себе могут ставить, когда в обрыв летят»)', () => {
   const slots = []
   slots[38] = { name: 'cobblestone', count: 3, slot: 38 }

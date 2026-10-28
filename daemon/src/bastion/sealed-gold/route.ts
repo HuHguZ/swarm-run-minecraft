@@ -3,7 +3,7 @@
 // вход со вскрытием, закапывание, путь ко входу ногами, исполнение плана. Порядок — SG_STEPS в bastion/sealed-gold.ts.
 import { log, sleep, xyz, mobs, goals, gameClock, angerSet, Vec3 } from '../take-gold-block'
 import { walkUnlessBrute } from '../booth-trade'
-import { burrow, sealBody } from '../defense'
+import { burrow, sealBody, hunker } from '../defense'
 import { type SealedRun, type SealTick, type Turn, routeRetryAt } from './state'
 
 // План штрека: вслепую — мир по шаблону гипотез (видимое — как есть, скрытое — символ куска), иначе — живой мир.
@@ -231,6 +231,19 @@ export async function sgRoute (sg: SealedRun, tk: SealTick): Promise<Turn> {
     const fresh = process.env.ND_BASTION_HYP_FOCUS !== '0' && cell && !(S.stopCells ||= new Set()).has(cell[2] || cell[3]) && (S.infoStops || 0) < 150
     if (fresh) { S.stopCells.add(cell[2] || cell[3]); S.infoStops = (S.infoStops || 0) + 1 } else S.fails.push(ex.why)
     log('штрек: стоп', { why: ex.why, done: ex.done, of: r.path.length, at: xyz(bot.entity.position.floored()), ...(fresh ? { info: S.infoStops } : {}) })
+    // ND_BAST2_OPENING_HUNKER=1 (поток bast2 27.10, выкл.): проём не заложен, а брут на виду в 14 или увиден за 8 с в 12 бл. — заложиться
+    // (defense.hunker: заделка вокруг тела, шаг вглубь своего хода) до нового плана: конюшня −2642 — «новый проём…; закладка нет», через
+    // секунду брут в проёме, 12.9 + 9.1 (sr27-bast2-B слот 13, r0-s2; так же A слот 12 и bast R3-P ×2).
+    if (process.env.ND_BAST2_OPENING_HUNKER === '1' && !ctl.aborted && /закладка нет|чужой воздух/.test(ex.why || '')) {
+      const BM: typeof import('../../brute-memory') = require('../../brute-memory')
+      const me = bot.entity.position, now = gameClock.now()
+      const seen: any = mobs(bot, 'piglin_brute', 14)[0]
+      const near = seen || BM.spots(bot).find(s => now - s.seenAt < 8000 && Math.hypot(s.x - me.x, s.z - me.z) < 12 && Math.abs(s.y - me.y) < 6)
+      if (near) {
+        const h = await hunker(session, ctl, st, 'проём у брута', seen || null).catch(e => e.message)
+        log('штрек: проём у брута — заложился', { hunkered: h, brute: xyz(seen ? seen.position.floored() : near), hp: Math.round(bot.health ?? 0) })
+      }
+    }
     if (S.fails.length > 14) return 'stop'
     return 'next'
   }

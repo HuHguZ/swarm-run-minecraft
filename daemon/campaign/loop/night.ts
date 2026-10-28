@@ -6,7 +6,7 @@ import { log } from '../log'
 import { have, dim, PICK_STONE, portalFar, portalBuckets, todNow, lighter } from '../queries'
 import { sense, refresh } from '../observe'
 import { castNear, nightHold, nightDigWood, READY, stageProgress, stageRun, near3 } from '../stages/table'
-import { act } from '../act'
+import { act, setNightTrip } from '../act'
 import { leaveWater } from '../danger'
 import { toSurface } from '../underground'
 import { structureValue, lavaLookout } from '../scout'
@@ -129,12 +129,14 @@ async function loopNight (loop: CampaignTurn): Promise<TurnFlow> {
           known.lava = { x: skyLavaSeen.x, y: skyLavaSeen.y, z: skyLavaSeen.z }
           setLavaSourceKnown(true)
           setStage('cast')
+          const trip = process.env.ND_OW_NIGHT_TRIP === '1'
+          if (trip) setNightTrip(true)
           try {
             if (await toSurface() && !died) {
               if (!have('water_bucket')) { setStage('water'); await stageRun('water')(); await refresh() }
               if (have('water_bucket') && !died) { setStage('cast'); await stageRun('cast')() }
             }
-          } catch (e) { if (e.stopCampaign) throw e; log(`ночное литьё у озера: ${e.message}`) }
+          } catch (e) { if (e.stopCampaign) throw e; log(`ночное литьё у озера: ${e.message}`) } finally { if (trip) setNightTrip(false) }
           await refresh()
         }
       }

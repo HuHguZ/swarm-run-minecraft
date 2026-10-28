@@ -128,6 +128,7 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
       if (during && !force) await this.takeTheMouth(bot)
       if (ctl) ctl.onAbort.push(() => { try { bot.stopDigging() } catch {} })
       const until = gameClock.now() + 6000
+      let noExit = null
       for (let i = 0; i < 12 && gameClock.now() < until && !ctl?.aborted; i++) {
         const now = this.buriedBy(bot)
         if (!now) break
@@ -174,7 +175,13 @@ async function freeIfBuried (this: any, bot, { ctl = null, force = false }: any 
           // Сыпучее над сыпучим (карман гравия над штреком): каждый выкопанный блок заменяет следующий из колонки — шаг вбок, в
           // открытый штрек, раньше копки (cl-x 14.10: двенадцать раскопок за 6 с, хп 20 → 0, «suffocated in a wall»).
           const column = FALLS.has(cell.name) && FALLS.has(bot.blockAt(cell.position.offset(0, 1, 0))?.name || '')
-          if ((column || !Number.isFinite(toolMs) || toolMs > WALL_STEP_MS) && await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot, toolMs) })) break
+          // Боковой выход с этой клетки уже не нашёлся (колодец 1×1: стены те же) — дальше только копка: проба перед КАЖДЫМ блоком
+          // колонны стоила ~2.2 с упора в стены (≈ 4 хп) на блок (ow 27.10, A2-10 −3911: in_wall 19 → 3 хп на трёх гравиях).
+          const here = bot.entity.position.floored().toString()
+          if ((column || !Number.isFinite(toolMs) || toolMs > WALL_STEP_MS) && noExit !== here) {
+            if (await this.stepOutOfWall(bot, { ctl, maxMs: exitBudget(bot, toolMs) })) break
+            if (bot.entity.position.floored().toString() === here) noExit = here
+          }
           if (ctl?.aborted) break
           // A failed/short physical probe may still have moved us. Revalidate its old dig target.
           if (wallRescue(bot)) {

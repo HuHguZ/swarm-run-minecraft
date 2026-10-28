@@ -8,6 +8,8 @@ const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import { goals } from 'mineflayer-pathfinder'
 import { xyz, standableY, stuckGuard, unstick, escapeWater, inWater, gotoGoal, gotoWaitOn } from '../movement'
 import { escapePit } from '../build'
+export const bruteExitAgain = (m: any, moves: { n: number }): boolean => m?.mode === 'hold' ||
+  process.env.ND_BAST_BRUTE_EXIT === '1' && m?.mode === 'covered' && m.moved >= 1 && moves.n++ < 3
 import * as blockmoves from '../blockmoves'
 import * as hopgoto from '../hopgoto'
 import { skyLightAt, HOLDING } from './shared'
@@ -253,7 +255,10 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   let pit: Pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
   // ND_BRUTE_MEMORY: «hold» — по цене сейчас дешевле переждать (8 с за вызов, цена ожидания растёт со временем), а не отказ goto:
   // без этого каждый goto бросал BRUTE_MEMORY_REPLAN, вызывающие не переспрашивали (nbt24a 21.10: 7 отказов за 2 с, БЛОКЕР).
-  while ((pit.memory as any)?.mode === 'hold' && !ctl.aborted && gameClock.now() < deadline - 2000) {
+  // ND_BAST_BRUTE_EXIT=1 (поток bast 27.10, просьба end): закрытый выход (covered) сдвинул тело — заново оценить выход, а не бросать
+  // BRUTE_MEMORY_REPLAN: вызывающий снова звал goto, тот снова копал 6 клеток прочь от брута — круг до конца хода (−2642, путь Адом).
+  const exitMoves = { n: 0 }
+  while (bruteExitAgain(pit.memory, exitMoves) && !ctl.aborted && gameClock.now() < deadline - 2000) {
     pit = await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
   }
   if (pit.memory) throw Object.assign(new Error('brute memory: covered exit requires replan'), { code: 'BRUTE_MEMORY_REPLAN', bruteMemory: pit.memory })
@@ -548,7 +553,8 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
         // exactly how the answer used to turn into a bare clock: the abort
         if (outOfTime()) return ranOut()
         let out: Pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
-        while ((out.memory as any)?.mode === 'hold' && !ctl.aborted && !outOfTime()) out = await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
+        const outMoves = { n: 0 }
+        while (bruteExitAgain(out.memory, outMoves) && !ctl.aborted && !outOfTime()) out = await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
         if (out.memory) throw Object.assign(new Error('brute memory: covered exit requires replan'), { code: 'BRUTE_MEMORY_REPLAN', bruteMemory: out.memory })
         if (out.wasInPit) tried.push(`вылез из ямы на ${out.climbed}${out.stopped ? ' (' + out.stopped + ')' : ''}`)
         if (!strict) await unstick(bot)

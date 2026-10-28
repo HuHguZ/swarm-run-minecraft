@@ -82,7 +82,7 @@ function pieCells (bot, range) {
       if (!c.pie) continue
       const dx = c.x + 0.5 - o.x; const dy = c.y + 0.5 - o.y; const dz = c.z + 0.5 - o.z
       if (dx * dx + dy * dy + dz * dz > range * range) continue
-      out.push({ group: PIE_GROUP(c.name), dx, dz })
+      out.push({ group: PIE_GROUP(c.name), dx, dz, x: c.x, y: c.y, z: c.z })
     }
   }
   return out
@@ -104,9 +104,10 @@ function pie (bot, { range = 64, yaw = null, fov = null }: any = {}) {
 }
 
 // Поворот камерой на 360° шагом step с полем fov: дуги, где счёт type > 0 (середина дуги — пеленг, F3-yaw).
-function pieArcs (bot, type = 'chest', { range = 64, fov = 30, step = 2 }: any = {}): any[] {
+// skip(c) — клетки, которые игрок уже опознал глазами (sr27-end: спавнер данжа, увиденный вблизи без рамок, — не комната портала).
+function pieArcs (bot, type = 'chest', { range = 64, fov = 30, step = 2, skip = null }: any = {}): any[] {
   if (!bot || !bot.entity || !bot.registry) return []
-  const cells = pieCells(bot, range).filter(c => c.group === type)
+  const cells = pieCells(bot, range).filter(c => c.group === type && !(skip && skip(c)))
   if (!cells.length) return []
   const n = Math.round(360 / step)
   const counts = []

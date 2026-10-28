@@ -180,7 +180,9 @@ defStage('endkit', () => endkitPending() && dim() === 'overworld', async () => {
   }
   log(`набор на дракона: кроватей ${have(/_bed$/)}, обсидиана ${obsidianEnd()}, стрел ${arrowsNow()}, вёдер воды ${have('water_bucket')}, блоков ${fillNow()}, золотых яблок ${have('golden_apple')}, лук ${have('bow') ? 'есть' : 'нет'}, лодка ${have(/_boat$/) ? 'есть' : 'нет'}`)
 })
-defStage('stronghold', () => dim() !== 'the_end' && (have('ender_eye') >= Math.min(10, EYES_NEED) || !!known.endPortal) && (!known.endPortal || process.env.ND_END_ENTRY !== '0') && !endkitPending(), async () => {
+defStage('stronghold', () => dim() !== 'the_end' && (have('ender_eye') >= Math.min(10, EYES_NEED) || !!known.endPortal) && (!known.endPortal || process.env.ND_END_ENTRY !== '0') &&
+  // ND_GRAPH_END_ORDER: крепость ищется и с несобранным набором на дракона; найден портал — набор (endkit), затем вход.
+  (!endkitPending() || (process.env.ND_GRAPH_END_ORDER === '1' && !known.endPortal)), async () => {
   if (known.endPortal && process.env.ND_END_ENTRY !== '0') {
     if (dim() !== 'overworld') return
     notePortalEyes(await act('stronghold', { mode: 'room', timeoutSeconds: 120 }))

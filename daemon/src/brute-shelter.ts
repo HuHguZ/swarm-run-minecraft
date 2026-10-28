@@ -65,7 +65,9 @@ export async function ensureShelterExit(session: any, ctl: any, toward?: Point, 
   const length = Math.hypot(dx, dz)
   const candidates = [[dx / length, dz / length], [1, 0], [-1, 0], [0, 1], [0, -1]].map(([x, z]) => ({ x: from.x + x * 18, y: Math.floor(from.y), z: from.z + z * 18 }))
   // A second remembered brute can make "away from the nearest" the wrong side.
-  const target = candidates.sort((a, b) => memory.penalty(bot, a) - memory.penalty(bot, b))[0]
+  // ND_BAST_BRUTE_EXIT=1: при равной опасности — ход к цели (toward), а не только прочь: прочь-и-обратно крутило путь у бастиона.
+  const progress = (c: Point) => process.env.ND_BAST_BRUTE_EXIT === '1' && toward ? Math.hypot(c.x - toward.x, c.z - toward.z) / 18 : 0
+  const target = candidates.sort((a, b) => memory.penalty(bot, a) + progress(a) - memory.penalty(bot, b) - progress(b))[0]
   // Existing visible-only closed bore seals each opening; it never has to climb back into the threat zone.
   const result = await (require('./nether-cover') as typeof import('./nether-cover')).closedBore(session, ctl, target,
     { maxSteps: 6, minY: Math.floor(from.y), deadline: clock.now() + 12000 })

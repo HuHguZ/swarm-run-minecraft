@@ -3,7 +3,7 @@ import * as gameClock from '../game-clock'
 import { xyz } from '../movement'
 import * as worlds from '../worlds'
 import { PLACE, DIRS, WORDS, log, BASTION_KEYS_ALL, bastionSpentNear, highLook, placeOf, openDirections, rayClear } from './look'
-import { legTo, keepBlocks, goldOnTheWay, woodOnTheWay, climbWalk } from './legs'
+import { legTo, keepBlocks, goldOnTheWay, woodOnTheWay, stoneOnTheWay, climbWalk } from './legs'
 
 // ND_BLZ_OPEN_LEGS=1 (blz 21.10): отрезок луча — по открытому, а не прямо сквозь толщу. Поиск крепости съедал 600–900 взмахов за 10–25
 // мин (pathfinder в сплошном незераке — 2.5 копки на блок хода: 580 сбросов пути «block_updated» в bzP2-s18-1), а спидраннер идёт пещерами
@@ -76,6 +76,7 @@ async function walkLine (session, ctl, { start, dirName, along = 0, maxWalk, dea
     await goldOnTheWay(session, ctl)
     if (ctl.aborted) { stopped = 'прервано'; break }
     await woodOnTheWay(session, ctl)
+    await stoneOnTheWay(session, ctl)
     if (w.fought) {
       // Отбился — тот же отрезок заново; не отбился и хп мало — стоп.
       if ((bot.health ?? 0) < 8) { stopped = w.error + `, хп ${Math.round(bot.health ?? 0)} — дальше не иду`; break }

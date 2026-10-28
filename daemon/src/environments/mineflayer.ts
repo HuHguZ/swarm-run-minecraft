@@ -49,7 +49,9 @@ export function worldFromObservation(observation: Observation, now: number): Wor
     // в Ад за очами из крепости, s5e-G-1).
     powder: count(/^blaze_powder$/), eyes: count(/^ender_eye$/) + (known.endPortal && Number.isFinite(Number(known.portalEyes)) ? Number(known.portalEyes) : 0), gold: count(/^gold_ingot$/) + count(/^gold_block$/) * 9,
     blocks: count(/^(cobblestone|cobbled_deepslate|stone|deepslate|netherrack|blackstone|dirt|end_stone|[a-z_]+_planks)$/),
-    shield: count(/^shield$/) + (/shield/.test(JSON.stringify(raw.offHand)) ? 1 : 0)
+    shield: count(/^shield$/) + (/shield/.test(JSON.stringify(raw.offHand)) ? 1 : 0),
+    // ND_GRAPH2_BEDS: шерсть — будущие кровати (core/speedrun CollectBedsNear, недостача PrepareEnd).
+    ...(process.env.ND_GRAPH2_BEDS === '1' ? { wool: count(/_wool$/) } : {})
   }
   result.facts = { ...observation.facts }
   for (const [name, key] of [['portal', 'portal'], ['lava', 'lava'], ['fortress', 'fortress'], ['stronghold', 'stronghold'], ['end_portal', 'endPortal'], ['dragon_dead', 'dragonWon']] as const) {
@@ -71,6 +73,8 @@ export function worldFromObservation(observation: Observation, now: number): Wor
   if (bastion) result.facts.bastion = fact(true, 'observed', now)
   if (known.bastionsExhausted !== undefined) result.facts.bastions_exhausted = fact(Boolean(known.bastionsExhausted), 'observed', now)
   if (situation.night !== undefined) result.facts.night = fact(Boolean(situation.night), 'observed', now)
+  // ND_GRAPH2_BEDS: овцы на виду сейчас (situation.sheepSeen) — кровати по пути (core/speedrun CollectBedsNear).
+  if (typeof situation.sheepSeen === 'number') result.facts.sheep_seen = fact(situation.sheepSeen, 'observed', now)
   return result
 }
 export interface RpcResult {

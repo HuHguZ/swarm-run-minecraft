@@ -5,22 +5,29 @@ import { state, sit, memorySnapshot, died, known, fightGearWanted, homeForGearSt
   setHomeForGearState, setStage } from '../state'
 import { log } from '../log'
 import { refresh } from '../observe'
-import { have, dim, pearlsNow, foodUnits } from '../queries'
+import { have, dim, pearlsNow, foodUnits, goldOn } from '../queries'
 import { STAGES, OTHER_WORLD, weakAndHungry, READY, netherLack, fightReady, fightLack, stageRun } from '../stages/table'
 import { eyesWant, bastionPearlsPending, rodsWanted, netherRetryState } from '../nether-plan'
 import { act } from '../act'
 import { leaveWater } from '../danger'
 import { returnFromNether } from '../travel'
 import { craft, ensurePick } from '../kit'
-import { continueFortressChoice, replenishNetherSupply } from '../nether-trip'
+import { continueFortressChoice, replenishNetherSupply, goldUp } from '../nether-trip'
 import { intelligence } from '../strategy-bridge'
 import type { CampaignTurn, TurnFlow } from './turn'
 import * as gameClock from '../../src/game-clock'
 
 let homeWaits = 0
+let goldUpAt = -Infinity
 async function loopSelect (loop: CampaignTurn): Promise<TurnFlow | { need: any[], s: any }> {
   const { fails, failureKey, cooling } = loop
   if (only && dim() !== 'overworld' && !have(/_pickaxe$/)) { setStage('-'); await ensurePick() }
+  // ND_BAST_GOLD_ON=1 (поток bast 27.10): в Аду золото на ботинки есть (самородки, слитки, блок) — надеть до любого шага: граф
+  // торговал без брони (b0f слот 12: 32 слитка), 43 самородка ждали 4 мин поиска крепости до смерти (b0s слот 13).
+  if (process.env.ND_BAST_GOLD_ON === '1' && dim() === 'the_nether' && !goldOn() &&
+      have('gold_ingot') + 9 * have('gold_block') + Math.floor(have('gold_nugget') / 9) >= 4 && gameClock.now() - goldUpAt > 60000) {
+    goldUpAt = gameClock.now(); setStage('-'); await goldUp()
+  }
   const need = STAGES.filter(s => !(only && !only.includes(s.name)) && s.needed() && (dim() === 'overworld' || OTHER_WORLD.has(s.name)))
   const selection = only ? null : await intelligence.select(need, cooling, name => cooling({ name }))
   if (selection) homeWaits = 0

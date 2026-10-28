@@ -12,6 +12,8 @@ export interface Strategy {
   estimateRisk(state: WorldState): number
   /** Part of estimateCost spent travelling to a known target; kept out of the telemetry blend. */
   travelTicks?(state: WorldState): number
+  /** Part of estimateRisk set by the state (graph surcharges), likewise kept out of the telemetry blend. */
+  extraRisk?(state: WorldState): number
   /** The cost comes from a mechanistic model (barter): telemetry medians must not override it. */
   modelCost?: boolean
   /** Prior P(SUCCESS) of one attempt for the simulator; default 1 − risk. */

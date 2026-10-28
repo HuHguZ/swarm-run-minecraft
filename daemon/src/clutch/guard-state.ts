@@ -5,7 +5,7 @@
 // Прогноз и вода — clutch/guard-forecast.ts, щелчки — clutch/guard-fire.ts, тик — clutch/guard-step.ts, подписки —
 // clutch/guard.ts.
 import * as gameClock from '../game-clock'
-import { IDLE, FILLER, key, selectBlock } from './blocks'
+import { IDLE, FILLER, LAST, key, selectBlock } from './blocks'
 import { create } from './plan'
 
 export interface ClutchGuard {
@@ -105,8 +105,10 @@ function prepare (g: ClutchGuard) {
   const { bot, opts, hand, now } = g
   if (opts.prepare === false || g.preparing || now() - g.lastPrepare < 1000 || bot.currentWindow || hand.on && hand.on()) return
   g.lastPrepare = now()
-  if (selectBlock(bot.inventory.slots, opts.reserve ?? 0)) return
-  const it = bot.inventory.items().find(i => FILLER.test(i.name) && i.slot < 36) || bot.inventory.items().find(i => i.name === 'cobweb' && i.slot < 36)
+  const sel = selectBlock(bot.inventory.slots, opts.reserve ?? 0)
+  if (sel && !LAST.test(sel.name)) return
+  const it = bot.inventory.items().find(i => FILLER.test(i.name) && !LAST.test(i.name) && i.slot < 36) ||
+    (sel ? null : bot.inventory.items().find(i => FILLER.test(i.name) && i.slot < 36) || bot.inventory.items().find(i => i.name === 'cobweb' && i.slot < 36))
   if (!it || typeof bot.moveSlotItem !== 'function') return
   let dest = -1
   for (let i = 36; i <= 44; i++) if (!bot.inventory.slots[i] && i !== bot.quickBarSlot + 36) { dest = i; break }

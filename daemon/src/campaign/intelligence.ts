@@ -47,6 +47,15 @@ export function createCampaignIntelligence(port: CampaignPort) {
       (before.position && after.position && Math.hypot(after.position.x-before.position.x, after.position.y-before.position.y, after.position.z-before.position.z) >= 8) ||
       (before.facts.nether_tools_ready?.value !== true && after.facts.nether_tools_ready?.value === true) || before.threatLevel !== after.threatLevel)
   if (recoveryEnabled) for (const strategy of registry.all()) {
+    // ND_GRAPH_TOOLS_PRICE (graph sr27): a failed resupply reopens only when what it fetches changed — supplies in the bag
+    // (netherSupplyImproved) or stems came into view; walking 8 blocks reopened a blind stem hunt every turn (sr27-graph-B2: 176 turns).
+    if (process.env.ND_GRAPH_TOOLS_PRICE === '1' && strategy.skill === 'netherTools') {
+      const retry = strategy.retryCondition
+      strategy.retryCondition = (before, after) => !!retry?.(before, after) ||
+        (before.facts.nether_wood_seen?.value !== true && after.facts.nether_wood_seen?.value === true)
+      strategy.timeRetry = false
+      continue
+    }
     if (!['findFortress', 'nether', 'findBastions', 'bastion', 'piglinBarter', 'bastionGold', 'bastionMove', 'pearls', ...(noGiveup ? ['netherTools', 'bastionSupply'] : [])].includes(strategy.skill)) continue
     const retry = strategy.retryCondition
     strategy.retryCondition = (before, after) => !!retry?.(before, after) || !!physicalRetry(before, after)

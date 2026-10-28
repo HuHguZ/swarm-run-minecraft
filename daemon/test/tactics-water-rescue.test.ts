@@ -151,6 +151,25 @@ test('a supported sealed air pocket ends the water takeover even with wet feet',
   } finally { f.close(); if (previous === undefined) delete process.env.ND_TACTICS_WATER_HURT; else process.env.ND_TACTICS_WATER_HURT = previous }
 })
 
+// sr27 full r0 (−2642, 19-я мин): по колено в воде на земле, голова в воздухе — зомби бил 1 раз/с, а waterEscape рвал
+// каждый fight/refuge/flee кампании через 0–4 тика (взмахов 0), смерть с 20 хп от одного зомби. Брод — не подводная работа.
+test('wading on solid ground with the head in air is not an underwater takeover', () => {
+  const previous = process.env.ND_OW_DEATH_WATER
+  process.env.ND_OW_DEATH_WATER = '1'
+  const f = fixture('bucket')
+  try {
+    f.bot.entity.onGround = true
+    f.bot.blockAt = (p: any) => {
+      const q = p.floored(), solid = q.y < 60, water = q.y === 60
+      return { name: solid ? 'dirt' : water ? 'water' : 'air', position: q,
+        boundingBox: solid ? 'block' : 'empty', shapes: solid ? [[0, 0, 0, 1, 1, 1]] : [], getProperties: () => ({}) }
+    }
+    f.session.autopilot.lastHurt.source = 'zombie'
+    assert.equal(movement.inWater(f.bot), true)
+    assert.equal(observeTactics(f.session).waterEscape, false, 'a breathing body on its feet fights or walks out, it does not surface')
+  } finally { f.close(); if (previous === undefined) delete process.env.ND_OW_DEATH_WATER; else process.env.ND_OW_DEATH_WATER = previous }
+})
+
 test('full air with no contact releases an offshore takeover, so it cannot loop Surface from nobody forever', () => {
   const previous = process.env.ND_TACTICS_WATER_HURT
   process.env.ND_TACTICS_WATER_HURT = '1'

@@ -6,6 +6,7 @@ import { carriedBread } from '../campaign/bread'
 import { deepLavaPrice, lavaSearchSeconds } from '../campaign/deep-lava'
 import { endPrepOffers } from '../campaign/end-prep'
 import { foodMeal, foodUnits, foodPoints } from '../play-policy'
+import { pickCraftable } from '../campaign/nether-supply'
 
 export interface SpeedrunOptions {
   eyes?: number; beds?: number; iron?: number; structureBudgetMs?: number; costs?: CostModel[]
@@ -123,9 +124,15 @@ function speedrunContext(options: SpeedrunOptions) {
    *  FindStronghold let the planner pick LavaPoolPortal/AcquireDiamondPick — 15–20 min of logs and diamonds for nothing). */
   const eyesOwed = (s: WorldState) => amount(s, 'eyes') < eyes
   const toolsUnavailable = (s: WorldState) => s.facts.nether_tools_ready?.status === 'known' && s.facts.nether_tools_ready.value === false
+  // Поток graph (sr27, правило гибкости 06.10), по умолчанию выкл.: ND_GRAPH_TOOLS_PRICE — запас 260 взмахов не допуск к ифритам и
+  // бастиону, а цена (стержни добывает меч; этапы уже так делают: ND_BLZ_TOOLS_PRICE, ND_BASTION_TOOLS_PRICE); ND_GRAPH_HP_PRICE — кирка
+  // и огнестойкость без порога хп ≥ 12 (риск и так растёт как 20/хп); ND_GRAPH_BARTER_FR — полный бартер на жемчуг приносит FR.
+  const toolsPrice = process.env.ND_GRAPH_TOOLS_PRICE === '1'
+  const hpPrice = process.env.ND_GRAPH_HP_PRICE === '1'
+  const swings = (s: WorldState) => numberFact(s, 'nether_pick_swings', 0)
   // blaze_allowed is the campaign's order «pearls of the active bastion first», not a fire-resistance permit: fire resistance
   // prices the fight (blazeRisk), it does not gate it (user decision 06.10 22:33, AGENTS.md «Гибкость вместо жёстких правил»).
-  const blazeAllowed = (s: WorldState) => !toolsUnavailable(s) && (s.facts.blaze_allowed?.status === 'known'
+  const blazeAllowed = (s: WorldState) => (toolsPrice || !toolsUnavailable(s)) && (s.facts.blaze_allowed?.status === 'known'
     ? s.facts.blaze_allowed.value === true : !(pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted')))
   const fireResHeld = (s: WorldState) => knows(s, 'fire_resistance_active') || Number(s.facts.fire_resistance_count?.value ?? 0) >= 1
   /** Death risk of the spawner fight from the state. Fireballs and burning are #is_fire: under fire resistance only the touch
@@ -161,7 +168,7 @@ function speedrunContext(options: SpeedrunOptions) {
     return result
   }
   return { options, eyes, beds, buckets, structureBudgetMs, registry, ow, nether, readyToBuild, portalIron, ironTarget, pearlsNeeded,
-    rodsNeeded, eyesOwed, toolsUnavailable, blazeAllowed, fireResHeld, healthExposure, blazeRisk, barsNeeded, structureAvailable, add, has,
+    rodsNeeded, eyesOwed, toolsUnavailable, toolsPrice, hpPrice, swings, blazeAllowed, fireResHeld, healthExposure, blazeRisk, barsNeeded, structureAvailable, add, has,
     achieved, meal }
 }
 type SpeedrunContext = ReturnType<typeof speedrunContext>
@@ -186,7 +193,8 @@ function addOverworldBasics(ctx: SpeedrunContext): void {
   }, 20, (before, after) => (after.inventory.bread ?? 0) > (before.inventory.bread ?? 0), 0,
   // shortcut: use the existing local-craft prior until bread receipts supply a measured duration.
   { progressCondition: (before, after) => (after.inventory.wheat ?? 0) > (before.inventory.wheat ?? 0) })
-  add('FindFood', 'food', s => s.dimension !== 'the_end' && amount(s, 'food') < 3 && (!knows(s, 'end_ready') || options.endPrepPrice === true), { atLeast: { food: 8, food_points: 16 } }, 90, has('food', 3), 0.025)
+  // The hunt is an overworld skill (foodRun: toSurface, animals): in the Nether it climbed to the roof (sr27 graph) — not offered there.
+  add('FindFood', 'food', s => s.dimension !== 'the_end' && s.dimension !== 'the_nether' && amount(s, 'food') < 3 && (!knows(s, 'end_ready') || options.endPrepPrice === true), { atLeast: { food: 8, food_points: 16 } }, 90, has('food', 3), 0.025)
   add('EatFood', 'eatFood', s => s.hunger < 20 && amount(s, 'food_points') > 0,
     s => { const eaten = meal(s); return { hunger: eaten.hunger, inventory: eaten.inventory,
       resources: { food: -eaten.units, food_points: -eaten.points } } }, 1.6,
@@ -258,15 +266,24 @@ function addPortalStrategies(ctx: SpeedrunContext): void {
     { atLeast: { obsidian: 10 } }, Math.round(720 / ((3 + 1) / (8 + 2))), has('obsidian', 10), (0 + 1) / (8 + 2))
   add('ObsidianPortal', 'portal', s => ow(s) && !knows(s, 'portal') && amount(s, 'obsidian') >= 10 && amount(s, 'lighter') >= 1,
     { resources: { obsidian: -10 }, facts: { portal: true } }, 90, achieved('portal'), 0.01)
+  // ND_GRAPH_ENTER_HUNGRY (graph sr27, по просьбе ow; выкл.): запас еды на вход (nether_ready ← netherFoodNeed) — не физика. Вход с
+  // меньшим запасом — риск: по 0.03 за недостающую до 4 порцию и 0.03 при сытости < 10 (в Аду не лечиться); сборы PrepareNether несут
+  // и риск охоты (FindFood), а не только её время. Кирка остаётся условием: без неё в Аду ни укрытия, ни пополнения.
+  const enterHungry = process.env.ND_GRAPH_ENTER_HUNGRY === '1'
+  const hungerRisk = (s: WorldState) => knows(s, 'nether_ready') ? 0 : 0.03 * Math.max(0, 4 - amount(s, 'food')) + (s.hunger < 10 ? 0.03 : 0)
   add('PrepareNether', 'prep', s => ow(s) && knows(s, 'portal') && !knows(s, 'nether_ready'), { facts: { nether_ready: true }, atLeast: { food: 6, food_points: 12 } },
     90, achieved('nether_ready'), 0.01,
-    { estimateCost: s => 90 * 20 + (amount(s, 'food') < 8 ? registry.get('FindFood')!.estimateCost(s) : 0), modelCost: true })
-  add('EnterNether', 'enterNether', s => ow(s) && knows(s, 'portal') && knows(s, 'nether_ready') && (pearlsNeeded(s) || amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes),
-    { dimension: 'the_nether', facts: { entered_nether: true } }, 30, (_b, a) => a.dimension === 'the_nether', 0.01)
+    { estimateCost: s => 90 * 20 + (amount(s, 'food') < 8 ? registry.get('FindFood')!.estimateCost(s) : 0), modelCost: true,
+      ...(enterHungry ? { extraRisk: (s: WorldState) => amount(s, 'food') < 8 ? registry.get('FindFood')!.estimateRisk(s) : 0,
+        estimateRisk: (s: WorldState) => 0.01 + (amount(s, 'food') < 8 ? registry.get('FindFood')!.estimateRisk(s) : 0) } : {}) })
+  add('EnterNether', 'enterNether', s => ow(s) && knows(s, 'portal') && (knows(s, 'nether_ready') || enterHungry && amount(s, 'stone_tool') >= 1) &&
+    (pearlsNeeded(s) || amount(s, 'rods') * 2 + amount(s, 'powder') + amount(s, 'eyes') < eyes),
+    { dimension: 'the_nether', facts: { entered_nether: true } }, 30, (_b, a) => a.dimension === 'the_nether', 0.01,
+    enterHungry ? { extraRisk: hungerRisk, estimateRisk: s => Math.min(1, 0.01 + hungerRisk(s)) } : {})
 }
 /** Pearls in the Nether: bastions, barter (with the gold economy when enabled) and the endermen hunt. */
 function addPearlStrategies(ctx: SpeedrunContext): void {
-  const { options, eyes, nether, pearlsNeeded, toolsUnavailable, add } = ctx
+  const { options, eyes, nether, pearlsNeeded, toolsUnavailable, toolsPrice, swings, fireResHeld, add } = ctx
   const economy = options.economy === true
   const barter = (s: WorldState) => cachedBarterPlan(barterSituation(s, eyes))
   const goldLeft = (s: WorldState) => barterSituation(s, eyes).here?.gold ?? 0
@@ -294,8 +311,16 @@ function addPearlStrategies(ctx: SpeedrunContext): void {
   add('FindBastions', 'findBastions', s => nether(s) && pearlsNeeded(s) && unknown(s, 'bastion'), { facts: { bastion: true } }, 90, (_b, a) => !unknown(a, 'bastion'), 0.035)
   // Economy decomposes the monolithic bastion skill into AcquireGold + PiglinBarter (+ MoveToNextBastion/SearchNextBastion).
   if (!economy) add('BastionBarter', 'bastion', s => nether(s) && pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted') &&
-    (amount(s, 'gold') >= 8 || !toolsUnavailable(s)),
-    { atLeast: { pearls: eyes }, facts: { bastions_exhausted: true, blaze_allowed: true } }, 180, pearlsDone, 0.08,
+    // Золотой блок ломается только железной киркой — это физика; запас взмахов — цена (как этап при ND_BASTION_TOOLS_PRICE: ≥ 40).
+    (amount(s, 'gold') >= 8 || !toolsUnavailable(s) || (toolsPrice && amount(s, 'iron_pick') >= 1 && swings(s) >= 40)),
+    // ND_GRAPH_BARTER_FR: жемчуг недостачи берётся ~недостача / 0.054 слитков, FR выпадает 16/469 за слиток (таблица 1.21.11, barter-model):
+    // при P(хоть одно зелье) ≥ 0.5 бартер в плане приносит FR — граф видит, что бастион до ифритов снижает их риск, как у спидраннеров.
+    process.env.ND_GRAPH_BARTER_FR === '1' ? (s: WorldState) => {
+      const delivery = barterSituation(s, eyes).delivery
+      const ingots = Math.max(0, eyes - pearlsHeld(s)) / Math.max(1e-6, meanPerIngot('ender_pearl', delivery))
+      const fr = !fireResHeld(s) && 1 - (1 - meanPerIngot('fire_resistance', delivery)) ** ingots >= 0.5
+      return { atLeast: { pearls: eyes }, facts: { bastions_exhausted: true, blaze_allowed: true, ...(fr ? { fire_resistance_count: 1 } : {}) } }
+    } : { atLeast: { pearls: eyes }, facts: { bastions_exhausted: true, blaze_allowed: true } }, 180, pearlsDone, 0.08,
     // Simulator prior: one bastion's walls plus the carried gold reach the pearls only with the 1.21.11 table's chance.
     { retryCondition: bastionSiteChanged, successChance: s => barterChance(s, amount(s, 'gold') + goldLeft(s)) })
   add('PiglinBarter', 'piglinBarter', s => nether(s) && pearlsNeeded(s) && amount(s, 'gold') >= 8 && (knows(s, 'bastion') || knows(s, 'bastions_exhausted')),
@@ -348,15 +373,15 @@ function addPearlStrategies(ctx: SpeedrunContext): void {
 }
 /** Blaze rods and eyes: Nether tools, fire resistance, the fortress, crafting the eyes and leaving. */
 function addBlazeStrategies(ctx: SpeedrunContext): void {
-  const { eyes, nether, pearlsNeeded, rodsNeeded, toolsUnavailable, blazeAllowed, fireResHeld, blazeRisk, add, has, achieved } = ctx
+  const { eyes, nether, pearlsNeeded, rodsNeeded, toolsUnavailable, hpPrice, blazeAllowed, fireResHeld, blazeRisk, add, has, achieved } = ctx
   add('AcquireNetherTools', 'netherTools', s => nether(s) &&
-    (rodsNeeded(s) || pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted')) && toolsUnavailable(s) && s.health >= 12 &&
+    (rodsNeeded(s) || pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted')) && toolsUnavailable(s) && (hpPrice || s.health >= 12) &&
     !(pearlsNeeded(s) && amount(s, 'gold') >= 8),
     { facts: { nether_tools_ready: true }, atLeast: { stone_tool: 1 } }, 180, achieved('nether_tools_ready'), 0.03,
     { timeoutMs: 300000, retryCondition: netherSupplyImproved })
   // Fire resistance is an option, not a gate: the planner buys it only when its trip (travel + 180 s + risk) costs less than the
   // risk it removes from GetBlazeRods (blazeRisk with vs without FR).
-  add('AcquireFireResistance', 'bastionSupply', s => nether(s) && rodsNeeded(s) && !pearlsNeeded(s) && s.health >= 12 && !fireResHeld(s) &&
+  add('AcquireFireResistance', 'bastionSupply', s => nether(s) && rodsNeeded(s) && !pearlsNeeded(s) && (hpPrice || s.health >= 12) && !fireResHeld(s) &&
     ((knows(s, 'bastion') && !knows(s, 'bastions_exhausted')) || amount(s, 'gold') >= 8),
     // 600 s: the measured trip (SC-1 06.10: 29 min with interruptions; s1c barter calls 4–10 min) rather than an ideal 180 s.
     { facts: { fire_resistance_count: 1 } }, 600,
@@ -374,12 +399,20 @@ function addBlazeStrategies(ctx: SpeedrunContext): void {
 /** The End: preparation, the stronghold, entry and the dragon. */
 function addEndStrategies(ctx: SpeedrunContext): void {
   const { options, eyes, beds, ow, add, achieved } = ctx
-  add('PrepareEnd', 'endkit', s => ow(s) && (amount(s, 'eyes') >= eyes || options.endPrepPrice === true && knows(s, 'end_portal')) && !knows(s, 'end_ready'),
+  // ND_GRAPH_END_ORDER (graph sr27, по просьбе end): набор на дракона не пускает к крепости — не физика (sr27-end: PrepareEnd ×92,
+  // 0 успехов, 35 «unreachable»). Набор — когда выгодно: с очами (раньше — кровати без них бой не начинается, end 8/10 с 5 кроватями)
+  // или у найденного портала; не вышел — крепость не ждёт, набор снова у портала, до EnterEnd (его ворота end_ready остаются).
+  const endOrder = process.env.ND_GRAPH_END_ORDER === '1'
+  // Под землёй (y < 50) до найденного портала набор не начинается: шерсть, овцы и деревни — наверху, подъём на 60+ уровней от крепости
+  // и обратно (end t-B −9170: у крепости на y −5 PrepareEnd ×50 «за едой не вышел на поверхность», 40 мин без поиска комнаты).
+  const surfaceKit = (s: WorldState) => !endOrder || knows(s, 'end_portal') || !s.position || s.position.y >= 50
+  add('PrepareEnd', 'endkit', s => ow(s) && (amount(s, 'eyes') >= eyes && surfaceKit(s) || (endOrder || options.endPrepPrice === true) && knows(s, 'end_portal')) && !knows(s, 'end_ready'),
     options.endPrepPrice ? { facts: { end_ready: true } } : { atLeast: { beds, water: 1, blocks: 128 }, facts: { end_ready: true } },
-    120, achieved('end_ready'), 0.02, options.endPrepPrice ? {
-      modelCost: true, estimateCost: s => (endPrepOffers(s.inventory, beds)[0]?.cost ?? 0) * 20
-    } : {})
-  add('FindStronghold', 'stronghold', s => ow(s) && amount(s, 'eyes') >= eyes && knows(s, 'end_ready') && !knows(s, 'end_portal'),
+    120, achieved('end_ready'), 0.02, {
+      ...(options.endPrepPrice ? { modelCost: true, estimateCost: (s: WorldState) => (endPrepOffers(s.inventory, beds)[0]?.cost ?? 0) * 20 } : {}),
+      // A kit that failed on the way reopens at the found portal (new place: sheep, village, chests nearby).
+      ...(endOrder ? { retryCondition: (failed: WorldState, current: WorldState) => !knows(failed, 'end_portal') && knows(current, 'end_portal') } : {}) })
+  add('FindStronghold', 'stronghold', s => ow(s) && amount(s, 'eyes') >= eyes && (endOrder || knows(s, 'end_ready')) && !knows(s, 'end_portal'),
     { facts: { stronghold: true, end_portal: true } }, 300, achieved('end_portal'), 0.03)
   add('EnterEnd', 'enterEnd', s => ow(s) && knows(s, 'end_portal') && knows(s, 'end_ready'), { dimension: 'the_end', resources: { eyes: -eyes } },
     30, (_b, a) => a.dimension === 'the_end', 0.01)
@@ -399,6 +432,80 @@ function addEndStrategies(ctx: SpeedrunContext): void {
       { version: 0, successChance: () => 0.5, command: () => ({ skill: 'dragon', strategy: 'KillDragonMelee', params: { mode: 'melee' } }) })
   }
 }
+/** State-specific surcharge kept outside the telemetry blend (as travel is): applyCosts replaces only the prior part. */
+function surcharge(registry: StrategyRegistry, id: string, ticks: (s: WorldState) => number, risk: (s: WorldState) => number = () => 0): void {
+  const strategy = registry.get(id)
+  if (!strategy) return
+  const cost = strategy.estimateCost, travel = strategy.travelTicks, danger = strategy.estimateRisk, extra = strategy.extraRisk
+  strategy.estimateCost = s => cost(s) + ticks(s)
+  strategy.travelTicks = s => (travel?.(s) ?? 0) + ticks(s)
+  strategy.estimateRisk = s => Math.min(1, danger(s) + risk(s))
+  strategy.extraRisk = s => (extra?.(s) ?? 0) + risk(s)
+}
+/** Graph prices instead of gates (stream graph, sr27); every part is behind its ND_GRAPH_* flag. */
+function addGraphPrices(ctx: SpeedrunContext): void {
+  const { registry, toolsPrice, toolsUnavailable, swings, pearlsNeeded, rodsNeeded } = ctx
+  if (toolsPrice) {
+    // Worn tools: the stage may still try one resupply (≤ 240 s, AcquireNetherTools prior 180 s) and digs cover with fewer swings —
+    // in proportion to the shortfall below the 260-swing reserve. The real entry kit arrives with ~210–250 swings (sr27 logs:
+    // «инструменты Ада: 250/260, дерево 0/4» → stem hunt across the Nether, 3 deaths in 31 attempts): a small shortfall is
+    // a small price, a large one keeps a possible resupply first, and a failed resupply no longer blocks rods.
+    const short = (s: WorldState) => toolsUnavailable(s) ? Math.max(0, Math.min(1, (260 - swings(s)) / 260)) : 0
+    const debt = (s: WorldState) => short(s) * 180 * 20
+    const debtRisk = (s: WorldState) => short(s) * 0.04
+    for (const id of ['FindFortress', 'GetBlazeRods', 'BastionBarter', 'FindBastions']) surcharge(registry, id, debt, debtRisk)
+    // The resupply itself costs what it must fetch (sr27-graph-B slot 22: 190/260, one stick, no stems in sight — five blind stem
+    // hunts in a second; AcquireNetherTools telemetry 2 of 31 succeeded, its 6 s median is fast failures): a carried recipe —
+    // a craft; stems seen within 200 blocks (fact nether_wood_seen) — a walk; otherwise a blind search that rarely pays.
+    const tools = registry.get('AcquireNetherTools')
+    if (tools) {
+      tools.modelCost = true
+      tools.estimateCost = s => 20 * (pickCraftable({ dimension: s.dimension, health: s.health, inventory: s.inventory, pickSwings: swings(s) }) ? 15
+        : knows(s, 'nether_wood_seen') ? 120 : 600)
+    }
+  }
+  if (process.env.ND_GRAPH_SEARCH_RETURN === '1') {
+    // A search walks away from a seen, still-needed site: the way back is part of its price (half the search, radial wander).
+    const pending = (s: WorldState, kind: 'bastion' | 'fortress') => kind === 'bastion'
+      ? pearlsNeeded(s) && knows(s, 'bastion') && !knows(s, 'bastions_exhausted') : rodsNeeded(s) && knows(s, 'fortress')
+    surcharge(registry, 'FindFortress', s => pending(s, 'bastion') ? 45 * 20 : 0)
+    surcharge(registry, 'FindBastions', s => pending(s, 'fortress') ? 45 * 20 : 0)
+  }
+}
+/** ND_GRAPH2_BEDS (поток graph2 sr27, выкл.): кровати на дракона (без них бой не начинается; 5 кроватей = 15 шерсти) — по пути.
+ *  Овцы на виду: убить сейчас ≈ BED_SHEEP_S на овцу + крафт 8 с на кровать; набор перед Краем (PrepareEnd) платит за каждую
+ *  недостающую кровать отдельным поиском — BED_LATER_S. Овцы на виду — факт момента: любой другой шаг уводит от них
+ *  (sheep_seen → 0 в модели), поэтому «по пути» значит «сейчас или никогда». Деревня (заход за железом) берёт и кровати. */
+// ponytail: 10 с на овцу и 75 с на кровать позже — приоры (у овец стада 2–4 в 20 бл.; endkit sr27-end — 0 собранных из 92), калибровать по телеметрии bedsNear.
+const BED_SHEEP_S = 10, BED_LATER_S = 75
+function addGraph2Beds(ctx: SpeedrunContext): void {
+  if (process.env.ND_GRAPH2_BEDS !== '1') return
+  const { registry, beds, ow, add } = ctx
+  // Ресурс wool (environments/mineflayer при флаге) — в ключе состояния планировщика; инвентарь в ключ не входит.
+  const wool = (s: WorldState) => amount(s, 'wool')
+  const sheep = (s: WorldState) => numberFact(s, 'sheep_seen', 0)
+  // Шерсть в рюкзаке — уже кровать (крафт 8 с — у набора, PrepareEnd); недостача — то, что придётся искать потом.
+  const missing = (s: WorldState) => Math.max(0, beds - amount(s, 'beds') - Math.floor(wool(s) / 3))
+  const kills = (s: WorldState) => Math.min(sheep(s), 3 * missing(s))
+  add('CollectBedsNear', 'bedsNear', s => ow(s) && !knows(s, 'end_ready') && !knows(s, 'night') && missing(s) >= 1 &&
+    Math.floor((wool(s) + kills(s)) / 3) > Math.floor(wool(s) / 3),
+    s => ({ resources: { wool: kills(s) }, facts: { sheep_seen: 0 } }),
+    0, (before, after) => wool(after) > wool(before), 0.003, {
+      estimateCost: s => 20 * kills(s) * BED_SHEEP_S, modelCost: true,
+      command: s => ({ skill: 'bedsNear', strategy: 'CollectBedsNear', params: { wool: wool(s) + kills(s) } }) })
+  surcharge(registry, 'PrepareEnd', s => missing(s) * BED_LATER_S * 20)
+  // Заход в деревню за железом: кровати в домах (1–2 на дом) — взять тут же, а не отдельным походом перед Краем.
+  const village = registry.get('VillageIron')
+  for (const strategy of registry.all()) {
+    if (strategy.id === 'CollectBedsNear') continue
+    const effects = strategy.expectedEffects
+    strategy.expectedEffects = s => {
+      const e = typeof effects === 'function' ? effects(s) : effects
+      const bedsHere = strategy === village ? { resources: { ...e.resources, beds: Math.min(missing(s), 2) } } : {}
+      return sheep(s) > 0 ? { ...e, ...bedsHere, facts: { ...e.facts, sheep_seen: 0 } } : { ...e, ...bedsHere }
+    }
+  }
+}
 export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistry {
   const ctx = speedrunContext(options)
   const { registry } = ctx
@@ -408,6 +515,8 @@ export function speedrunRegistry(options: SpeedrunOptions = {}): StrategyRegistr
   addPearlStrategies(ctx)
   addBlazeStrategies(ctx)
   addEndStrategies(ctx)
+  addGraphPrices(ctx)
+  addGraph2Beds(ctx)
   if (options.costs) applyCosts(registry, options.costs)
   return registry
 }

@@ -29,7 +29,11 @@ function lowUses (bot) {
 function countOf (bot, re) { return bot.inventory.items().filter(i => re.test(i.name)).reduce((n, i) => n + i.count, 0) }
 // Фильтр инструментов (tools.bestFor): железные и лучше кирки — только для того, что без них не добыть.
 // strict (штрек) — всегда; иначе (бастион) — пока есть каменные: без них копать рукой встало бы.
-const makeToolFilter = (bot, strict = true) => (it, block) => !HIGH_PICK.test(it.name) || NEEDS_HIGH.test(block && block.name) || (!strict && lowPicks(bot) === 0)
+// ND_BAST_IRON_SPARE=N (поток bast 27.10, выкл.): каменных кирок нет — железная копает и прочее, пока у неё больше N взмахов: золоту
+// бастиона нужно ~20–30 (блок — 1 взмах), а запрет целиком ставил поиск и штрек («BASTION_SEARCH_SUPPLY» ×6, sr27-bast-A слот 14:
+// 250 взмахов железной в рюкзаке) и гнал тело по открытому за стеблями — смерть.
+const ironSpare = (bot, it) => { const n = Number(process.env.ND_BAST_IRON_SPARE); return n > 0 && lowPicks(bot) === 0 && (it.maxDurability || 250) - (it.durabilityUsed || 0) > n }
+const makeToolFilter = (bot, strict = true) => (it, block) => !HIGH_PICK.test(it.name) || NEEDS_HIGH.test(block && block.name) || (!strict && lowPicks(bot) === 0) || ironSpare(bot, it)
 
 // Каменные кирки на запас: верстак из рюкзака ставит actions.craft. Итог — сколько сделано.
 async function restockPicks (session, ctl, want = 3, options: { reservePlanks?: number } = {}) {
