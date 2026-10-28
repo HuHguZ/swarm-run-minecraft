@@ -10,6 +10,7 @@ import { lineRank } from './doctrine'
 import { racesForLoot, behindRace, killMeans, MELEE_CAP } from './race'
 import { SHOVE, SHOVE_REACH, shoveHits } from './shove'
 import { dislodgeSeconds, attackSeconds } from './dislodge'
+import { airUnreachable } from './plan-judges'
 
 export function assignFighters(S: PvpPlan): void {
   // Добивание убегающего (командная игра): нас вдвое больше видимых врагов, а цель уходит от нашей середины — без резерва
@@ -29,9 +30,16 @@ export function assignFighters(S: PvpPlan): void {
   const runner = (e: SharedEnemy) => { const v = e.velocity || { x: 0, y: 0, z: 0 }, sp = Math.hypot(v.x, v.z), dx = e.position.x - S.center.x, dz = e.position.z - S.center.z, d = Math.hypot(dx, dz) || 1
     return sp > .15 && (v.x * dx + v.z * dz) / (sp * d) > .5 }
   const { board, team, enemies, plan, options, aggressive, doctrine, committed, center, forward, lineDuty, spots, put, assault, regroup, losing, prey, hunting, untouchable, loads, meanStrength, sectorOf, ringAt, shoveOf, gatherers, lastEnemy, diggers, ladderers, campers, hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, targetCost, archer, threatReach } = S
+  // Две границы ценности (cl28b, 28.10: цель по ярусам Колизея, обрыв под ней 17 ↔ 7–9 бл. — сброс включался и выключался
+  // каждую секунду, 189 смен при живом крае, бойцы метались между сбросом и резервом): начинают сброс с SHOVE, начатый на
+  // эту цель держат, пока падение вообще ранит; край пропал — снят.
+  const shoveFloor = (m: SwarmMember, foe: SharedEnemy) => {
+    const was = board.tasks().find(t => t.id === `pvp:${m.id}`)
+    return was?.data?.shove && was.data.target === foe.id ? Number.MIN_VALUE : SHOVE
+  }
   const worthShove = (m: SwarmMember, foe: SharedEnemy, attack: number) => {
     const edge = S.edgeAt(foe), gap = distance(m.position, foe.position)
-    if (!edge || shoveOf(foe) < SHOVE || gap > 16) return false
+    if (!edge || shoveOf(foe) < shoveFloor(m, foe) || gap > 16) return false
     const walk = Math.max(0, gap - 3) / 5.6, wind = count(m.inventory, 'wind_charge') > (count(m.inventory, 'mace') ? 2 : 0)
     const chain = shoveHits(foe, edge, { sprint: true, kb: m.ench?.knockback || 0 })
     const work = (wind || (edge.at ?? 0) <= SHOVE_REACH ? damage.IFRAME_TICKS / 20 : chain * damage.IFRAME_TICKS / 20) + (wind ? 0 : walk)
@@ -40,13 +48,13 @@ export function assignFighters(S: PvpPlan): void {
   // Враг у смертельного края, у меня заряды, до него не дальше полёта заряда и подъёма фланга — не прятаться и не «переигран»:
   // на сброс (стенд 25.10: Tester в незерите в 1 бл. от края гребня, у всех по 128 зарядов — «бой 0, сброс 0, лут/укрытие 8»,
   // 18 раз «проигрываем — прячусь»; пользователь: «не выкидывают с колизея ветром»).
-  const edgeWind = (m: SwarmMember, foe?: SharedEnemy) => !!foe && !!S.edgeAt(foe) && shoveOf(foe) >= SHOVE && count(m.inventory, 'wind_charge') >= 2 && distance(m.position, foe.position) <= 48
+  const edgeWind = (m: SwarmMember, foe?: SharedEnemy) => !!foe && !!S.edgeAt(foe) && shoveOf(foe) >= shoveFloor(m, foe) && count(m.inventory, 'wind_charge') >= 2 && distance(m.position, foe.position) <= 48
   for (const m of [...team].sort((a, b) => b.strength - a.strength || a.id.localeCompare(b.id))) {
     const covering = S.endgame && plan.get(m.id)?.kind === 'fight' && plan.get(m.id)?.data?.cover ? plan.get(m.id) : undefined
     if (S.endgame) {
       // Короткая хилка остаётся; резерв, стройка, лут и укрытие больше не отводят здоровых от последнего боя.
       const assigned = plan.get(m.id)
-      if (assigned?.kind === 'recover' || assigned?.kind === 'heal') continue
+      if (assigned?.kind === 'recover' || assigned?.kind === 'heal' || assigned?.data?.antidoteCover) continue
       plan.delete(m.id)
     }
     const near = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
@@ -66,6 +74,11 @@ export function assignFighters(S: PvpPlan): void {
     const prev = prevId && best && prevId !== best.id ? enemies.find(e => e.id === prevId && !untouchable.has(e.id)) : undefined
     const covered = covering && enemies.find(e => e.id === covering.data?.target)
     const foe = covered || (hunting(m) && !untouchable.has(prey!.id) ? prey! : prev && targetCost(m, prev) <= targetCost(m, best!) + 4 ? prev : best)
+    // Ушёл от летящей цели, которую нечем достать, — запомнить (возврат к ней только в досягаемости); вернулся к ней или её нет — забыть.
+    const leftAerial = S.state.leftAerial ??= new Map()
+    const prevFoe = prevId ? enemies.find(e => e.id === prevId) : undefined
+    if (prevFoe && foe && foe.id !== prevFoe.id && prevFoe.threat === 'aerial' && airUnreachable(m)) leftAerial.set(m.id, prevFoe.id)
+    else if (foe && leftAerial.get(m.id) === foe.id || !enemies.some(e => e.id === leftAerial.get(m.id))) leftAerial.delete(m.id)
     if (!foe && untouchable.size) { put(m, 'goto', { reserve: true, sentry: true }, m.position); continue }
     const nearGap = enemies.length ? Math.min(...enemies.map(e => distance(e.position, m.position))) : Infinity
     // Уже на насесте (элитры) — сидеть на нём, а не перелетать.
@@ -106,6 +119,14 @@ export function assignFighters(S: PvpPlan): void {
     const edge = S.edgeAt(foe)
     // Дальняя цепь оплачивается окнами удара: сравниваем с гонкой урона, а не запрещаем дальше трёх блоков.
     const deadly = (foe === near ? !!shoveUseful : worthShove(m, foe, attackSeconds(m, foe))) || edgeWind(m, foe)
+    if (process.env.ND_SWARM_TRACE) {
+      const was = board.tasks().find(t => t.id === `pvp:${m.id}`)
+      if (was?.data?.target === foe.id && !!was.data.shove !== deadly) {
+        const e = S.edgeAt(foe), gap = distance(m.position, foe.position), att = attackSeconds(m, foe)
+        const v = foe.velocity || { x: 0, y: 0, z: 0 }
+        console.log(`[${new Date().toTimeString().slice(0, 8)}] 🫸? ${m.id}→${foe.id}: сброс ${deadly ? 'да' : 'нет'} (было ${was.data.shove ? 'да' : 'нет'}) край ${e ? (e.at ?? 0).toFixed(1) + '/' + (e.lava ? 'лава' : (e.drop ?? '∞')) : 'нет'} ценность ${shoveOf(foe).toFixed(2)} бл. ${gap.toFixed(1)} удар ${att.toFixed(1)}с v ${(v.x * 20).toFixed(1)},${(v.z * 20).toFixed(1)} ближний ${foe === near} ветер ${edgeWind(m, foe)}`)
+      }
+    }
     // Против сильного (race.ts strongFew): в упор — двое лучших (MELEE_CAP: больше окно неуязвимости не пропустит) и те, кто
     // бьёт иначе — булава с взлёта, зелья вреда; у края — все, кто достаёт. Остальные — как переигранные: лут, укрытие, к своим
     // (вплотную — бой). Стенд 21.10: оба убийства чемпиона — булава с падения и сброс; ближним боем — ни одного.

@@ -87,10 +87,26 @@ test('k same shove-align destination keeps real goto when only guard membership 
   } finally { await f.done(running) }
 })
 
+test('an evacuation correction exactly half the remaining path keeps the real goto', async () => {
+  const f = pipeline(), stand = { x: 2.5, y: 64, z: .5 }
+  const guard = { digAvoid: [{ x: 0, y: 63, z: 0 }], swarmStand: stand }
+  const { running } = await f.start(f.fight(guard))
+  try {
+    const current = f.session.current, intent = f.b.last
+    const next = f.fight({ ...guard, swarmStand: { ...stand, x: 3.5 } })
+    f.set(next)
+    assert.equal(f.preempt(), false, 'correction 1 equals half the remaining 2-block approach')
+    assert.equal(current.ctl.aborted, false)
+    assert.equal(f.session.current, current); assert.equal(f.b.last, intent)
+    assert.equal(f.b.swarmTask, next)
+    assert.deepEqual(f.calls.map(c => c.method), ['goto'])
+  } finally { await f.done(running) }
+})
+
 test('changed evacuation goal, enemy, retreat or actual offensive phase still stop', async () => {
   const stand = { x: 2.5, y: 64, z: .5 }, guard = { digAvoid: [{ x: 0, y: 63, z: 0 }], swarmStand: stand }
   for (const change of [
-    f => f.fight({ ...guard, swarmStand: { ...stand, x: 3.5 } }),
+    f => f.fight({ ...guard, swarmStand: { ...stand, x: 4.5 } }),
     f => f.fight({ target: 'Other', ...guard }),
     f => ({ kind: 'flee', data: { target: 'Champ' } }),
     f => f.fight({ ...guard, fountain: 'close' })

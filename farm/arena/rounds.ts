@@ -51,7 +51,9 @@ export function installRounds (ctx: ArenaContext) {
         deadNow.add(m[1])
         killGaps.push(Date.now() - ctx.lastKillAt); ctx.lastKillAt = Date.now()
         if (pos[m[1]]?.p) deathAt[m[1]] = { p: pos[m[1]].p, at: Date.now(), looted: new Set<string>(), inv: pos[m[1]].inv || {}, armor: pos[m[1]].armor || {}, team: teamOf(m[1]), by: by || byH || null, byMob: !by && !byH && / by /.test(m[2]) }
-        log(`☠ ${m[1]} ${m[2]}`)
+        // Кто и как убил: убийца в полёте (таран) или на земле, чем была занята жертва — разбор смертей от тарана (28.10).
+        const vb = bots.find(o => o.name === m[1])
+        log(`☠ ${m[1]} ${m[2]}${by ? ` [убийца ${pos[by]?.gliding ? 'летит' : 'на земле'}${pos[by]?.p && pos[m[1]]?.p ? ' в ' + Math.round(Math.hypot(pos[by].p.x - pos[m[1]].p.x, pos[by].p.y - pos[m[1]].p.y, pos[by].p.z - pos[m[1]].p.z)) + ' бл.' : ''}; жертва: ход ${vb?.swarmTask?.kind || '-'}, ${vb?.last?.m || '-'}${pos[m[1]]?.gliding ? ', летела' : ''}]` : ''}`)
       }
     } catch {}
   }

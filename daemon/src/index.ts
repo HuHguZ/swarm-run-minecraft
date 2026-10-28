@@ -26,6 +26,8 @@ const director = new Director(session)
 session.director = director
 const vision = new Vision(session, cfg)
 autopilot.start()
+// Ленивые модули боя — заранее, по одному за проход цикла (warm-modules.ts: первая загрузка в бою стоила до 1 с остановки).
+gameClock.wall.setTimeout(() => require('./warm-modules').warmModules(), 5000).unref()
 const { createMethods } = require('./rpc/methods')
 const { attachClients } = require('./rpc/server')
 

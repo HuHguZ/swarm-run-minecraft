@@ -4,7 +4,7 @@ import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 export type FlightFrame = { ms: number; x: number; y: number; z: number; vy: number; onGround: boolean; age?: string }
-export function anvilArm(enabled: boolean, rescue?: 'water' | 'water-motion' | 'wind' | 'wind-observed') {
+export function anvilArm(enabled: boolean, rescue?: 'water' | 'water-motion' | 'wind' | 'wind-observed' | 'wind-gravity') {
   return { firstWind: !!rescue || enabled, supportZ: rescue ? 606.5 : 604.5, waterEnabled: !!rescue && enabled }
 }
 export type Apex = FlightFrame & { index: number; confirmedAtMs: number }
@@ -224,23 +224,23 @@ export async function calibrate(reps = 3) {
   }
 }
 
-export async function apexTrials(active: boolean | 'ready' = false, pairs = 3, hp = 100, rescueMode?: 'water' | 'water-motion' | 'wind' | 'wind-observed') {
-  const windRescue = rescueMode === 'wind' || rescueMode === 'wind-observed'
+export async function apexTrials(active: boolean | 'ready' = false, pairs = 3, hp = 100, rescueMode?: 'water' | 'water-motion' | 'wind' | 'wind-observed' | 'wind-gravity') {
+  const windRescue = rescueMode === 'wind' || rescueMode === 'wind-observed' || rescueMode === 'wind-gravity'
   if (!Number.isInteger(pairs) || pairs < 1 || pairs > 20 || ![20, 100].includes(hp)) throw new Error('apex|active|active-ready pairs[1..20] hp20|100')
-  if (rescueMode && (!['water', 'water-motion', 'wind', 'wind-observed'].includes(rescueMode) || active === 'ready' || (rescueMode === 'water-motion' || windRescue) && active))
+  if (rescueMode && (!['water', 'water-motion', 'wind', 'wind-observed', 'wind-gravity'].includes(rescueMode) || active === 'ready' || (rescueMode === 'water-motion' || windRescue) && active))
     throw new Error('water rescue uses apex or active target; synthetic motion control uses apex only')
   const { REPO_ROOT, DIST_ROOT } = require('../../../daemon/src/paths')
   const { GameClock } = require('../../../daemon/src/game-clock')
   const { connect, clients, measure, sleep, stopped, target } = require('./combo-ideas')
   const { setup, track, place, give, hold, cmd, position } = require('./combo-air')
   const { settleFixtureTeleport } = require('./combo-ab')
-  const createRescue: typeof import('./combo-rescue').startWaterRescue = rescueMode === 'wind-observed' ? require('./combo-wind-observation').startObservedWindRescue : windRescue ? require('./combo-wind-rescue').startWindRescue : rescueMode ? require('./combo-rescue').startWaterRescue : null
+  const createRescue: typeof import('./combo-rescue').startWaterRescue = rescueMode === 'wind-gravity' ? require('./combo-wind-gravity').startGravityWindRescue : rescueMode === 'wind-observed' ? require('./combo-wind-observation').startObservedWindRescue : windRescue ? require('./combo-wind-rescue').startWindRescue : rescueMode ? require('./combo-rescue').startWaterRescue : null
   const { windAt, maceDive } = require(path.join(DIST_ROOT, 'daemon/src/swarm/combos/air-ideas'))
   const { observedVelocity, hasObservedVelocity } = require(path.join(DIST_ROOT, 'daemon/src/bow/track'))
   const pick = require(path.join(DIST_ROOT, 'daemon/src/pick'))
   if (stopped()) throw new Error('AUTO-STOP')
-  const inherited = new Set(clients), rows: any[] = [], mode = rescueMode === 'wind-observed' ? 'wind-rescue-C2a' : windRescue ? 'wind-rescue-C1' : rescueMode === 'water-motion' ? 'water-rescue-synthetic-motion-control' : rescueMode ? active ? 'water-rescue-active' : 'water-rescue' : active === 'ready' ? 'active-ready' : active ? 'active' : 'apex'
-  const candidate = rescueMode === 'wind-observed' ? 'H37_C2a_strict_postcue_arc_same_linear_wind_vs_sham' : windRescue ? 'H37_C1_stationary_second_linear_wind_vs_sham' : rescueMode === 'water-motion' ? 'H38_SYNTHETIC_motion_only_control_same_wind_sprint_water_vs_sham' : rescueMode ? active ? 'H38_active_same_wind_sprint_water_vs_sham' : 'H38_same_wind_sprint_water_vs_sham' : 'drop_gt2_support4m'
+  const inherited = new Set(clients), rows: any[] = [], mode = rescueMode === 'wind-gravity' ? 'wind-rescue-C2b' : rescueMode === 'wind-observed' ? 'wind-rescue-C2a' : windRescue ? 'wind-rescue-C1' : rescueMode === 'water-motion' ? 'water-rescue-synthetic-motion-control' : rescueMode ? active ? 'water-rescue-active' : 'water-rescue' : active === 'ready' ? 'active-ready' : active ? 'active' : 'apex'
+  const candidate = rescueMode === 'wind-gravity' ? 'H37_C2b_strict_postcue_arc_gravity_age_look1_wind_vs_sham' : rescueMode === 'wind-observed' ? 'H37_C2a_strict_postcue_arc_same_linear_wind_vs_sham' : windRescue ? 'H37_C1_stationary_second_linear_wind_vs_sham' : rescueMode === 'water-motion' ? 'H38_SYNTHETIC_motion_only_control_same_wind_sprint_water_vs_sham' : rescueMode ? active ? 'H38_active_same_wind_sprint_water_vs_sham' : 'H38_same_wind_sprint_water_vs_sham' : 'drop_gt2_support4m'
   const initialWind = windRescue ? 2 : 1
   const folder = path.join(REPO_ROOT, 'farm/results/ideas-28')
   fs.mkdirSync(folder, { recursive: true })
@@ -424,7 +424,7 @@ export async function apexTrials(active: boolean | 'ready' = false, pairs = 3, h
       const activeWindow = motion ? { fromMs: t0, throughMs: motion.endedAtMs!, physicsTicks: motion.ticks } : null
       const row = { mode, pair, enabled, hp, candidate, t0, elapsedMs, wallElapsedMs: performance.now() - wallStart, prep, start, nativeStart, nativeEnd,
         physicalEndAtMs, telemetryTail, hpAgreement: Object.fromEntries(actors.map((bot, i) => [bot.username, nativeHpAgreement(nativeEnd[i].health, receipts[i])])),
-        comparison: rescueMode === 'wind-observed' ? 'C2a_postcue_arc_gate_same_linear_wind_vs_sham' : windRescue ? 'C1_second_linear_wind_vs_sham_same_first_wind_stationary_support' : rescueMode === 'water-motion' ? 'SYNTHETIC_motion_only_water_vs_sham_same_first_wind_and_walk' : rescueMode ? 'water_vs_sham_same_first_wind_and_walk' : 'isolated_wind_vs_no_wind_passive_support', forecastObserver: support.username,
+        comparison: rescueMode === 'wind-gravity' ? 'C2b_postcue_arc_gate_gravity_age_look1_wind_vs_sham' : rescueMode === 'wind-observed' ? 'C2a_postcue_arc_gate_same_linear_wind_vs_sham' : windRescue ? 'C1_second_linear_wind_vs_sham_same_first_wind_stationary_support' : rescueMode === 'water-motion' ? 'SYNTHETIC_motion_only_water_vs_sham_same_first_wind_and_walk' : rescueMode ? 'water_vs_sham_same_first_wind_and_walk' : 'isolated_wind_vs_no_wind_passive_support', forecastObserver: support.username,
         ...(rescue ? { rescue: { ...rescue.trace, bodyHpLoss: receipts[0].damage, bodyHpEnd: receipts[0].hp, bodyDeaths: receipts[0].deaths } } : {}),
         wind, readiness, windConsumed: initialWind - remainingWind, dropReason, dropAtMs, launchedAtMs, forecast, observedFoe: observed, gate, dive,
         helperDropMeaning: 'local_to_maceDive_call_not_native_fall_distance', activeTicks: motion?.ticks ?? 0, activeWindow,

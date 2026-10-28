@@ -3,6 +3,7 @@
 import { SOLO } from './context'
 import type { ArenaContext } from './context'
 import { pickCaches } from '../../daemon/arena/colosseum-caches'
+import { ANTIDOTES } from './gear'
 
 // Зелья реестра 1.21.11 (Potions, server-1.21.11.jar) без воды, «странного», «густого», «неуклюжего».
 const ALL_POTIONS = ['night_vision', 'long_night_vision', 'invisibility', 'long_invisibility', 'leaping', 'long_leaping', 'strong_leaping',
@@ -99,6 +100,7 @@ export function makeStockChests (ctx: ArenaContext) {
       }
       const extras: string[][] = []
       const extra = (...group: string[]) => extras.push(group)
+      if (process.env.ARMS_CRYSTAL !== '1') extra(...ANTIDOTES) // Two slots together, before other optional supplies; existing reserve/capacity still applies.
       for (let e = 0; e < 2 + (hidden ? 2 : 1); e++) extra(pickOne(['golden_apple 2', `${heal} 2`, 'shield 1', 'ender_pearl 2', 'cooked_beef 8', 'cobblestone 32', 'golden_apple 1', `${heal} 1`, 'wind_charge 4', 'wind_charge 8']))
       if (T ? rnd() < T.gapple : hidden && rnd() < 0.12) extra('enchanted_golden_apple 1')
       // Динамит (пользователь 14.10: «динамитом взрывать — достать игрока или разнести колизей к чертям, больше анархии»): с

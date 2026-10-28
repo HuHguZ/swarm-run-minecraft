@@ -2,6 +2,8 @@
 import { SwarmBoard, planPvp, planTransfers } from '../../../daemon/src/swarm'
 import { pvpState, knownEnemies } from '../../../daemon/src/swarm/board'
 import { healExchange, pickForager } from '../../../daemon/src/swarm/logistics'
+import { antidoteExchange } from '../../../daemon/src/swarm/antidotes'
+import { antidoteDeliveryValue } from './antidotes'
 import { powerOf, weaponScore } from '../../../daemon/src/pvp/arms-graph'
 import { shoveValue, SHOVE, type Edge } from '../../../daemon/src/swarm/shove'
 import { WEAPON, BLOCK, FOOD, distance, cellKey } from './common'
@@ -89,7 +91,10 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     // комбинировать»): у кого булава, тот свои держит и просит ещё — подброс и удар сверху; у прочих один — на выход из ямы.
     // И паутину (22.10: «паутиной и булавой добивание»): прижать его перед ударом (smashSetupTurn) — у прочих её берут передачи.
     if (inv.mace) { reserve.wind_charge = inv.wind_charge || 0; needs.wind_charge = 8; needs.cobweb = 2 }
-    return { id: o.name, team: teamOf(o), position: m.p, health: m.hp, strength, role, canHeal: heal, inventory: inv, attackArrows: m.attackArrows, potions: m.potions || {}, reserve, needs, armor: m.armor || {}, offHand, weapon, ench }
+    const member = { id: o.name, team: teamOf(o), position: m.p, health: m.hp, strength, role, canHeal: heal, inventory: inv, attackArrows: m.attackArrows, potions: m.potions || {}, reserve, needs, armor: m.armor || {}, offHand, weapon, ench, antidote: m.antidote }
+    const medical = antidoteExchange(member, now(), stock)
+    Object.assign(needs, medical.needs); Object.assign(reserve, medical.reserve)
+    return member
   }
   const pincerSent = new Map<string, { key: string; at: number }>()
   const lanceWebSent = new Map<string, { key: string; at: number }>()
@@ -171,6 +176,8 @@ export function swarmTeam (sw: SwarmDriverCtx) {
       blueprints.delete(key)
     }
     board.setMembers(members)
+    // cl28b: убитый копьём соперник ещё 6 с держал бой убившего — доска помнила его зрение до срока.
+    for (const o of bots) if (teamOf(o) !== team && !alive(o.name)) board.forget(o.name)
     if (now() - (plannedAt.get(team) || 0) >= 500 || !planned.has(team)) {
       const was = board.doctrineState()?.doctrine, held = board.teamFight?.engage, a0 = board.assault?.since, e0 = board.assaultEnded?.at
       // Дефицит блоков на подъём: нужды лезущих минус то, что у своих сверх запаса, — сколько добытчиков снять (gather).
@@ -211,12 +218,13 @@ export function swarmTeam (sw: SwarmDriverCtx) {
       const deliveryFoes = board.enemies(), occupied = new Set(board.tasks().filter(t => t.status === 'claimed').flatMap(t => [t.claim!.owner, ...(t.participants || [])]))
       transfers.set(team, planTransfers(board, members, (donor, recipient, item) => {
         const task = planned.get(team)?.get(donor.id), d = task?.data || {}, giver = bots.find(o => o.name === donor.id), receiver = bots.find(o => o.name === recipient.id)
+        const medical = antidoteDeliveryValue(sw, donor.id, recipient.id, item, members, deliveryFoes) > 0
         // Пропускаем до сортировки: занятый или застрявший донор не закрывает свободного курьера.
         return !!task && !occupied.has(donor.id) && !occupied.has(recipient.id) && !['flee', 'recover', 'heal'].includes(task.kind) &&
           !(d.fountain || d.ambush || d.hold || d.line !== undefined || d.bait || d.cordon || d.buildKind || d.dig || d.ladder || d.finishing || d.shove) &&
           !!giver && !((/^(lava_escape|dodge_blast|clear_web)$/.test(giver.last?.m || '') || giver.shieldHold && giver.last?.m === 'swarm_hold') && giver.last?.pending !== false) &&
-          !(giver.swarmExecuting && giver.last?.m === 'fight' && giver.last.pending === true) &&
-          !deliveryFoes.some(e => now() - e.seenAt < 1000 && distance(e.position, donor.position) <= 4.5 + Math.max(5.6, Math.hypot(e.velocity?.x || 0, e.velocity?.z || 0) * 20)) &&
+          (medical || !(giver.swarmExecuting && giver.last?.m === 'fight' && giver.last.pending === true) &&
+          !deliveryFoes.some(e => now() - e.seenAt < 1000 && distance(e.position, donor.position) <= 4.5 + Math.max(5.6, Math.hypot(e.velocity?.x || 0, e.velocity?.z || 0) * 20))) &&
           !!receiver && !sw.blocked(receiver, `transfer:transfer:${donor.id}:${recipient.id}:${item}`, item) &&
           (cooldown.get(`transfer:${donor.id}:${recipient.id}:${item}`) || 0) <= now()
       }))

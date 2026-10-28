@@ -34,7 +34,7 @@ function predictGlider (e, vel, t) {
 
 // Слежка за ним в бою: летит ли, сколько в воздухе, его пике на нас (время до
 // сближения по его скорости и точке ближе всего).
-function track (bot, { enemy }: any) {
+function track (bot, { enemy, listen = true, clip = null }: any) {
   const st = { seen: 0, dives: 0, shots: 0, hits: 0, shieldUps: 0, dodges: 0, counterHits: 0, airMs: 0 }
   const his = { id: null, hist: [], vel: { x: 0, y: 0, z: 0 }, flying: false, since: 0, receipt: null, using: undefined, readyAt: 0 }
   let active = null
@@ -72,7 +72,7 @@ function track (bot, { enemy }: any) {
       his.flying = fl
     } catch {}
   }
-  bot.on('physicsTick', onTick)
+  if (listen) bot.on('physicsTick', onTick)
   // Копьё достаёт раньше тела: тот же луч KineticWeapon, что у собственного тарана.
   const threat = () => {
     const e = enemy()
@@ -88,17 +88,26 @@ function track (bot, { enemy }: any) {
     let best = null
     let contact = null
     for (let t = 0; t <= 24; t++) {
-      if (t) glideStep(p, v, e.yaw || 0, e.pitch || 0, false)
+      if (t) {
+        const prev = { x: p.x, y: p.y + 0.3, z: p.z }
+        glideStep(p, v, e.yaw || 0, e.pitch || 0, false)
+        // shortcut: centre-line sweep; expand to the glider box if native traces show corner crossings.
+        if (clip) {
+          const delta = new Vec3(p.x - prev.x, p.y + 0.3 - prev.y, p.z - prev.z), length = delta.norm()
+          if (length && clip(prev, delta.scaled(1 / length), length) < length) break
+        }
+      }
       const q = new Vec3(p.x, p.y, p.z)
       if (lance && !contact && t <= 20 && now + t * TICK_MS >= his.readyAt && lance.lanceDamage(held, look, v, myV).dmg > 0 &&
-        lance.lanceHits(q.offset(0, EYE_FLY, 0), look, v, bot.entity.position.offset(myV.x * t, myV.y * t, myV.z * t), bot.entity.height || 1.8, bot.entity.width || 0.6)) contact = { t, q }
+        lance.lanceHits(q.offset(0, EYE_FLY, 0), look, v, bot.entity.position.offset(myV.x * t, myV.y * t, myV.z * t), bot.entity.height || 1.8, bot.entity.width || 0.6, clip)) contact = { t, q }
       if (!t) continue
       const d = Math.hypot(q.x - me.x, q.y + 0.3 - me.y, q.z - me.z)
       if (!best || d < best.d) best = { d, t, q }
     }
     const sp = Math.hypot(his.vel.x, his.vel.y, his.vel.z)
     if (contact || (best && best.d < 3.5 && best.t <= 20 && sp > 0.5)) {
-      const out = { kind: contact ? 'lance' : 'dive', eta: (contact || best).t, miss: r2(best.d), at: (contact || best).q, speed: r2(sp), mace: held === 'mace' }
+      const miss = best?.d ?? contact.q.offset(0, .3, 0).distanceTo(me)
+      const out = { kind: contact ? 'lance' : 'dive', eta: (contact || best).t, miss: r2(miss), at: (contact || best).q, speed: r2(sp), mace: held === 'mace' }
       if (!active) st.dives++
       active = active ? Object.assign(active, out) : out
       return active
@@ -109,6 +118,7 @@ function track (bot, { enemy }: any) {
   return {
     st,
     his,
+    update: onTick,
     threat,
     flying: () => his.flying,
     vel: () => his.vel,
@@ -126,7 +136,7 @@ function track (bot, { enemy }: any) {
       }
       return (Object.values(out) as any[]).some(v => v !== undefined) ? out : undefined
     },
-    close () { bot.removeListener('physicsTick', onTick) }
+    close () { if (listen) bot.removeListener('physicsTick', onTick) }
   }
 }
 

@@ -40,7 +40,7 @@ function fixture({ windVy = 1.22, windReceipt = true } = {}) {
   bot.equip = async (it, hand) => { if (hand === 'off-hand') bot.inventory.slots[45] = it; else if (hand === 'hand') bot.heldItem = it }
   let now = 10000, windFired = 0, glides = 0
   const timers = new Set<any>()
-  const clock = { now: () => now, setTimeout(fn, ms) { const t = { fn, at: now + ms }; timers.add(t); return t }, clearTimeout: t => timers.delete(t) }
+  const clock = { now: () => now, observationNow: () => now, setTimeout(fn, ms) { const t = { fn, at: now + ms }; timers.add(t); return t }, clearTimeout: t => timers.delete(t) }
   bot.activateItem = off => { if (off && bot.inventory.slots[45]?.name === 'wind_charge') {
     windFired++; bot.entity.onGround = false; bot.entity.velocity.y = windVy
     bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:wind_charge', cooldownTicks: 10 })

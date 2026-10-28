@@ -14,7 +14,7 @@ import { ROOT, sleep, log, SEG_S, SOLO, CHAMP } from './context'
 import { DIST_ROOT } from '../../daemon/src/paths'
 import type { ArenaContext } from './context'
 import { LAN, LAN_LOG, rcon, buildLan, gameClock } from './server'
-import { EXTRA, extra, portOpen, client, up, down, boost } from './fleet'
+import { discover, client, up, down, boost } from './fleet'
 import { setupArmsMap, installPlaces, guardFalls } from './map'
 import { startRefills } from './loot'
 import { installRounds, placeFighters, startMobs, fighterLoop } from './rounds'
@@ -33,8 +33,7 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
   const COLOS_MAP = process.env.ARMS_MAP === 'colosseum'
   const AL = arms ? require(path.join(DIST_ROOT, 'daemon', 'arena', COLOS_MAP ? 'colosseum-arms' : 'arms-layout')) : null
   const L = arms ? AL.generate(process.env.SEED || 'team1') : null
-  const bots: any[] = []
-  for (const s of [{ name: `NeuroFarm${i}`, ws: 8800 + i }, { name: `NeuroFarm${i}b`, ws: 8900 + i }, ...[...EXTRA].map((_, k) => extra(i, k))]) if (await portOpen(s.ws)) bots.push({ name: s.name, ws: s.ws })
+  const bots: any[] = await discover(i)
   const N = bots.length
   // Нрав — по кругу: в одной толпе разные почерки (crowd.PERSONAS).
   const PERS = Object.keys(crowd.PERSONAS)

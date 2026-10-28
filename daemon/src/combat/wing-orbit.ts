@@ -1,7 +1,8 @@
 // Облёт на элитрах вокруг подброшенного врага (пользователь 25.10: «хочу, чтобы в полёте кидали… научи кружить»): взлёт,
-// круг радиуса R на его высоте +3, пока он в воздухе; заряды ветра бросает рефлекс сброса тела (wind-out, RANGE_FLY) на
+// круг радиуса R на высоте летуна (без элитр — выше на 3), пока он в воздухе; заряды ветра бросает рефлекс сброса тела (wind-out, RANGE_FLY) на
 // каждом сближении. Он сел (на 6 бл. над полем или ниже), время вышло — посадка подальше от него и нагрудник назад.
 import * as gameClock from '../game-clock'
+import { windCount } from '../mace/hands'
 
 export async function wingOrbit (session, ctl, p: any = {}) {
   const bot = session.require()
@@ -14,7 +15,8 @@ export async function wingOrbit (session, ctl, p: any = {}) {
   const R = p.radius ?? 8, floorY = Number.isFinite(p.floorY) ? p.floorY : (p.arena?.y ?? -64)
   const high = () => { const e = foe(); return !!e && (!e.onGround || e.position.y - floorY > 6) }
   if (!high()) return { ok: false, why: 'он не в воздухе' }
-  if (!sky.gliding(bot.entity)) {
+  if (bot.entity.onGround || !sky.gliding(bot.entity)) {
+    if (!windCount(bot)) return { ok: false, why: 'нет зарядов ветра' }
     const t = await sky.takeoff(bot, ctl, { pitch: 1.2, arena: p.arena })
     if (!t.ok) return { ok: false, why: 'взлёт: ' + t.why }
   }
@@ -40,10 +42,10 @@ export async function wingOrbit (session, ctl, p: any = {}) {
         return { kind: 'point', at: new Vec3(f.x + Math.cos(a) * R, f.y + 2, f.z + Math.sin(a) * R), minY: f.y - 1, maxY: f.y + 10, gap: 3, speedMin: .4 }
       }
       const a = Math.atan2(me.z - f.z, me.x - f.x) + (d < R * 1.6 ? .7 : 0)
-      return { kind: 'point', at: new Vec3(f.x + Math.cos(a) * R, f.y + 3, f.z + Math.sin(a) * R), minY: f.y - 2, maxY: f.y + 12, gap: 3, speedMin: .4 }
+      return { kind: 'point', at: new Vec3(f.x + Math.cos(a) * R, f.y + (sky.gliding(e) ? 0 : 3), f.z + Math.sin(a) * R), minY: f.y - 2, maxY: f.y + 12, gap: 3, speedMin: .4 }
     },
     rocketIf: s => { const e = foe(); return !!e && (s.p.y < e.position.y + 1 || Math.hypot(s.v.x, s.v.z) < .6) },
-    until: () => !high() ? 'он внизу' : null
+    until: () => !windCount(bot) ? 'заряды закончились' : !high() ? 'он внизу' : null
   })
   const e = foe()
   let landed: any = { ok: !!bot.entity.onGround }

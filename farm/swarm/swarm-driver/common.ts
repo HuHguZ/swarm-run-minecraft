@@ -21,6 +21,6 @@ export interface TurnCtx { b: any; context: any; board: any; member: any; task: 
 // только еду из второй руки, и у летающего с ракетами в левой руке драйвер видел 0 — пороги полёта, запас и раздача врали.
 export function withOffHand(inventory: Record<string, number> | undefined, off: { item?: string; count?: number } | null | undefined) {
   const inv = { ...(inventory || {}) }
-  if (off?.item && /^(firework_rocket|wind_charge)$/.test(off.item) && off.count) inv[off.item] = (inv[off.item] || 0) + off.count
+  if (off?.item && /^(firework_rocket|wind_charge|milk_bucket)$/.test(off.item) && off.count) inv[off.item] = (inv[off.item] || 0) + off.count
   return inv
 }

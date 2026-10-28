@@ -7,6 +7,7 @@ const { worldOf, rollout, headroom }: typeof import('./physics') = require('./ph
 const { offName, chestName, rocketCount, plainRocket, wearingElytra, toHotbar, swapChest }: typeof import('./kit') = require('./kit')
 const { choose, returnInside }: typeof import('./control') = require('./control')
 const { flightControl, install, steer, startGlide, fireRocket }: typeof import('./install') = require('./install')
+import { rocketForecast } from './rocket-forecast'
 
 // ---------------------------------------------------------------- полёт
 
@@ -73,7 +74,7 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
           g = { ...g, at: typeof at0 === 'function' ? t => shift(at0(t)) : shift(at0) }
         }
         S.phase = phase || g.kind
-        const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: g.kind === 'land' ? Math.max(S.fd, S.moveFd || 0) : S.fd }
+        const st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: g.kind === 'land' ? Math.max(S.fd, S.moveFd || 0) : S.fd }
         const tp = gameClock.wall.now()
         let pl = inside ? choose(W, st, g) : null
         const returning = !pl && !!arena
@@ -249,7 +250,7 @@ async function walkToCell(bot, ctl, at, ms) {
   const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   let timer: unknown = null
   try {
-    await Promise.race([bot.pathfinder.goto(new goals.GoalNearXZ(Math.floor(at.x), Math.floor(at.z), .5)),
+    await Promise.race([bot.pathfinder.goto(new goals.GoalNear(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z), .5)),
       new Promise((_, reject) => { timer = gameClock.setTimeout(() => reject(new Error('timeout')), ms) })])
     return !ctl.aborted
   } catch { try { bot.pathfinder.setGoal(null) } catch {} ; return false } finally { if (timer) gameClock.clearTimeout(timer) }

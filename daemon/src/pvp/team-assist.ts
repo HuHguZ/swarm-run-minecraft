@@ -122,6 +122,7 @@ export async function tossTo (bot: any, ally: any, name: string, count = 1, aren
   const it = bot.inventory.items().find((i: any) => i.name === name)
   if (!it) return { ok: false, why: 'нет ' + name }
   await bot.lookAt(ally.position.offset(0, 0.2, 0), true)
+  if (ctl.aborted || !bot.entity?.position || !ally?.position || ally.isValid === false || bot.entity.position.distanceTo(ally.position) > 3 || !pick.canHit(bot, ally, { range: 4.5 })) return { ok: false, why: 'передача отменена или союзник ушёл' }
   // Всё число сразу (из нескольких стопок): первой стопки не хватало на заявку — «подобрал», а дельта не набрана (Codex 15.10).
   const total = bot.inventory.items().filter((i: any) => i.name === name).reduce((n: number, i: any) => n + i.count, 0)
   await bot.toss(it.type, null, Math.min(count, total))

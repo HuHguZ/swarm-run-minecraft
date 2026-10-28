@@ -152,6 +152,23 @@ test('two fresh XZ-only receipts cannot spend a charge using a previously confid
   } finally { await rescue.close(); f.restore() }
 })
 
+test('an injected second launcher keeps the attributed cue, sham activation and exact restoration', async () => {
+  for (const enabled of [false, true]) {
+    const f = fixture(), original = f.a.activateItem
+    let calls = 0
+    const launch = async (...args) => { calls++; return air.windAt(...args) }
+    const rescue = startWindRescue(f.a, f.b, f.t, enabled, f.stop, Date.now(), undefined, launch)
+    try {
+      rescue.afterWind({ fired: true }); f.a._client.emit('damage_event', f.packet)
+      f.receipt(158.4); await pause(); f.receipt(158.3); await rescue.settle()
+      assert.equal(calls, 1); assert.equal(f.a.activations, enabled ? 1 : 0)
+      assert.equal(rescue.trace.secondWind.sham, !enabled); assert.equal(f.a.activateItem, original)
+      assert.equal(f.a._ndWindCd, enabled ? 999 : 123)
+    } finally { await rescue.close(); f.restore() }
+    assert.equal(f.a._client.listenerCount('damage_event'), 0)
+  }
+})
+
 test('settle bounds a silent helper tick wait before the engine can enter close/reset', async () => {
   const f = fixture(), original = f.a.activateItem
   air.windAt = async bot => { f.stages.push('waiting'); await new Promise(resolve => bot.once('end', resolve)); return { fired: false, why: 'ended' } }

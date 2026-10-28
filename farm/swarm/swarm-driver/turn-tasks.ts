@@ -19,8 +19,19 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       if (!r.ok && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 5) {
         const d = Math.hypot(m.p.x - close.position.x, m.p.z - close.position.z) || 1
         const at = bounded({ x: m.p.x + (m.p.x - close.position.x) / d * 14, y: arena.y, z: m.p.z + (m.p.z - close.position.z) / d * 14 })
-        const f = detail(await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message })))
+        let reply = await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message }))
         if (!currentTurn(sw, b, round)) return
+        if (reply?.code === 'RESCUE_BUSY') return
+        if (reply?.status === 'interrupted') { b.swarmFightReply = reply; cooldown.set(`fight:${b.name}`, now() + 500); return }
+        let f = detail(reply)
+        // Под карнизом не сесть: поле проверяет тот же полёт, без повторного взлёта после промаха.
+        if (reply?.status === 'done' && f.ok === false && f.why === 'негде сесть у цели (под навесом или занято)' && (at.x !== arena.x || at.z !== arena.z)) {
+          reply = await b.c.call('fly_to', { at: { x: arena.x, y: arena.y, z: arena.z }, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message }))
+          if (!currentTurn(sw, b, round)) return
+          if (reply?.code === 'RESCUE_BUSY') return
+          if (reply?.status === 'interrupted') { b.swarmFightReply = reply; cooldown.set(`fight:${b.name}`, now() + 500); return }
+          f = detail(reply)
+        }
         how += `; элитры к полю — ${f.ok ? 'сел' : f.why || f.error || '?'}`
         if (f.ok) r.ok = true
       }
@@ -167,6 +178,10 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
 
   async function turnRecover (tc: TurnCtx) {
     const { b, context, task, round, m, enemies, contact } = tc
+    if (task.data?.antidote) {
+      const result = detail(await b.c.call('antidote', { ...task.data.antidote, allies: context.members.map(a => a.id), enemies: enemies.map(e => e.id), arena }).catch(() => ({})))
+      if (!currentTurn(sw, b, round) || result.consumed) return
+    }
     if (contact) {
       const out = detail(await b.c.call('flee', { from: enemies.map(e => e.id), timeoutSeconds: 3, safeDist: 14, arena }))
       if (!currentTurn(sw, b, round)) return

@@ -231,3 +231,105 @@ test('unchanged remaining rocket thrust keeps the complete cached landing route'
   assert(cached && fresh && cached.r.kind === 'floor' && cached.r.fd <= 3)
   assert(cached.work < fresh.work, 'ordinary one-tick countdown still reuses the verified route')
 })
+
+test('landing certification also obeys the early-expiry price verdict on the same commands', () => {
+  const { W } = fixture()
+  const st = { p: new Vec3(600, 121, 600), v: new Vec3(1, -.1, 0), fd: .1, boost: 17, boostMin: 0 }
+  // A price callback may reject either touchdown (for example its support or runout).
+  // The early branch has no remaining rocket at contact; no two-branch route is acceptable here.
+  const plan = landingPlan(W, st, goal(), r => ({ c: 5, safe: r.boost > 0 }))
+  assert.equal(plan, null, 'a nominally accepted floor cannot hide the early-expiry rejection')
+})
+
+test('landing price pays the worse touchdown without a second search budget', () => {
+  const { W } = fixture()
+  const st = { p: new Vec3(600, 121, 600), v: new Vec3(1, -.1, 0), fd: .1, boost: 17, boostMin: 0 }
+  const plan = landingPlan(W, st, goal(), r => ({ c: r.boost > 0 ? 5 : 100, safe: true }))
+  assert(plan, 'a route with both complete safe touchdowns is still available')
+  assert.equal(plan.c, 100, 'the existing price of the early touchdown reaches the chosen plan')
+  assert(plan.work <= 32769, 'both route checks share the existing work budget')
+})
+
+test('an unchanged zero early-expiry bound reuses the complete cached route', () => {
+  const { W } = fixture()
+  const st = { p: new Vec3(600, 121, 600), v: new Vec3(1, -.1, 0), fd: .1, boost: 17, boostMin: 0 }
+  const price = r => ({ c: r.boost > 0 ? 5 : 100, safe: true })
+  const first = landingPlan(W, st, goal(), price)
+  assert(first)
+  const next = { ...step(W, st, first), boostMin: 0 }
+  const cached = landingPlan(W, next, goal(), price)
+  const fresh = landingPlan(fixture().W, next, goal(), price)
+  assert(cached && fresh)
+  assert.equal(cached.c, 100)
+  assert(cached.work < fresh.work, 'ordinary age rounding must not discard the verified path every callback')
+})
+
+test('a local choose fallback is not a certified complete early-expiry landing', () => {
+  const W = { boxHit: () => false, floorBelow: () => null }
+  const st = { ...initial(), p: new Vec3(600, 1e6, 600), boost: 17, boostMin: 0 }
+  const plan = choose(W, st, { kind: 'land', ...goal() })
+  assert(plan && plan.work === undefined && plan.r.kind === null,
+    'no complete safe route exists here: the unchanged local horizon is a fallback, not a two-branch landing certificate')
+})
+
+test('a changed forecast cannot reuse a safe cached route at a newly worse price', () => {
+  const flat = () => ({ boxHit: (x, y, z) => y < 120, floorBelow: () => ({ top: 120 }) })
+  const W = flat(), g = goal()
+  const st = { p: new Vec3(600, 121, 600), v: new Vec3(1, -.1, 0), fd: .1, boost: 17, boostMin: 0, boostUntil: 10000 }
+  let premium = 0
+  const price = () => ({ c: premium, safe: true })
+  const first = landingPlan(W, st, g, price)
+  assert(first)
+  const actual = { ...step(W, st, first), boost: 8, boostMin: 0, boostUntil: st.boostUntil }
+  premium = 100
+  const replanned = landingPlan(W, actual, g, price), fresh = landingPlan(flat(), actual, g, price)
+  assert(replanned && fresh)
+  assert.equal(replanned.c, 100)
+  assert(replanned.work >= fresh.work, 'after a forecast change a worse cached price competes with newly available routes')
+})
+
+test('ordinary countdown tolerates tiny body and price drift without restarting the full landing search', () => {
+  const flat = () => ({ boxHit: (x, y, z) => y < 120, floorBelow: () => ({ top: 120 }) })
+  const W = flat(), g = goal()
+  const st = { p: new Vec3(600, 121, 600), v: new Vec3(1, -.1, 0), fd: .1, boost: 17, boostMin: 0, boostUntil: 10000 }
+  let drift = 0
+  const price = () => ({ c: drift, safe: true })
+  const first = landingPlan(W, st, g, price)
+  assert(first)
+  const actual = { ...step(W, st, first), boostMin: 0, boostUntil: st.boostUntil }
+  actual.p.x += .0001; actual.v.x += .00001; drift = .0001
+  const cached = landingPlan(W, actual, g, price), fresh = landingPlan(flat(), actual, g, price)
+  assert(cached && fresh)
+  assert.equal(cached.c, .0001)
+  assert(cached.work < fresh.work, 'the new quality guard applies to changed thrust, not ordinary submillimetre drift')
+})
+
+test('a landing safe after mean expiry rejects the same commands when a late rocket drives into a wall', () => {
+  const W = { boxHit: (x, y, z) => y < 0 || x + .30000001192092896 > 2, floorBelow: () => ({ top: 0 }) }
+  const st = { p: new Vec3(.5, .2, .5), v: new Vec3(1, -.3, 0), fd: 0, boost: 0, boostMin: 0, boostMax: 5 }
+  const quiet = rollout(W, st.p, st.v, -Math.PI / 2, 0, 0, 1)
+  const live = rollout(W, st.p, st.v, -Math.PI / 2, 0, 5, 1)
+  assert.equal(quiet.kind, 'floor')
+  assert.equal(live.kind, 'wall')
+  assert(live.dmg > 10, 'real glide physics makes the zero/mean-safe command dangerous under surviving thrust')
+  const price = r => ({ c: Math.abs(r.v.y + .28224), safe: true })
+  const plan = landingPlan(W, st, { at: new Vec3(1.5, 0, .5) }, price)
+  assert(plan, 'another complete route may pay a higher touchdown price')
+  assert.notEqual(rollout(W, st.p, st.v, plan.yaw, plan.pitch, 5, 1).kind, 'wall')
+  assert(plan.work <= 32769, 'the late branch shares the original search budget')
+})
+
+test('a changed maximum thrust bound cannot skip cached route price competition when the mean is zero', () => {
+  const flat = () => ({ boxHit: (x, y, z) => y < 120, floorBelow: () => ({ top: 120 }) })
+  const W = flat(), g = goal()
+  const st = { p: new Vec3(600, 121, 600), v: new Vec3(1, -.1, 0), fd: .1, boost: 0, boostMin: 0, boostMax: 5, boostUntil: 10000 }
+  let premium = 0
+  const price = () => ({ c: premium, safe: true })
+  const first = landingPlan(W, st, g, price)
+  assert(first)
+  const actual = { ...step(W, st, first), boostMin: 0, boostMax: 5, boostUntil: st.boostUntil }
+  premium = 100
+  const replanned = landingPlan(W, actual, g, price), fresh = landingPlan(flat(), actual, g, price)
+  assert(replanned && fresh)
+  assert(replanned.work >= fresh.work, 'max-bound rounding also rechecks a newly worse cached price')
+})

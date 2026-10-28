@@ -65,7 +65,8 @@ export function pvpFlee(S: PvpPlan): void {
     const outrun = catchS < 3 && !escapes && Object.keys(inv).some(k => /_sword$|_axe$|^mace$|_spear$/.test(k))
     if (near && gap <= (prevKind === 'loot' ? far : far + 6) && pursuing && !outrun && !(prevKind === 'fight' && gap <= 6) && !assault?.voters.includes(m.id) && (weak(m) || outclassed(m, near))) {
       // От лучника — за укрытие (стена ломает линию выстрела), иначе к своим или в отрыв.
-      const perch = perchFor(m), cover = !perch && ranged && hideoutFor(m), group = !perch && !cover && rallyFor(m, near)
+      // От лучника и от тарана — за укрытие (стена ломает выстрел и луч копья); к летуну на насест не лететь.
+      const rammer = near.threat === 'aerial', perch = rammer ? null : perchFor(m), cover = !perch && (ranged || rammer) && hideoutFor(m), group = !perch && !cover && rallyFor(m, near)
       markFled(board, m.id)
       put(m, 'flee', { target: near.id, enemyPosition: near.position, panic: true, pursuit: true, ...(perch ? { perch: true } : cover ? { hide: true } : { kite: true, regroup: !!group }), reason: `ухожу от ${cover ? 'лучника за укрытие' : 'погони'} (враг в ${Math.round(gap)} бл.)` }, perch || cover || group || m.position)
       continue
@@ -120,9 +121,15 @@ export function pvpFlee(S: PvpPlan): void {
     const cause = held ? 'держу ' + why : why
     // Один — к своим, а не на насест: отход «один» кончается, когда дошёл до группы (retreatStep), а с насеста он к ним не
     // подходит и держится вечно (Codex 26.10, AA-N-HOLD-NEXT: здоровый n 196 с на насесте до конца раунда, вайпа нет).
-    const perch = why === 'один' && home ? null : perchFor(m)
-    put(m, 'flee', { target: threat.id, enemyPosition: threat.position, panic: true, risk, reason: cause + ', ' + risk.reason, ...(perch ? { perch: true } : home ? { regroup: true } : {}) },
-      perch ?? (home ? middle(home) : away))
+    // Начатый пустой размен тоже кончается у своих; насест не увеличивает группу.
+    // От тарана (он на элитрах): бег по открытому не спасает — он проходит 12 бл. меньше чем за секунду, насест — полёт ему навстречу;
+    // под крышей (камера, галерея) его копьё не достаёт (луч KineticWeapon обрывают блоки). Свои ближе крыши — к ним, как прежде
+    // (cl28 28.10: 35 из 127 наземных смертей — в этом отходе, почти все с полным хп и одни).
+    const den = threat.threat === 'aerial' ? hideoutFor(m) : null
+    const roof = den && (!home || distance(den, m.position) < distance(middle(home), m.position)) ? den : null
+    const perch = roof || threat.threat === 'aerial' || home && (why === 'один' || held?.why === 'пустой размен') ? null : perchFor(m)
+    put(m, 'flee', { target: threat.id, enemyPosition: threat.position, panic: true, risk, reason: cause + ', ' + risk.reason + (roof ? ', под крышу от тарана' : ''), ...(roof ? { hide: true } : perch ? { perch: true } : home ? { regroup: true } : {}) },
+      roof ?? perch ?? (home ? middle(home) : away))
   }
   Object.assign(S, { prey, hunting })
 }

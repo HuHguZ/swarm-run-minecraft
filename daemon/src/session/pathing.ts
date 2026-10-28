@@ -202,8 +202,9 @@ function updateMovements (this: Session, force = false): void {
       } else movements.scafoldingBlocks = []
     }
     if (this.gotoArena) {
-      const arena = this.gotoArena, within = (require('../navigation/parkour') as typeof import('../navigation/parkour')).withinArena
-      const cost = block => { const p = block?.position; return p && within(bot, { x: p.x + .5, y: p.y, z: p.z + .5 }, arena) ? 0 : Infinity }
+      const pk = require('../navigation/parkour') as typeof import('../navigation/parkour'), within = pk.withinArena
+      const here = () => pk.arenaAround(bot, this.gotoArena, bot.entity?.position)
+      const cost = block => { const p = block?.position; return p && within(bot, { x: p.x + .5, y: p.y, z: p.z + .5 }, here()) ? 0 : Infinity }
       movements.exclusionAreasStep.push(cost)
       movements.exclusionAreasPlace.push(cost)
       movements.exclusionAreasBreak.push(cost)
@@ -211,6 +212,7 @@ function updateMovements (this: Session, force = false): void {
       movements.getNeighbors = node => {
         const p = bot.entity.position
         const from = node.x === Math.floor(p.x) && node.y === Math.floor(p.y) && node.z === Math.floor(p.z) ? p : { x: node.x + .5, y: node.y, z: node.z + .5 }
+        const arena = here()
         return neighbors(node).filter(n => within(bot, { x: n.x + .5, y: n.y, z: n.z + .5 }, arena, from))
       }
     }

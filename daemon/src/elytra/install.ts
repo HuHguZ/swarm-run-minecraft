@@ -4,6 +4,7 @@ const gameClock: typeof import('../game-clock') = require('../game-clock')
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const { BODY_H, ROCKET_MAX_TICKS, GUARD, r2 }: typeof import('./consts') = require('./consts')
 const { lookVec, worldOf, rollout, headroom }: typeof import('./physics') = require('./physics')
+import { rocketForecast } from './rocket-forecast'
 const { plainRocket, wearingElytra }: typeof import('./kit') = require('./kit')
 const { choose, returnInside }: typeof import('./control') = require('./control')
 
@@ -14,6 +15,7 @@ function install (bot) {
   if (bot._ndElytra) return bot._ndElytra
   const S: any = { rocketIds: new Set(), fd: 0, moveFd: 0, lastY: null, startedAt: 0, flightStart: 0, lastRocketAt: 0, phase: null, box: [], crashes: [], groundT: 0 }
   bot._ndElytra = S
+  rocketForecast(bot)
   // Кто повернул взгляд в полёте (S7d: в чёрном ящике s7c5 скорость под ракетой разворачивалась на 180° за тик —
   // похоже на двух рулевых): в полёте каждый bot.look/lookAt помечается первым кадром стека вне mineflayer/elytra.
   // В запись тика — фактический взгляд и метка последнего рулевого. ND_ELYTRA_WHO=0 — выкл.
@@ -86,7 +88,7 @@ function install (bot) {
       S.boundaryReturn = false
       if (b.elytraFlying && !S.driving && GUARD) {
         const W = worldOf(bot, { observed: !!S.arenaBounds })
-        const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
+        const st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: S.fd }
         const r = rollout(W, b.position, b.velocity, b.yaw, b.pitch, st.boost, 8, { fd: S.fd, arena: S.arenaBounds })
         S.boundaryReturn = r.kind === 'outside'
         if (S.boundaryReturn || (r.kind === 'wall' && r.dmg >= 1) || (r.kind === 'floor' && r.fd > 3)) {
@@ -114,7 +116,7 @@ function install (bot) {
         }
       } catch {}
       const pl = S.lastPlan && S.lastPlan.tick === S.box.length ? S.lastPlan : S.lastPlan
-      S.box.push({ x: r2(b.position.x), y: r2(b.position.y), z: r2(b.position.z), vx: r2(b.velocity.x), vy: r2(b.velocity.y), vz: r2(b.velocity.z), ef: b.elytraFlying ? 1 : 0, fd: r2(S.fd), fdMove: r2(S.moveFd), ph: S.phase, fw: bot.fireworkRocketDuration > 0 ? 1 : 0, bst: bot.fireworkRocketDuration || 0, yaw: r2(b.yaw), pitch: r2(b.pitch), by: S.lookBy || null, dr: S.driving || 0, pc: pl ? pl.c : null, pk: pl ? pl.k : null, pt: pl ? pl.t : null, pfd: pl ? pl.fd : null, pvyHit: pl ? pl.vyHit : null, wallW, wallF })
+      S.box.push({ x: r2(b.position.x), y: r2(b.position.y), z: r2(b.position.z), vx: r2(b.velocity.x), vy: r2(b.velocity.y), vz: r2(b.velocity.z), ef: b.elytraFlying ? 1 : 0, fd: r2(S.fd), fdMove: r2(S.moveFd), ph: S.phase, fw: bot.fireworkRocketDuration > 0 ? 1 : 0, bst: bot.fireworkRocketDuration || 0, forecast: rocketForecast(bot), yaw: r2(b.yaw), pitch: r2(b.pitch), by: S.lookBy || null, dr: S.driving || 0, pc: pl ? pl.c : null, pk: pl ? pl.k : null, pt: pl ? pl.t : null, pfd: pl ? pl.fd : null, pvyHit: pl ? pl.vyHit : null, wallW, wallF })
       S.lastPlan = null
       S.lookBy = null
       if (S.box.length > 30) S.box.shift()

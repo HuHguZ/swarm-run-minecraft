@@ -184,7 +184,8 @@ function gotoArenaBounds (this: Session, bot, ctl, boundedArena, avoiding: boole
     let next = bot.entity.position
     try {
       if (bot.physics?.simulatePlayer && bot.entity.velocity) next = parkour.simulatePlan(bot, [{ yaw: bot.entity.yaw ?? 0, control: { ...parkour.IDLE, ...bot.controlState } }]).pos
-      if (parkour.withinArena(bot, bot.entity.position, boundedArena) && parkour.withinArena(bot, next, boundedArena, bot.entity.position)) return
+      const around = parkour.arenaAround(bot, boundedArena, bot.entity.position)
+      if (parkour.withinArena(bot, bot.entity.position, around) && parkour.withinArena(bot, next, around, bot.entity.position)) return
       bounds.error = Object.assign(new Error('next physical step leaves arena bounds'), { code: 'ARENA_BOUNDARY' })
     } catch (err) { bounds.error = Object.assign(new Error('cannot verify next arena step: ' + err.message), { code: 'ARENA_BOUNDARY' }) }
     rejectBounds(bounds.error)

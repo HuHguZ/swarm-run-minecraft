@@ -10,6 +10,7 @@ const { findItem, offName, chestName, plainRocket, bestChest, kit, swapChest }: 
 const { choose }: typeof import('./control') = require('./control')
 const { install, steer, startGlide, fireRocket, arenaAround }: typeof import('./install') = require('./install')
 const { fly, takeoff, land, chestDown }: typeof import('./flight') = require('./flight')
+import { rocketForecast } from './rocket-forecast'
 
 // Пике с булавой. Булава в правой заранее (33 тика заряда: к удару — крит),
 // фейерверки в левой; набор высоты над ним со сдвигом, перед пике в левую —
@@ -199,7 +200,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
           // над его головой (2.4 — чтобы свап успел до его рамки), только круто
           // вниз: скорость вниз копит высоту падения (> −0.5), горизонталь для
           // его щита — почти ноль.
-          const pl = choose(W2, { p, v, boost: bot.fireworkRocketDuration || 0, fd: S.fd }, { kind: 'strike', at: strikeAt, foot: footAt, pitches: DIVE_PITCHES, arena }, { rocketNow: diveRocket === 'нужна' })
+          const pl = choose(W2, { p, v, ...rocketForecast(bot), fd: S.fd }, { kind: 'strike', at: strikeAt, foot: footAt, pitches: DIVE_PITCHES, arena }, { rocketNow: diveRocket === 'нужна' })
           // Дуга за границей арены не выбирается (Codex 15.10) — нет дуги внутри: выход.
           if (!pl) return fin('no_safe_arena_trajectory')
           steer(bot, pl.yaw, pl.pitch)

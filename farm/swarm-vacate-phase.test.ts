@@ -215,3 +215,25 @@ test('vacate phase follows the required stand and new support underfoot, not dis
   assert.equal(preempt(b), true, 'changing the dig mode still interrupts its worker')
   assert.deepEqual(calls.pop(), { method: 'stop', params: { _climb: true } })
 })
+
+// cl28p (15×15, 28.10): «fight → fight (shove:B → shove:B) [goto]» 70 за раунд — точка сброса двигалась с целью на доли блока,
+// и каждый пересчёт рвал подход за спину цели. Подход, уже ведущий в пределах своей точности к новой точке, — тот же подход.
+test('shove approach survives a small shoveAt drift; a far move still restarts it', () => {
+  const foe = { id: 'Champ', position: { x: 10, y: 64, z: 0 }, seenAt: 1000 }
+  const task = (x: number, z = 0) => ({ kind: 'fight', data: { target: 'Champ', shove: true, shoveAt: { x, y: 64, z } } })
+  const run = (x: number, z = 0, me = { x: 0, y: 64, z: 0 }) => {
+    const calls: string[] = [], intent = { m: 'goto', pending: true }
+    const b: any = { name: 'A', swarmExecuting: true, swarmTask: task(7), last: intent,
+      swarmReposition: { at: { x: 12.5, y: 64, z: 0 }, range: .8, reason: 'shove', round: 1, target: 'Champ', intent },
+      c: { call: async method => { calls.push(method) } } }
+    const next = task(x, z)
+    const { preempt } = swarmTurn({ generation: 1, now: () => 1000, alive: () => true, pos: { A: { p: me } }, log() {},
+      refresh: () => ({ task: next, board: { enemies: () => [foe] } }) } as any)
+    return { stopped: preempt(b), b, next }
+  }
+  const small = run(7, .4)
+  assert.equal(small.stopped, false, 'край сместился на 0.4 бл.: точка подхода — на 0.3, подход идёт дальше')
+  assert.equal(small.b.swarmTask, small.next)
+  assert.equal(run(10, -3).stopped, false, 'далеко от точки: поправка 3.5 бл. меньше половины оставшихся 12.5 — иду, поправлю по прибытии')
+  assert.equal(run(10, -3, { x: 11, y: 64, z: -1 }).stopped, true, 'почти дошёл, а точка ушла на другую сторону цели — подход заново')
+})

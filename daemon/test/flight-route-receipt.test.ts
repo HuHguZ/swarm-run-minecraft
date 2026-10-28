@@ -103,3 +103,36 @@ test('fly_to preserves actual route landing and precise current state separately
   assert.equal(result.plannedLanding.y, 160)
   assert.equal(result.landingError, 6.8)
 })
+
+for (const raised of [false, true]) test(`fly_to ${raised ? 'keeps the early climb before a real ridge' : 'flies forward over flat ground without a climb over its launch point'}`, async t => {
+  const { bot } = fixture(.5)
+  bot.entity.position = new Vec3(603.6924858188771, 120, 605.7662710787135)
+  bot.entity.onGround = true
+  t.mock.method(require('../src/elytra/kit'), 'kit', () => ({ elytra: true, rockets: 12 }))
+  t.mock.method(require('../src/elytra/kit'), 'wearingElytra', () => true)
+  t.mock.method(require('../src/elytra/track'), 'gliding', () => true)
+  t.mock.method(require('../src/elytra/physics'), 'worldOf', () => ({
+    solid: (x, y) => y < (raised && x >= 606 && x <= 608 ? 125 : 120),
+    boxHit: () => false,
+    floorBelow: () => ({ top: 120, lava: false, water: false })
+  }))
+  let request: any
+  t.mock.method(require('../src/combat/flight-route'), 'runFlightRoute', async (_s, _ctl, p) => {
+    request = p
+    return { ok: false, stopped: 'test route captured' }
+  })
+  const { aerialMethods } = require('../src/rpc/aerial')
+  const session: any = { require: () => bot, runIntent: (_name, action) => action({ aborted: false }) }
+  await aerialMethods({ session }).fly_to({ at: { x: 630, y: 120, z: 600 } })
+  assert.ok(request)
+  if (raised) {
+    assert.equal(request.gates[0].id, 'подъём')
+    assert.equal(request.gates[1].center.x < 610, true)
+    assert.equal(request.gates[1].center.y >= 129, true)
+  } else {
+    assert.equal(request.gates.length, 1, 'a flat floor is not an obstacle requiring vertical circling')
+    assert.equal(request.gates[0].id, 'над гребнем')
+    assert.equal(request.gates[0].center.x, (603.6924858188771 + 630) / 2)
+    assert.equal(request.gates[0].center.z, (605.7662710787135 + 600) / 2)
+  }
+})

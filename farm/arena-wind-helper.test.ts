@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { installDangers } from './arena/dangers'
 import { installSight } from './arena/watch'
 import { swarmWind } from './swarm/swarm-driver/wind'
+import { swarmTurn } from './swarm/swarm-driver/turn'
+import { currentTurn } from './swarm/swarm-driver/lifecycle'
 
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
@@ -158,4 +160,50 @@ test('an unchanged arrow boost starts both native actions and releases its reser
   await settle()
   assert.ok(f.bots.every(b => b.last.pending === false))
   assert.ok(f.bots.every(b => !b.swarmReserved))
+})
+
+test('a real wind orbit reservation protects nongliding launch from task preemption until its reply', async () => {
+  const f = fixture(), running = { kind: 'goto', data: { target: 'Old' } }
+  const next = { kind: 'fight', data: { target: 'Foe' } }
+  Object.assign(f.helper, { swarmExecuting: true, swarmTask: running, swarmTurnOwner: { cancelled: false } })
+  f.sw.refresh = () => ({ task: next, board: { enemies: () => [] } })
+  const { preempt } = swarmTurn(f.sw)
+  f.api.windWing(f.victim, [{ ...f.seen[0], airborne: true }])
+  const flight = f.calls.find(c => c.method === 'wing_orbit'), intent = f.helper.last
+  assert.equal(flight?.name, 'Helper')
+  assert.ok(f.helper.swarmReserved, 'the real producer holds its reservation before the RPC reply')
+  assert.notEqual(f.pos.Helper.gliding, true, 'launch has not yet reported gliding')
+  try {
+    assert.equal(preempt(f.helper), false, 'a new task cannot cancel the reserved launch')
+    assert.equal(f.helper.last, intent)
+    assert.equal(f.helper.swarmTask, running)
+    assert.equal(f.calls.some(c => c.method === 'stop'), false)
+    flight.reply({ ok: true, ms: 1000, nearTicks: 1, closest: 8, why: 'долго', landed: true })
+    await settle()
+    assert.equal(f.helper.swarmReserved, undefined, 'the actual producer finally releases ownership')
+    assert.equal(preempt(f.helper), true, 'ordinary task changes resume immediately after release')
+    assert.equal(f.helper.swarmTask, next)
+    assert.deepEqual(f.calls.map(c => c.method), ['wing_orbit', 'stop'])
+  } finally {
+    for (const c of f.calls) c.reply?.({ ok: true })
+    await settle()
+  }
+})
+
+test('wind orbit reservations preserve emergency reactions, death invalidation and actual round reset', async () => {
+  const f = fixture()
+  f.api.windWing(f.victim, [{ ...f.seen[0], airborne: true }])
+  assert.ok(f.helper.swarmReserved)
+  f.helper.c.onDanger({ pos: f.pos.Helper.p, dangers: { lava: [{ at: f.pos.Helper.p, d: 0 }] } })
+  assert.equal(f.helper.last.m, 'lava_escape', 'the actual danger adapter still starts the emergency RPC')
+  assert.equal(f.ctx.busy.has('Helper'), true)
+  f.ctx.deadNow.add('Helper')
+  assert.equal(currentTurn(f.sw, f.helper, f.sw.generation), false, 'death invalidates the old turn despite its reservation')
+  f.ctx.deathAt = {}
+  f.ctx.swarmDriver.reset()
+  assert.equal(f.helper.swarmReserved, undefined, 'the actual round reset clears the reservation')
+  assert.equal(f.helper.swarmTask, undefined)
+  assert.equal(f.calls.filter(c => c.method === 'swarm_keep').length, f.bots.length)
+  for (const c of f.calls) c.reply?.({ ok: true })
+  await settle()
 })

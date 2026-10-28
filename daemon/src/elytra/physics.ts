@@ -59,9 +59,21 @@ function fallStep (p, v) {
 function worldOf (bot, { observed = false }: any = {}) {
   const cacheProperty = observed ? '_ndObservedSkyWorld' : '_ndSkyWorld'
   if (bot[cacheProperty]) return bot[cacheProperty]
-  const source = observed ? (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot) : bot
-  const cells = new Map()
   const key = (x, y, z) => ((x + 30000) * 60001 + (z + 30000)) * 1024 + (y + 512)
+  // Сырые чтения — общие для всех лучей одного синхронного прохода (cl28g, 28.10: прогноз полёта — 68% остановок цикла событий,
+  // девять лучей каждой клетки заново читали те же блоки); проход кончился (микрозадача) — мир читается заново.
+  const raw = new Map()
+  let rawArmed = false
+  const rawAt = (p: import('vec3').Vec3) => {
+    if (!rawArmed) { rawArmed = true; queueMicrotask(() => { raw.clear(); rawArmed = false }) }
+    const k = key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
+    if (raw.has(k)) return raw.get(k)
+    const b = bot.blockAt(p, false)
+    raw.set(k, b)
+    return b
+  }
+  const source = observed ? (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot, rawAt) : bot
+  const cells = new Map()
   let clearedAt = gameClock.now()
   const at = (x, y, z) => {
     if (cells.size > 250000 || gameClock.now() - clearedAt > 20000) { cells.clear(); clearedAt = gameClock.now() }

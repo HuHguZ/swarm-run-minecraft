@@ -16,6 +16,8 @@ export interface SwarmMember {
   role: SwarmRole
   canHeal?: boolean
   inventory?: Record<string, number>
+  /** Own receipt state; receivedAt belongs to the driver's wall clock, not the bot's game clock. */
+  antidote?: { state: import('../pvp/antidotes').AntidoteState; choice?: import('../pvp/antidotes').AntidoteChoice | null; need?: import('../pvp/antidotes').AntidoteChoice | null; using?: boolean; receivedAt: number }
   /** Own usable ammunition; beneficial tipped arrows remain separate inventory items. */
   attackArrows?: number
   /** Зелья по виду (splash_strong_harming…): в inventory они одним именем splash_potion. */

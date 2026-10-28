@@ -103,11 +103,25 @@ export function improvementOf(S: PvpPlan, m: SwarmMember): number {
   const weapon = Math.max(1, ...Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0 && damage.isMeleeWeapon(n)).map(n => damage.attackDamage(n)))
   return m.inventory ? Math.max(0, 8 - weapon) + Math.max(0, 20 - ownDefense(m).armor) / 5 : 0
 }
+// Достать летящего нечем: ни лука/арбалета со стрелами, ни ракет сверх запаса на спасение (elytra/consts RESCUE_ROCKETS = 3).
+export function airUnreachable(m: SwarmMember): boolean {
+  const inv = m.inventory || {}
+  const shoots = (count(inv, 'bow') > 0 || count(inv, 'crossbow') > 0) && count(inv, 'arrow') + count(inv, 'spectral_arrow') > 0
+  const flies = (count(inv, 'elytra') > 0 || (Array.isArray(m.armor) ? m.armor : Object.values(m.armor || {})).includes('elytra')) && count(inv, 'firework_rocket') > 3
+  return !shoots && !flies
+}
 export function targetCost(S: PvpPlan, m: SwarmMember, e: SharedEnemy): number {
   const { team, enemies, foeCenter, loads, meanStrength } = S
   const local = team.filter(a => distance(a.position, e.position) < 12).reduce((s, a) => s + a.strength, 0) / meanStrength
   const enemyCrowd = enemies.filter(o => distance(o.position, e.position) < 8).length
   const enemyCenterD = Math.hypot(e.position.x - foeCenter.x, e.position.z - foeCenter.z)
   const ranged = m.role === 'ranged' ? Math.abs(distance(m.position, e.position) - 12) : distance(m.position, e.position)
-  return ranged + (loads.get(e.id) || 0) * 5 + enemyCrowd * 2 - local * 2 - (m.role === 'flank' ? Math.min(8, enemyCenterD) : 0)
+  // Он в воздухе, а достать нечем: ни лука/арбалета со стрелами, ни ракет сверх запаса на спасение (elytra/consts RESCUE_ROCKETS = 3)
+  // — бой «жду посадки» без удара (cl28 28.10: 23 из 47 наземных боёв 0/0). Сначала достижимые цели: надбавка больше любого пути по
+  // арене; летят все — порядок между ними прежний.
+  // Ушёл от него, пока он летал (S.state.leftAerial), — его посадка вдали обратно не тянет: снова цель, только когда он в досягаемости
+  // удара (4.5 — как nearby плана) или других нет (cl28u: летун садился/взлетал, 48 смен цели в бою за раунд).
+  const left = S.state.leftAerial?.get(m.id) === e.id && distance(m.position, e.position) > 4.5
+  const unreachable = (e.threat === 'aerial' || left) && airUnreachable(m) ? 1000 : 0
+  return unreachable + ranged + (loads.get(e.id) || 0) * 5 + enemyCrowd * 2 - local * 2 - (m.role === 'flank' ? Math.min(8, enemyCenterD) : 0)
 }

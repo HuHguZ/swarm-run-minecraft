@@ -39,7 +39,7 @@ const release = (bot: any, action: () => any) => new Promise<any>((resolve, reje
 }))
 
 /** Explicit allied launches exclude only their consenting receiver from ordinary wind safety. */
-export async function windAt(bot: any, target: any, p: AllyLaunch = {}) {
+export async function windAt(bot: any, target: any, p: AllyLaunch & { predict?: (target: any, velocity: any, flightTicks: number) => Vec3 } = {}) {
   const xyz = (v: any) => v ? { x: v.x, y: v.y, z: v.z } : null
   const snapshot = (velocity?: any) => {
     const visible = sees(bot, target), v = visible ? velocity ?? observedVelocity(target) : null, own = bot.entity
@@ -60,7 +60,7 @@ export async function windAt(bot: any, target: any, p: AllyLaunch = {}) {
   const from = pick.eyeOf(bot), v = observedVelocity(target), moved = movement(bot)
   let at = target.position.offset(0, .3, 0), shot = windLaunch(from, at, moved)
   for (let i = 0; i < 3 && shot; i++) {
-    at = target.position.offset(v.x * shot.time, .3 + v.y * shot.time, v.z * shot.time)
+    at = p.predict ? p.predict(target, v, shot.time) : target.position.offset(v.x * shot.time, .3 + v.y * shot.time, v.z * shot.time)
     shot = windLaunch(from, at, moved)
   }
   if (!shot) return { fired: false, why: 'no_intercept' }

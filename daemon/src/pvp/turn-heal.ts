@@ -89,6 +89,7 @@ export async function fortTurn (ctx: DuelCtx, turn: TurnFrame) {
 
 // Лечение и еда в бою.
 export async function healTurn (ctx: DuelCtx, turn: TurnFrame) {
+  if (ctx.bot.entity?.effects && await require('./antidotes').antidoteTurn(ctx, turn)) return NEXT
   const { bot, clear, coverFrom, ctl, drink, healAt, holdItem, holdWeapon, pathTo, placeUnder, punishable, pvpSkills, ready, rest, routeInputs, set, st, tt, useAt, used } = ctx
   const { archer, calmHeal, d, hp, meInWeb, pressing, seesBody, theirR, theyUp, webSafe } = turn
   if (!turn.punishAfterRecovery && (hp <= healAt + (archer ? 3 : 0) || calmHeal)) {

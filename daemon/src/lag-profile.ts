@@ -29,6 +29,8 @@ function startMainThread () {
   ;(async () => {
     await post('Profiler.enable')
     await post('Profiler.setSamplingInterval', { interval: fine ? 2000 : 10000 })
+    // ND_LAG_PROFILE_AFTER_MS — начать позже (28.10: лимит файлов иначе съедает первая минута боя — ленивые загрузки).
+    await new Promise(r => setTimeout(r, Number(process.env.ND_LAG_PROFILE_AFTER_MS) || 0))
     while (left > 0) {
       await post('Profiler.start')
       maxLag = 0

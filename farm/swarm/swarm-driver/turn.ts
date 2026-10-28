@@ -72,18 +72,19 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     const healed = member.health > exit.hp && member.health / maxHp > exit.hp / exit.maxHp
     return exposed || facing && (risk.lethal || risk.burst || !healed && after >= exit.price / 1.25) ? running : task
   }
-  function stopForTask(b, running, task, before, after) {
+  function stopForTask(b, running, task, before, after, why = '') {
     if (b.swarmTurnOwner) b.swarmTurnOwner.cancelled = true
     // Смена цели при той же фазе — видна в журнале (15×15 26.10: «обычный бой → обычный бой» 108 раз, причина не видна).
     if (running.data?.target !== task.data?.target && before === after) after = `${after}|цель ${running.data?.target ?? '—'}→${task.data?.target ?? '—'}`
     b.swarmTask = task; b.swarmTaskAt = now()
     if (b.swarmFight) b.swarmFight.stopping = true
-    log(`↪ ${b.name}: смена фазы ${running.kind}${running.data?.fountain ? '/' + running.data.fountain : ''} → ${task.kind}${task.data?.fountain ? '/' + task.data.fountain : ''}${task.data?.hold ? '/' + task.data.hold : ''} (${before.split('|').filter(Boolean).join(', ') || 'обычный бой'} → ${after.split('|').filter(Boolean).join(', ') || 'обычный бой'}) — обрываю дело [${b.last?.m || '-'}]`)
+    log(`↪ ${b.name}: смена фазы ${running.kind}${running.data?.fountain ? '/' + running.data.fountain : ''} → ${task.kind}${task.data?.fountain ? '/' + task.data.fountain : ''}${task.data?.hold ? '/' + task.data.hold : ''} (${before.split('|').filter(Boolean).join(', ') || 'обычный бой'} → ${after.split('|').filter(Boolean).join(', ') || 'обычный бой'}) — обрываю дело [${b.last?.m || '-'}]${why ? ' — ' + why : ''}`)
     b.c.call('stop', running.data?.dig || task.data?.dig || b.swarmAscent ? { _climb: true } : undefined).catch(() => {})
   }
   function preempt(b) {
     const running = b.swarmTask
-    if (burning(b)) return false
+    // Резерв держит неделимый наряд и до взлёта: preempt не проходит через guardedTurn.
+    if (burning(b) || b.swarmReserved) return false
     // Без «первой секунды неприкосновенности» (21.10): план сам держит решения по миру (retreat.ts, гистерезис доктрины и
     // цели), и смена фазы — это настоящая смена обстановки.
     if (b.campReacting || !b.swarmExecuting || !running || !alive(b.name)) return false
@@ -104,13 +105,16 @@ export function swarmTurn (sw: SwarmDriverCtx) {
         !targetChanged && phase(running, null, false) === phase(task, null, false)) {
       const foe = context.board?.enemies().find(e => e.id === move.target), m = pos[b.name]
       const next = foe && m?.p && earlyFightMove(m, task, foe)
-      if (next && next.reason === move.reason && next.range === move.range &&
-          next.at.x === move.at.x && next.at.y === move.at.y && next.at.z === move.at.z) {
+      // Новая точка — в пределах точности идущего подхода или поправка меньше половины оставшегося пути: идти дальше, поправит
+      // следующий ход по прибытии (cl28p: точка ползла с целью, 70 обрывов за раунд; cl28w: 30 из 33 обрывов — «точка ушла»,
+      // медиана 4.4 бл. за пересчёт — цель бежит, путь строился заново каждые полсекунды).
+      const left = m?.p ? distance(m.p, move.at) : 0
+      if (next && next.reason === move.reason && next.range === move.range && distance(next.at, move.at) <= Math.max(move.range, left / 2)) {
         b.swarmTask = task
         return false
       }
       if (guardKey(running) !== guardKey(task)) {
-        stopForTask(b, running, task, before, after)
+        stopForTask(b, running, task, before, after, !foe ? 'подход: цели нет на доске' : !next ? 'подход: уже с нужной стороны' : next.reason !== move.reason ? `подход: ${move.reason} → ${next.reason}` : `подход: точка ушла на ${distance(next.at, move.at).toFixed(1)} бл.`)
         return true
       }
     }
@@ -120,7 +124,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       fight.pending = true
       const current = () => fight.round === sw.generation && b.swarmFight === fight && b.swarmTask === running &&
         b.last === fight.intent && b.swarmExecuting && alive(b.name)
-      const reject = () => { if (current()) stopForTask(b, running, task, before, after) }
+      const reject = () => { if (current()) stopForTask(b, running, task, before, after, 'бой не принял новую стойку') }
       b.c.call('fight_guard', { target: fight.target, roundScope: fight.roundScope, fightId: fight.id,
         digAvoid: task.data?.digAvoid || [], swarmStand: task.data?.swarmStand || null,
         shoveAt: task.data?.shove ? task.data.shoveAt || null : null }).then(r => {
@@ -139,7 +143,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     }
     // Бой с ним идёт, а план зовёт к той же цели походом (open/cork/shield) — враг в 6 бл., бой не рвать: сильный бот за 40 с
     // 8 раз менял fight ↔ goto, по удару за бой, и умер (игра пользователя 25.10).
-    if (running.kind === 'fight' && task.kind === 'goto' && !task.data?.commanded && !targetChanged && b.last?.m === 'fight' && !task.data?.rotation && task.data?.line === undefined &&
+    if (running.kind === 'fight' && task.kind === 'goto' && !task.data?.antidoteCover && !task.data?.commanded && !targetChanged && b.last?.m === 'fight' && !task.data?.rotation && task.data?.line === undefined &&
         b.last.pending !== false && !/retreat|dig:/.test(after)) {
       const foe = context.board?.enemies().find(e => e.id === running.data?.target), m = pos[b.name]?.p
       if (foe && m && now() - foe.seenAt < 1500 && distance(foe.position, m) <= 6) return false
@@ -162,6 +166,9 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       const foes = context.board?.enemies() || [], me = pos[b.name]?.p
       const old = foes.find(e => e.id === running.data.target), next = foes.find(e => e.id === task.data.target)
       if (old && next && me && now() - old.seenAt < 1500 && distance(old.position, me) <= distance(next.position, me) + 6) return false
+      // Поход к цели, а новая — рядом с последним местом прежней (≤ четверти пути, поворот ≤ 14°): путь лежит туда же — не рвать
+      // (cl28i 28.10: на сближении цель команды z → d — 17 походов оборваны за секунду, 26 за раунд). Ход ниже возьмёт новую цель.
+      if (running.kind === 'goto' && old && next && me && distance(old.position, next.position) <= distance(next.position, me) / 4) return false
     }
     if (after === before && !targetChanged) return false
     stopForTask(b, running, task, before, after)

@@ -126,6 +126,8 @@ export class SwarmBoard {
     task.status = 'done'; task.doneAt = this.now(); delete task.claim
     return true
   }
+  // Убит по ленте смертей (чат — открытое знание): зрение о нём больше не враг, не ждать срока enemyTtlMs.
+  forget(id: string): void { this.sightings.delete(id); this.hpHealing.delete(id) }
   observe(source: string, seenAt: number, input: EnemyObservation): boolean {
     const now = this.now()
     if (!this.alive(source) || input.visible !== true && input.nametag !== true || !input.id || this.members.has(input.id) || !validPosition(input.position) || !Number.isFinite(seenAt) || seenAt > now || seenAt + this.enemyTtlMs <= now) return false
@@ -236,6 +238,8 @@ export const markFled = (board: SwarmBoard, id: string) => { if (!fledAt.has(boa
 export type AssaultBalance = { ready: number; attack: number; armor: number; tough: number; prot: number; hp: number; force: number; enchanted: boolean; voters?: string[] }
 // Память штурма без TTL; новый раунд очищает её (15.10).
 export type PvpMemory = {
+  // Кто от какой летящей цели ушёл (нечем достать): возврат к ней — только в досягаемости (plan-judges targetCost).
+  leftAerial?: Map<string, string>
   failed: Map<string, AssaultBalance>
   equipment: Map<string, NonNullable<SharedEnemy['equipment']>>
   assault?: { balance: AssaultBalance; roster: Set<string>; lost: Set<string>; lostAtHit: number; hp: number }

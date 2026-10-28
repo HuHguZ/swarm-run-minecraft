@@ -22,6 +22,7 @@ import { leadTarget } from '../bow/track'
 import { hitboxOf, rayBox } from '../pick'
 import { observedCollision } from '../pvp/search'
 import { ROCKET_MAX_TICKS } from '../elytra/consts'
+import { rocketForecast } from '../elytra/rocket-forecast'
 import { damageTypeName } from '../gamedata'
 
 const EYE_FLY = 0.4
@@ -493,7 +494,7 @@ async function lanceApproach (ln: LanceCtx) {
           try { console.log('[lance-miss]', JSON.stringify({ at: clock.now(), ...close, hv: close?.hv && [r2(close.hv.x), r2(close.hv.y), r2(close.hv.z)], planned })) } catch {}
           return fin('мимо')
         }
-        const st = { p: b.position, v: b.velocity, boost: bot.fireworkRocketDuration || 0, fd: S.fd }
+        const st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: S.fd }
         const readyIn = ln.using ? Math.max(0, Math.round(spec.delay * 20) + 1 - Math.round((clock.now() - ln.useAt) / 50)) : Math.round(spec.delay * 20) + 1
         const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name, readyIn, arena, clip: ln.clip })
         if (closest) Object.assign(close, {

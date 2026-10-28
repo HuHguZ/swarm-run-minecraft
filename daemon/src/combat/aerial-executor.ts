@@ -12,6 +12,7 @@ import * as ranged from '../ranged'
 import { fallStep, reachFromBox } from '../elytra/physics'
 import { EYE, BODY_H, REACH, TICK_MS } from '../elytra/consts'
 import { flightControl } from '../elytra/install'
+import { rocketForecast } from '../elytra/rocket-forecast'
 import { usingOf } from '../pvp/combat-observe'
 import { windInside, type WindArena } from './team-wind'
 
@@ -187,7 +188,7 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
     const stop = () => {
       if (!valid(ctl, target.id) || bot.health <= 8 || !operations.gliding(bot.entity)) return true
       const flight = (require('../elytra') as typeof import('../elytra')).rollout(operations.worldOf(bot), bot.entity.position, bot.entity.velocity,
-        bot.entity.yaw, bot.entity.pitch, bot.fireworkRocketDuration ?? 0, 8)
+        bot.entity.yaw, bot.entity.pitch, rocketForecast(bot).boost, 8)
       return !!flight.kind
     }
     const onHit = () => { stats.airArrowHits = (stats.airArrowHits ?? 0) + 1 }

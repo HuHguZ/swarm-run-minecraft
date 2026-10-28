@@ -15,7 +15,7 @@ export const worthOf = (n: string) => {
   if (/^(enchanted_golden_apple|totem_of_undying|mace|trident)$/.test(n)) return 8
   if (/^(golden_apple|diamond|netherite_ingot)$/.test(n)) return 4
   if (/^(bow|crossbow|shield|splash_potion|potion|lingering_potion|iron_ingot)$/.test(n)) return 3
-  if (/^(ender_pearl|arrow|wind_charge|firework_rocket|golden_carrot|cooked_\w+|bread|baked_potato)$/.test(n)) return 1
+  if (/^(ender_pearl|arrow|wind_charge|firework_rocket|golden_carrot|cooked_\w+|bread|baked_potato|milk_bucket|honey_bottle)$/.test(n)) return 1
   return 0.2
 }
 // Снаряжён ли боец: оружие и не больше одной пустой части брони (видно глазами — что в руке и на теле).
@@ -63,15 +63,16 @@ export const MOB_SPD: Record<string, number> = { zombie: 2.3, husk: 2.3, drowned
 export const tierOf =(n: string) => ['wooden', 'golden', 'stone', 'copper', 'chainmail', 'iron', 'diamond', 'netherite'].findIndex(t => n.startsWith(t)) + (/^(mace|trident)$/.test(n) ? 6 : 0)
 
 const ARMOR = ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots']
+export const ANTIDOTES = ['milk_bucket 1', 'honey_bottle 2']
 export const KITS = {
-  elytra: ['elytra', 'firework_rocket 48', 'iron_spear', 'diamond_sword', 'golden_apple 4', 'water_bucket', 'cobblestone 32', 'splash_potion[potion_contents={potion:"minecraft:strong_healing"}] 2'],
-  sword: ['diamond_sword', 'diamond_axe', 'shield', 'golden_apple 4', 'cobblestone 32'],
+  elytra: ['elytra', 'firework_rocket 48', 'iron_spear', 'diamond_sword', 'golden_apple 4', 'water_bucket', 'cobblestone 32', 'splash_potion[potion_contents={potion:"minecraft:strong_healing"}] 2', ...ANTIDOTES],
+  sword: ['diamond_sword', 'diamond_axe', 'shield', 'golden_apple 4', 'cobblestone 32', ...ANTIDOTES],
   // Кристаллы — как набор арены «кристаллы» (arena.ts): тотем в левой руке, обсидиан под кристаллы, «Взрывоустойчивость» на поножах.
   arms: [],
   // Командный: зелья лечения — бросать союзникам, булыжник — стенки прикрытия.
-  team: ['diamond_sword', 'diamond_axe', 'golden_apple 2', 'splash_potion[potion_contents={potion:"minecraft:strong_healing"}] 6', 'cobblestone 64'],
+  team: ['diamond_sword', 'diamond_axe', 'golden_apple 2', 'splash_potion[potion_contents={potion:"minecraft:strong_healing"}] 6', 'cobblestone 64', ...ANTIDOTES],
   // Командный в воздухе: элитры и копьё + зелья своим (бросок и с полёта) и блоки.
-  teamair: ['elytra', 'firework_rocket 48', 'iron_spear', 'diamond_sword', 'golden_apple 2', 'splash_potion[potion_contents={potion:"minecraft:strong_healing"}] 4', 'water_bucket', 'cobblestone 32'],
+  teamair: ['elytra', 'firework_rocket 48', 'iron_spear', 'diamond_sword', 'golden_apple 2', 'splash_potion[potion_contents={potion:"minecraft:strong_healing"}] 4', 'water_bucket', 'cobblestone 32', ...ANTIDOTES],
   teamcrystal: ['diamond_sword[enchantments={sharpness:5}]', 'end_crystal 64', 'obsidian 64', 'bow[enchantments={power:1}]', 'golden_apple 8', 'totem_of_undying 3', 'arrow 64', 'splash_potion[potion_contents={potion:"minecraft:strong_healing"}] 4', 'cobblestone 32'],
   crystal: ['diamond_sword[enchantments={sharpness:5}]', 'end_crystal 64', 'obsidian 64', 'bow[enchantments={power:1}]', 'golden_apple 12', 'totem_of_undying 4', 'arrow 64', 'enchanted_golden_apple 1']
 }

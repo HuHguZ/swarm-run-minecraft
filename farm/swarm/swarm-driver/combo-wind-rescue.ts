@@ -13,9 +13,10 @@ export function projectFall(position: any, velocity: any, ticks: number) {
   return p
 }
 
-/** C1 laboratory timing only. The ordinary windAt still owns its unchanged linear aim and release guards. */
+/** C1 defaults keep ordinary linear windAt; laboratory candidates may inject only the second launcher. */
 export function startWindRescue(a: any, b: any, t: any, enabled: boolean, stop: () => boolean, t0 = Date.now(),
-  postSmash?: (baseline: any) => (receipt: any, trackedVelocity: any) => any) {
+  postSmash?: (baseline: any) => (receipt: any, trackedVelocity: any) => any,
+  secondLauncher?: (bot: any, target: any, options: any) => Promise<any>) {
   const air: typeof import('../../../daemon/src/swarm/combos/air-ideas') = require('../../../daemon/src/swarm/combos/air-ideas')
   const track: typeof import('../../../daemon/src/bow/track') = require('../../../daemon/src/bow/track')
   const { windLaunch }: typeof import('../../../daemon/src/combat/team-wind') = require('../../../daemon/src/combat/team-wind')
@@ -75,7 +76,7 @@ export function startWindRescue(a: any, b: any, t: any, enabled: boolean, stop: 
       if (sending) { trace.error = 'second_wind_wall_cap'; closed = true; a.quit('wind rescue stalled tick wait') }
     }, 2000)
     try {
-      const value = await air.windAt(a, visibleBody(), { ctl, allowAlly: true, allyHealth: () => b.health,
+      const value = await (secondLauncher ?? air.windAt)(a, visibleBody(), { ctl, allowAlly: true, allyHealth: () => b.health,
         // The narrow timing window is a one-time launch decision; it naturally changes during preparation.
         allySafe: () => !ctl.aborted && b.health > 1 && !!visibleBody() && bodyLife.onGround === false && !!knownFloor(bodyLife.position) })
       trace.secondWind = { ...value, fired: enabled && attempts > 0 && value.fired, attempted: value.fired,

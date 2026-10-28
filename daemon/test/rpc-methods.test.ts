@@ -19,7 +19,7 @@ const NAMES = [
   'slice', 'blocks_around', 'dig_time', 'tunnel', 'mine_seen', 'smelt', 'furnace_take', 'chest_put',
   'chest_take', 'chest_list', 'base', 'stash', 'armor', 'shelter', 'refuge', 'surface', 'recover', 'portal',
   'portal_natural', 'build', 'sort', 'sign', 'farm', 'ride', 'mechanism', 'sleep', 'wake', 'phys', 'profile',
-  'equip', 'eat', 'burrow', 'wind_jump', 'pearl_to', 'block_behind', 'mobs', 'drink_buffs', 'drop', 'set_goal',
+  'equip', 'eat', 'antidote', 'antidote_pause', 'burrow', 'wind_jump', 'pearl_to', 'block_behind', 'mobs', 'drink_buffs', 'drop', 'set_goal',
   'remember', 'recall', 'situation', 'escape_fire', 'director',
   // гонка вооружений (поток «тайники», 21.10): скан глаз и «пирога», бросок жемчуга наверх (rpc/caches.ts)
   'cache_scan', 'pearl_plan', 'pearl_up',
@@ -31,7 +31,8 @@ const NAMES = [
 ]
 
 test('daemon RPC: every method name survives the split into rpc/*.ts, each exactly once', () => {
-  assert.equal(new Set(NAMES).size, 162)
+  assert.equal(NAMES.length, 164)
+  assert.equal(new Set(NAMES).size, NAMES.length, 'RPC contract fixture must contain no duplicates')
   const methods = createMethods({ session: {}, cfg: {}, bus: {}, vision: {}, director: {}, gameClock: {}, state: { dangerWatch: null } })
   assert.deepEqual(Object.keys(methods).sort(), [...NAMES].sort())
   for (const name of NAMES) assert.equal(typeof methods[name], 'function', name)

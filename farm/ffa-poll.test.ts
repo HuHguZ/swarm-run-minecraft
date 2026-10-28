@@ -313,6 +313,36 @@ test('watchdog protects a pending craft until its receipt, then diagnoses an aba
   assert.equal(f.calls.filter(c => c.method === 'stop').length, 1)
 })
 
+// cl28s (15×15, 28.10): бот на крыше Колизея (y 153), все пути боя noPath (1749 раз), сторож ставил needDrop — читателя не было с
+// разделения ffa.ts (14.10). Застрявший наверху — спуск к полю с разрешённым падением; ход его не перебивает до ответа.
+test('watchdog drops a fighter stuck high above the field instead of only stopping it', async t => {
+  const f = fixture(t), b = f.bots[0]
+  f.context.pos.fast.p = { x: 0, y: 89, z: 0 }
+  f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000
+  b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
+  b.last = { m: 'fight', at: 40000, p: { target: 'Foe' }, pending: true }
+  const sent: any[] = [], raw = b.c.call
+  b.c.call = (m, p) => { sent.push({ m, p, reserved: !!b.swarmReserved }); return raw(m, p) }
+  f.watchdog(); await turn(); await turn()
+  const drop = sent.find(c => c.m === 'goto')
+  assert.ok(drop, 'спуск к полю')
+  assert.ok(drop.p.descent && drop.p.descent.maxFallDamage > 0, 'с разрешённым падением')
+  assert.equal(drop.reserved, true, 'ход не перебивает спуск')
+  await turn(); await turn()
+  assert.equal(b.swarmReserved, undefined, 'после ответа бот снова в ходе')
+})
+
+// cl27r/cl28a: false-retreat bait eats at its rally on purpose — «стоит 6 с — eat (0 с)» ×3–6 at every round start.
+for (const where of ['at its post', 'far from its post']) test(`watchdog ${where === 'at its post' ? 'keeps' : 'resets'} a bait eating ${where}`, t => {
+  const f = fixture(t), b = f.bots[0], p = f.context.pos.fast.p
+  f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000
+  b.swarmTask = { kind: 'goto', position: where === 'at its post' ? { x: p.x + 1, y: p.y, z: p.z } : { x: p.x + 9, y: p.y, z: p.z }, data: { bait: true, target: 'Foe' } }
+  b.anchor = { p: { ...p }, at: 0 }
+  b.last = { m: 'eat', at: 49000, p: { timeoutSeconds: 2 }, pending: true }
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, where === 'at its post' ? 0 : 1)
+})
+
 function frozenGoto(t, target = { x: 8, y: 64, z: 0 }) {
   const f = fixture(t), b = f.bots[0], calls: any[] = []
   const task: any = { kind: 'goto', position: target, data: { target: 'Foe' } }

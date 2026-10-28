@@ -19,10 +19,12 @@ export function landingPlan (W, st, goal, price, H = 18) {
     const r = rollout(W, s.p, s.v, command.yaw, command.pitch, s.boost, 1, { fd: s.clientFd ?? s.fd, arena: goal.arena })
     // Player fall accounting follows accepted movement, not the client's velocity threshold.
     const fd = r.p.y > s.p.y && !r.kind ? 0 : s.fd + Math.max(0, s.p.y - r.p.y)
-    return { ...r, clientFd: r.fd, fd, boost: Math.max(0, s.boost - 1) }
+    return { ...r, clientFd: r.fd, fd, boost: Math.max(0, s.boost - 1),
+      boostMin: s.boostMin === undefined ? undefined : Math.max(0, s.boostMin - 1),
+      boostMax: s.boostMax === undefined ? undefined : Math.max(0, s.boostMax - 1) }
   }
-  const evaluate = (path) => {
-    let s: any = { p: st.p, v: st.v, boost: st.boost, fd: st.fd }
+  const evaluate = (path, boost = st.boost) => {
+    let s: any = { p: st.p, v: st.v, boost, fd: st.fd }
     for (let i = 0; i < path.length; i++) {
       s = advance(s, path[i])
       if (s.kind) {
@@ -34,15 +36,34 @@ export function landingPlan (W, st, goal, price, H = 18) {
     }
     return null
   }
+  const certify = path => {
+    // shortcut: check mean and expiry bounds only; intermediate expiry can follow a different curved trajectory.
+    const nominal = evaluate(path)
+    if (!nominal) return null
+    let c = nominal.c
+    const checked = new Set([st.boost])
+    for (const boost of [st.boostMin, st.boostMax]) {
+      if (!(boost >= 0) || checked.has(boost)) continue
+      checked.add(boost)
+      const bound = evaluate(nominal.path, boost)
+      if (!bound) return null
+      c = Math.max(c, bound.c)
+    }
+    return { ...nominal, c }
+  }
   let best = null
   const search = () => {
     const remembered = routes.get(W)
     if (remembered?.key === key && remembered.path.length) {
       const q = remembered.expected
+      // One observed rocket expiry survives age quantisation; recheck its bounded complete paths below.
+      // A different/vanished rocket changes the identity and cannot hide behind a similar countdown.
+      const sameForecast = st.boostUntil != null || remembered.boostUntil != null
+        ? st.boostUntil === remembered.boostUntil : st.boost === q.boost && st.boostMax === q.boostMax
       if (Math.hypot(st.p.x - q.p.x, st.p.y - q.p.y, st.p.z - q.p.z) <= HALF &&
-          Math.hypot(st.v.x - q.v.x, st.v.y - q.v.y, st.v.z - q.v.z) <= G && st.boost === q.boost) {
-        const valid = evaluate(remembered.path)
-        if (valid) {
+          Math.hypot(st.v.x - q.v.x, st.v.y - q.v.y, st.v.z - q.v.z) <= G && sameForecast && st.boostMin === q.boostMin) {
+        const valid = certify(remembered.path)
+        if (valid && (st.boost === q.boost && st.boostMax === q.boostMax || valid.c <= remembered.c)) {
           const command = valid.path[0]
           return { ...command, ...valid }
         }
@@ -89,7 +110,7 @@ export function landingPlan (W, st, goal, price, H = 18) {
         s = advance(s, command)
         if (s.kind) {
           if (s.kind === 'floor' && accepts(s.fd)) {
-            const result = evaluate(path)
+            const result = certify(path)
             if (result) {
               if (!best || result.c < best.c) best = { ...path[0], ...result }
             }
@@ -104,6 +125,6 @@ export function landingPlan (W, st, goal, price, H = 18) {
   let plan = null
   try { plan = search() } catch (e) { if (e !== exhausted) throw e; plan = best }
   if (!plan) return null
-  routes.set(W, { key, expected: advance(st, plan, false), path: plan.path.slice(1) })
+  routes.set(W, { key, c: plan.c, boostUntil: st.boostUntil, expected: advance(st, plan, false), path: plan.path.slice(1) })
   return { yaw: plan.yaw, pitch: plan.pitch, c: plan.c, r: plan.r, work }
 }

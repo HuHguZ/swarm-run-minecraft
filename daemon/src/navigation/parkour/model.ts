@@ -76,6 +76,13 @@ export function withinArena(bot: CollisionWorld, pos: Point, arena?: MovementAre
       return Math.hypot(from.x + dx * t - e.x, from.y + dy * t - e.y, from.z + dz * t - e.z) + 1e-6 >= e.r
     }))
 }
+// Стоящий уже за границей (сел на внешний гребень, отброс) — арена по xz расширена до него: назад внутрь и вдоль своей кромки
+// можно, дальше наружу — нет (cl28r 28.10: на волосок за границей каждый путь боя был noPath — все соседи вне арены).
+export function arenaAround<A extends MovementArena | undefined>(bot: CollisionWorld, arena: A, from: Point): A {
+  if (!arena || !from || withinArena(bot, from, arena)) return arena
+  const out = Math.max(Math.abs(from.x - arena.x), Math.abs(from.z - arena.z)) + dimensions(bot).half - (arena.r - 1)
+  return out > 0 ? { ...arena, r: arena.r + out + 1e-6 } : arena
+}
 export function clone(st: State): State { return Object.assign(Object.create(Object.getPrototypeOf(st)) as State, st, { pos: st.pos.clone(), vel: st.vel.clone(), control: { ...st.control } }) }
 export function worldOf(bot: MovementBot) {
   const cells = new Map<string, ReturnType<CollisionWorld['blockAt']>>()

@@ -23,7 +23,7 @@ const RISKY_FOOD = /^(rotten_flesh|spider_eye|poisonous_potato|pufferfish|chicke
 const NOT_ACTUALLY_FOOD = /_bucket$/
 
 // mineflayer refuses to consume anything else at food 20 ("Food is full").
-const ALWAYS_EDIBLE = /^(potion|milk_bucket|golden_apple|enchanted_golden_apple)$/
+const ALWAYS_EDIBLE = /^(potion|milk_bucket|honey_bottle|golden_apple|enchanted_golden_apple)$/
 
 // A bite takes 1.61s in vanilla; mineflayer waits 2.5s for its own confirmation
 // packet before giving up. 4s covers both plus server lag, and the poll returns
@@ -150,10 +150,10 @@ async function eat (session, { item: name }: any = {}) {
     failure = describeFailure(err, 'взять еду в руку')
   }
 
-  if (!failure) {
+  if (!failure && !stopped()) {
     let thrown = null
     // Started, never awaited as the verdict: its rejection is only evidence.
-    const consuming = (offHand ? Promise.resolve().then(() => bot.activateItem(true)) : bot.consume()).then(() => null, err => { thrown = err })
+    const consuming = (offHand || food.name === 'honey_bottle' ? Promise.resolve().then(() => bot.activateItem(offHand)) : bot.consume()).then(() => null, err => { thrown = err })
     // Only one rejection is allowed to cut the watch short. "Food is full" is
     // refused before any packet leaves, so nothing can happen afterwards; every
     // other rejection — the cancelled bite above especially — still leaves a

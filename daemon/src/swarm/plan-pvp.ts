@@ -11,6 +11,7 @@ import { pvpTargets, ringShields, pvpBuilders, falseWeakness, falseRetreat, foun
 import { pvpSectors, pvpGather, coverHurt, pvpDiggers, pvpLadders, pvpCampers } from './plan-jobs'
 import { assignFighters, commitPlan } from './plan-assign'
 import { strongFew, ineffectiveDamage } from './race'
+import { pvpAntidotes } from './antidotes'
 
 export function planPvp(board: SwarmBoard, members: SwarmMember[], options: PvpOptions = {}): Map<string, SwarmTask> {
   board.setMembers(members)
@@ -39,6 +40,7 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: PvpO
   pvpAssault(S)
   pvpFlee(S)
   pvpRecover(S)
+  pvpAntidotes(S)
   // Цели и приёмы строя.
   pvpTargets(S)
   ringShields(S)

@@ -3,6 +3,7 @@ import { ownedCount, assessSwarmFight } from '../../../daemon/src/swarm'
 import { powerOf } from '../../../daemon/src/pvp/arms-graph'
 import { WEAPON, distance, cellKey, withOffHand } from './common'
 import { currentTurn } from './lifecycle'
+import { antidoteDeliveryValue } from './antidotes'
 import type { SwarmDriverCtx } from './common'
 
 // Своё у получателя — с ракетами и зарядами во второй руке (подобранная ракета ложится туда).
@@ -17,14 +18,17 @@ export function swarmPosition (sw: SwarmDriverCtx) {
     // Неудавшаяся передача — снова, когда пара на новом месте (получатель ушёл с места неудачи), а не через 30 с (21.10).
     if (!task || recipient && sw.blocked(recipient, `transfer:${task.id}`, task.data.item)) return false
     const round = sw.generation
+    const antidote = /^(honey_bottle|milk_bucket)$/.test(task.data.item)
+    const medical = () => antidoteDeliveryValue(sw, b.name, recipient?.name, task.data.item, context.members, context.board.enemies())
     const coverAt = () => !pos[recipient?.name]?.p ? 0 : recipient.swarmPosition && distance(pos[recipient.name].p, recipient.swarmPosition.at) < 1.5 ? Math.max(0, Math.min(1, recipient.swarmPosition.cover || 0)) :
       recipient.swarmTask?.data?.hide && recipient.swarmTask.position && distance(pos[recipient.name].p, recipient.swarmTask.position) < 3 ? 1 : 0
     // Сидящего в укрытии на шифте можно снабдить; бой, бег и рефлекс опасности не останавливаем.
-    const available = () => !!recipient && !pos[b.name]?.rescuing && !pos[recipient.name]?.rescuing && currentTurn(sw, b, round) && alive(recipient.name) && !panic(recipient) &&
+    const available = () => !!recipient && (!antidote || medical() > 0) && !pos[b.name]?.rescuing && !pos[recipient.name]?.rescuing && currentTurn(sw, b, round) && alive(recipient.name) && !panic(recipient) &&
       !((/^(lava_escape|dodge_blast|clear_web)$/.test(recipient.last?.m || '') || recipient.shieldHold && recipient.last?.m === 'swarm_hold') && recipient.last?.pending !== false) &&
-      (!fighting(recipient) || coverAt() > 0 && recipient.last?.m === 'swarm_hold') &&
-      context.board.enemies().every(e => now() - e.seenAt >= 1500 || distance(e.position, pos[recipient.name].p) >= 8)
+      (medical() > 0 || (!fighting(recipient) || coverAt() > 0 && recipient.last?.m === 'swarm_hold') &&
+      context.board.enemies().every(e => now() - e.seenAt >= 1500 || distance(e.position, pos[recipient.name].p) >= 8))
     const meetingScore = () => {
+      if (antidote) return medical()
       if (!WEAPON.test(task.data.item) && !/_(helmet|chestplate|leggings|boots)$/.test(task.data.item)) return Infinity
       const m = pos[recipient.name], member = context.members.find(a => a.id === recipient.name)
       if (!member) return -Infinity
@@ -48,7 +52,8 @@ export function swarmPosition (sw: SwarmDriverCtx) {
     const stopRecipient = async () => {
       if (!available() || recipient.swarmReserved && recipient.swarmReserved !== reservation) return false
       recipient.swarmReserved = reservation
-      await recipient.c.call('stop').catch(() => {})
+      const paused = await recipient.c.call(antidote ? 'antidote_pause' : 'stop').catch(() => null)
+      if (antidote && (!paused || !detail(paused)?.ready)) return false
       for (const until = now() + 3000; recipient.swarmExecuting && now() < until;) await new Promise(resolve => setTimeout(resolve, 50))
       return !recipient.swarmExecuting && available()
     }
@@ -97,11 +102,13 @@ export function swarmPosition (sw: SwarmDriverCtx) {
       const result = await recipient.c.call('status')
       if (!currentTurn(sw, b, round)) return true
       const received = held(result?.state, task.data.item) - before >= task.data.count
-      if (result?.state?.inventory && pos[recipient.name]) pos[recipient.name].inv = result.state.inventory
+      if (result?.state?.inventory && pos[recipient.name]) pos[recipient.name].inv = withOffHand(result.state.inventory, result.state.offHand)
+      if (result?.state?.antidote && pos[recipient.name]) pos[recipient.name].antidote = { ...result.state.antidote, receivedAt: now() }
       if (result?.state?.armor && pos[recipient.name]) pos[recipient.name].armor = result.state.armor
       const donor = await b.c.call('status')
       if (!currentTurn(sw, b, round)) return true
-      if (donor?.state?.inventory && pos[b.name]) pos[b.name].inv = donor.state.inventory
+      if (donor?.state?.inventory && pos[b.name]) pos[b.name].inv = withOffHand(donor.state.inventory, donor.state.offHand)
+      if (donor?.state?.antidote && pos[b.name]) pos[b.name].antidote = { ...donor.state.antidote, receivedAt: now() }
       if (donor?.state?.armor && pos[b.name]) pos[b.name].armor = donor.state.armor
       if (received && context.board.ack(task.id, b.name, { token: claim.claim.token, confirmed: true })) telemetry.transfers++
       log(`📦 ${b.name} → ${recipient.name}: ${task.data.item}×${task.data.count}, ${received ? 'получено' : 'не подтверждено'}${received ? '' : ` (${r.ok ? `бросил, не подобрал: ${pu?.why || '?'}` : r.why || r.error || '?'})`}`)

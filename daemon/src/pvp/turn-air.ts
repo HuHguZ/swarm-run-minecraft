@@ -19,6 +19,14 @@ export function skySenseTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { me } = turn
   turn.meInWeb = webCells(bot).length > 0
   turn.skyThreat = ctx.prof.player && !bot.entity.elytraFlying && vision.visible(ctx.entity) ? sky.threat() : null
+  // Таран другого летуна, пока бьюсь со своей целью (28.10: в бою встречное копьё было только против цели боя — 4 из 11 наземных
+  // смертей от тарана пришлись на бой): защита, если свою цель сейчас не ударить раньше (не в досягаемости или удар не готов).
+  if (!turn.skyThreat && !bot.entity.elytraFlying) {
+    const g = (require('../threats') as typeof import('../threats')).incomingGliders(bot, { foes: ctx.session?._ndFoes ?? null })
+      .find(o => o.id !== ctx.entity?.id && o.ticks <= 30)
+    const mine = ctx.entity?.position && bot.entity.position.distanceTo(ctx.entity.position) <= HIT_REACH && gameClock.now() >= ctx.nextReady
+    if (g && !mine) turn.skyThreat = { kind: g.kind, eta: g.ticks, at: new (require('vec3').Vec3)(g.at.x, g.at.y, g.at.z), other: g }
+  }
 }
 
 // Копьё на изготовку отпускается, как только пике кончилось.
@@ -51,7 +59,8 @@ export async function skyDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
   if (ctx.bracing && skyThreat) {
     // Держим и ведём взгляд за ним (луч копья 2.0–4.5 по взгляду).
-    const q = sky.fl.at(2) || ctx.entity.position
+    const o = skyThreat.other
+    const q = o ? new (require('vec3').Vec3)(o.from.x + o.vel.x * 2, o.from.y + o.vel.y * 2, o.from.z + o.vel.z * 2) : sky.fl.at(2) || ctx.entity.position
     const ey = pick.eyeOf(bot)
     bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true).catch(() => {})
     await ctx.sleep(TICK_MS)
@@ -67,7 +76,7 @@ export async function skyDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
       for (const x of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(x, false)
       how = 'щит к пике с элитр'
     } else {
-      const hv = sky.fl.vel()
+      const hv = skyThreat.other?.vel || sky.fl.vel()
       const hn = Math.hypot(hv.x, hv.z) || 1
       let best = null
       for (const k of ['left', 'right', 'back', 'forward']) {

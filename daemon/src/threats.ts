@@ -442,6 +442,52 @@ function projectileDangers (bot, { foes = null as string[] | null } = {}) {
   return { ...value }
 }
 
+const gliderSights = new WeakMap()
+// One manual tracker per visible glider; no extra physics listener for each enemy.
+function incomingGliders (bot, { foes = null as string[] | null } = {}) {
+  if (!bot?.entity) return []
+  const sky: typeof import('./elytra/track') = require('./elytra/track')
+  let state = gliderSights.get(bot)
+  const now = gameClock.now()
+  // A suspended movement owner cannot supply velocity across the missed observation window.
+  if (state && now - state.at > 160) { for (const r of state.records.values()) r.tracker.close(); state.records.clear() }
+  const visible = new Set(), out = []
+  for (const raw of Object.values(bot.entities || {}) as any[]) {
+    if (!raw || raw === bot.entity || raw.type !== 'player' || !raw.position || !sky.gliding(raw) ||
+      (foes !== null && !foes.includes(raw.username)) || (require('./combat/ally-safety') as typeof import('./combat/ally-safety')).isAlly(bot, raw)) continue
+    const view = visiblePlayer(bot, raw, foes === null ? null : JSON.stringify(foes))
+    if (!view || !sky.gliding(view)) continue
+    if (!state) {
+      const lance: typeof import('./combat/aerial-lance') = require('./combat/aerial-lance')
+      const clip = lance.lanceCollider((require('./pvp/search') as typeof import('./pvp/search')).observedCollision(bot))
+      state = { records: new Map(), clip, at: now }; gliderSights.set(bot, state)
+      const reset = () => { for (const r of state.records.values()) r.tracker.close(); state.records.clear() }
+      bot.on?.('death', reset); bot.on?.('respawn', reset)
+      bot.once?.('end', () => { reset(); bot.removeListener?.('death', reset); bot.removeListener?.('respawn', reset); gliderSights.delete(bot) })
+    }
+    visible.add(raw.id)
+    let r = state.records.get(raw.id)
+    if (!r || r.raw !== raw) {
+      r?.tracker.close()
+      r = { raw, view, tracker: null }
+      r.tracker = sky.track(bot, { enemy: () => r.view, listen: false, clip: state.clip })
+      state.records.set(raw.id, r)
+    }
+    r.view = view; r.tracker.update()
+    const threat = r.tracker.threat()
+    if (!threat) continue
+    const vel = r.tracker.vel(), n = Math.hypot(vel.x, vel.z)
+    out.push({ id: raw.id, name: 'glider', kind: threat.kind, ticks: threat.eta, at: threat.at,
+      from: { x: view.position.x, y: view.position.y, z: view.position.z }, vel,
+      ...(n > 0 ? { side: { x: -vel.z / n, z: vel.x / n } } : {}), blockable: threat.kind === 'lance' })
+  }
+  if (state) {
+    state.at = now
+    for (const [id, r] of state.records) if (!visible.has(id)) { r.tracker.close(); state.records.delete(id) }
+  }
+  return out.sort((a, b) => a.ticks - b.ticks)
+}
+
 function projectileThreats (bot, foes, moving = false) {
   const me = bot.entity.position
   const potions = []
@@ -556,5 +602,5 @@ function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) 
   return { potions, holders, clouds, smashes: smashes(bot, foes || [], scope), arrows, aims: aims(bot, foes, scope), lava: lava.slice(0, 1), floor: floorDanger(bot), blasts, web }
 }
 
-module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, smashes }
-export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, smashes }
+module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes }
+export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes }

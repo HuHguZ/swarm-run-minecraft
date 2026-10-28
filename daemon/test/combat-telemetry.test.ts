@@ -37,7 +37,7 @@ function fixture () {
   let now = 1000
   const timers = new Set<any>()
   const timer = (fn, ms, repeat = false) => { const t = { fn, ms, repeat, at: now + ms }; timers.add(t); return t }
-  const clock = { now: () => now, setTimeout: timer, clearTimeout: t => timers.delete(t),
+  const clock = { now: () => now, observationNow: () => now, setTimeout: timer, clearTimeout: t => timers.delete(t),
     setInterval: (fn, ms) => timer(fn, ms, true), clearInterval: t => timers.delete(t),
     sleep: ms => new Promise<void>(done => timer(done, ms)) }
   const step = async (ms = 50) => {

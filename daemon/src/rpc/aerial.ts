@@ -117,7 +117,11 @@ function aerialMethods ({ session }: RpcContext) {
       for (let d = 2; d <= H0 - 2; d += 1) {
         const x = me0.x + (t.x - me0.x) * d / H0; const z = me0.z + (t.z - me0.z) * d / H0
         const y = topAt(x, z); if (y > ridge.y) ridge = { y, x, z, d }
+        // Ниже пика тоже бывает крыша: не начинать посадку до её дальнего края; ранний подъём сохраняем.
+        else if (y > t.y + 1.5) ridge = { ...ridge, x, z }
       }
+      // Ровный пол не гребень у старта: высоту набираем вперёд, без круга над собой.
+      if (ridge.y <= Math.min(me0.y, t.y)) ridge = { ...ridge, x: (me0.x + t.x) / 2, z: (me0.z + t.z) / 2, d: H0 / 2 }
       const cruise = Math.max(ridge.y + 4, Math.max(me0.y, t.y) + 8)
       if (cruise > yHi) return { ok: false, why: 'гребень выше 48 бл. — не перелететь' }
       const skyOpen = (x, y0, z) => { for (let y = Math.floor(y0) + 2; y <= cruise; y++) if (W.solid(Math.floor(x), y, Math.floor(z))) return false; return true }

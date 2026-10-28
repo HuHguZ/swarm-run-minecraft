@@ -29,6 +29,152 @@ function scene(t, shield = false) {
     set: d => { danger = { arrows: [], aims: [], potions: [], ...d } }, tick: () => { now += 50; bot.emit('physicTick') } }
 }
 
+function glider(f, z = -20) {
+  const flags = f.bot.registry.entitiesByName.player.metadataKeys.indexOf('living_entity_flags')
+  const metadata = Array(9).fill(0); metadata[flags >= 0 ? flags : 8] = 1
+  const enemy: any = Object.assign(new EventEmitter(), { id: 2, type: 'player', name: 'player', username: 'Flyer',
+    position: new Vec3(0, 64.5, z), velocity: new Vec3(0, 0, 0), height: .6, width: .6,
+    yaw: Math.PI, pitch: 0, elytraFlying: true, isValid: true, metadata, equipment: [{ name: 'iron_spear' }] })
+  f.bot.entities[enemy.id] = enemy
+  f.session._ndFoes = ['Flyer']
+  f.tick()
+  enemy.position.z += 1.5
+  f.tick()
+  return enemy
+}
+
+test('входящий летун при настоящем gotoGoal добавляет шаг без отмены пути', async t => {
+  const f = scene(t)
+  t.after(() => f.bot.emit('end'))
+  const { gotoGoal } = require('../src/movement/goto')
+  Object.assign(f.goal, { isEnd: () => false })
+  const moving = gotoGoal(f.bot, f.goal)
+  let done = false
+  moving.then(() => { done = true })
+  glider(f)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(f.keys.left || f.keys.right, 'телесный ответ на настоящий наблюдаемый таран')
+  assert.equal(done, false)
+  assert.equal(f.session.current, f.current); assert.equal(f.current.ctl.aborted, false)
+  assert.equal(f.bot.pathfinder.goal, f.goal); assert.equal(f.bot.pathfinder.path, f.path)
+  assert.deepEqual(f.goals, [f.goal])
+  f.bot.setControlState('forward', false)
+  delete f.bot.entities[2]; f.tick()
+  assert.equal(f.keys.forward, false); assert.equal(f.keys.left, false); assert.equal(f.keys.right, false)
+  f.bot.emit('goal_reached'); await moving
+})
+
+test('таран во время flee и heal не отбирает руки и приказ', t => {
+  const f = scene(t)
+  t.after(() => f.bot.emit('end'))
+  const ownUse = { hand: 0, name: 'golden_apple', since: 1000 }
+  f.bot._ndUse = { cur: ownUse }; f.bot.usingHeldItem = true
+  for (const name of ['flee', 'heal']) {
+    f.current.name = name
+    glider(f)
+    assert.ok(f.keys.left || f.keys.right)
+    assert.equal(f.bot._ndUse.cur, ownUse); assert.deepEqual(f.uses, [])
+    assert.equal(f.session.current, f.current); assert.equal(f.current.ctl.aborted, false); assert.deepEqual(f.goals, [])
+    delete f.bot.entities[2]; f.tick()
+  }
+})
+
+test('щит поднимается заранее к фронтальному тарану вне боя', t => {
+  const f = scene(t, true)
+  t.after(() => f.bot.emit('end'))
+  glider(f)
+  assert.deepEqual(f.uses, [['up', true]])
+  f.tick(); f.tick()
+  assert.deepEqual(f.uses, [['up', true]], 'не перезапускаем нативные пять тиков щита')
+  f.bot.activateItem(false)
+  delete f.bot.entities[2]
+  for (let i = 0; i < 16; i++) f.tick()
+  assert.equal(f.uses.some(([what]) => what === 'down'), false, 'чужое использование остаётся у дела')
+})
+
+test('входящий летун не меняет сторону каждый 300-мс период и уступает более ранней стреле', t => {
+  const f = scene(t)
+  t.after(() => f.bot.emit('end'))
+  const enemy = glider(f)
+  const left = f.keys.left
+  for (let i = 0; i < 4; i++) { enemy.position.z += 1.5; f.tick(); assert.equal(f.keys.left, left); assert.ok(f.keys.left || f.keys.right) }
+  f.set({ arrows: [{ ...f.arrow, ticks: 1 }] }); f.tick()
+  assert.notEqual(f.keys.left, left, 'более ранний фактический снаряд выбирает другой безопасный шаг')
+})
+
+test('поздний или задний таран не начинает бесполезный подъём щита', t => {
+  for (const z of [-8, 20]) {
+    const f = scene(t, true)
+    t.after(() => f.bot.emit('end'))
+    glider(f, z)
+    assert.deepEqual(f.uses, [])
+  }
+})
+
+test('таран не подмешивает шаг в полёт, прыжок, клатч или опасную опору', t => {
+  for (const mode of ['flight', 'takeoff', 'jump', 'hand', 'edge', 'web']) {
+    const f = scene(t, true)
+    t.after(() => f.bot.emit('end'))
+    if (mode === 'flight') { f.bot.entity.elytraFlying = true; f.bot.entity.onGround = false }
+    if (mode === 'takeoff') f.bot._ndElytra = { driving: 1 }
+    if (mode === 'jump') f.bot.setControlState('jump', true)
+    if (mode === 'hand') f.bot._ndHandLock = { on: () => true }
+    if (mode === 'edge' || mode === 'web') {
+      const block = f.bot.blockAt
+      f.bot.blockAt = p => Math.abs(p.x) >= .5 ? { name: mode === 'web' && p.y >= 64 ? 'cobweb' : 'air',
+        position: p.floored(), boundingBox: 'empty', shapes: [] } : block(p)
+    }
+    glider(f)
+    assert.equal(!!f.keys.left || !!f.keys.right, false, mode)
+    if (!['edge', 'web'].includes(mode)) assert.deepEqual(f.uses, [], mode)
+    assert.equal(f.current.ctl.aborted, false); assert.deepEqual(f.goals, [])
+  }
+})
+
+test('аварийный владелец прерывает только примесь от летуна и не возвращает старый ввод', async t => {
+  const f = scene(t)
+  t.after(() => f.bot.emit('end'))
+  glider(f)
+  assert.ok(f.keys.left || f.keys.right)
+  let finish
+  const gate = new Promise(resolve => { finish = resolve })
+  const pending = f.locks.start(f.session, () => { f.bot.setControlState('back', true); return gate }, { owner: 'Emergency', immediate: true })
+  f.tick()
+  assert.equal(f.keys.left, false); assert.equal(f.keys.right, false); assert.equal(f.keys.back, true)
+  delete f.bot.entities[2]
+  finish({}); await pending; f.tick()
+  assert.equal(f.keys.forward, false); assert.equal(f.keys.left, false); assert.equal(f.keys.right, false)
+})
+
+test('реальный шаг от летуна сообщает один внутренний эпизод после применения клавиш', t => {
+  const f = scene(t), reports = []
+  t.after(() => f.bot.emit('end'))
+  f.current.name = 'flee'
+  f.bot.on('nd_guard_reflex', event => { assert.ok(f.keys.left || f.keys.right); reports.push(event) })
+  const enemy = glider(f)
+  assert.equal(reports.length, 1)
+  assert.deepEqual(Object.fromEntries(['source', 'id', 'during', 'how'].map(k => [k, reports[0][k]])),
+    { source: 'incoming_glider', id: 2, during: 'flee', how: 'step' })
+  assert.ok(reports[0].eta >= 0 && reports[0].eta <= 12)
+  for (let i = 0; i < 4; i++) { enemy.position.z += 1.5; f.tick() }
+  assert.equal(reports.length, 1, 'одна продолжающаяся атака не пишет событие каждый тик')
+  delete f.bot.entities[2]; f.tick()
+  glider(f)
+  assert.equal(reports.length, 2, 'следующий наблюдаемый заход — новый эпизод')
+})
+
+test('внутреннее событие щита требует реального собственного use, а не одной угрозы', t => {
+  const f = scene(t, true), reports = [], block = f.bot.blockAt
+  t.after(() => f.bot.emit('end'))
+  f.bot.blockAt = p => Math.abs(p.x) >= .5 ? { name: 'air', position: p.floored(), boundingBox: 'empty', shapes: [] } : block(p)
+  f.bot.on('nd_guard_reflex', event => { assert.deepEqual(f.uses, [['up', true]]); reports.push(event) })
+  glider(f)
+  assert.equal(!!f.keys.left || !!f.keys.right, false)
+  assert.equal(reports.length, 1)
+  assert.equal(reports[0].how, 'shield')
+  f.tick(); assert.equal(reports.length, 1)
+})
+
 test('снаряд при goto добавляет боковой шаг и сохраняет путь, цель и новые клавиши дела', t => {
   const f = scene(t)
   f.set({ arrows: [f.arrow] }); f.tick()

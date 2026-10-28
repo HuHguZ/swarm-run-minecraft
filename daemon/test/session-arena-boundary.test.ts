@@ -243,3 +243,23 @@ test('avoid: climb keeps the same excluded path cells while ordinary climb keeps
     } finally { f.s.ctl.abort(); await assert.rejects(run) }
   }
 })
+
+// cl28r (15×15, 28.10): бот сел на внешний гребень Колизея на волосок за границей арены — каждый goto боя давал noPath
+// (visited 1: все соседи вне границ), 1032 раза у одного бота, «стоит 8–10 с — fight». Снаружи путь назад, внутрь, открыт; дальше наружу — нет.
+test('a fighter standing just outside the arena may walk back in, never further out', async t => {
+  const f = fixture(t, 'wait')
+  f.bot.entity.position = new Vec3(4.6, 64, .5)
+  assert.equal(parkour.withinArena(f.bot, f.bot.entity.position, arena), false, 'стоит за границей')
+  const run = f.s.goto({ x: 1, y: 64, z: 0, arena, surface: false })
+  await new Promise(resolve => setImmediate(resolve))
+  f.bot.emit('physicsTick')
+  assert.ok(Number.isFinite(f.stepCost(new Vec3(3, 64, 0))), 'внутрь — можно')
+  assert.ok(Number.isFinite(f.stepCost(new Vec3(4, 64, 0))), 'своя клетка у края — можно')
+  assert.equal(f.stepCost(new Vec3(6, 64, 0)), Infinity, 'дальше наружу — нет')
+  const Move = require('mineflayer-pathfinder/lib/move')
+  const neighbors = f.bot.pathfinder.movements.getNeighbors(new Move(4, 64, 0, 64, 0))
+  assert.ok(neighbors.some(n => n.x === 3), 'шаг внутрь среди соседей')
+  assert.ok(neighbors.every(n => n.x <= 4), 'наружу соседей нет')
+  f.bot.entity.position = new Vec3(1.5, 64, .5); f.bot.emit('goal_reached', f.bot.pathfinder.goal)
+  assert.ok((await run).arrived, 'поход не оборван проверкой границ на первом же тике')
+})

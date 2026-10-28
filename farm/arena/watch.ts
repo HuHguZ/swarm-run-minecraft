@@ -250,10 +250,11 @@ export function installSight (ctx: ArenaContext) {
   for (const b of bots) { const raw = b.c.call.bind(b.c); b.c.call = (m, p) => {
     p = { ...p, arena: p?.arena || arena }
     // Мгновенные запросы (items_near, blocks_around) — не дело: перекрывали настоящее последнее, и сторож «сбрасывал items_near».
-    const action = /^(status|observe|fight_guard|wind_report|enemy_wind_plan|wind_out|swarm_pose|swarm_position|emote|look_at|armor|team_hint|stop|mobs|rescue_config|watch_dangers|swarm_keep|items_near|blocks_around|cache_scan|pearl_plan)$/.test(m) ? null : (b.last = { m, at: Date.now(), p, pending: true })
+    const action = /^(status|observe|fight_guard|wind_report|enemy_wind_plan|wind_out|swarm_pose|swarm_position|emote|look_at|armor|team_hint|stop|mobs|rescue_config|watch_dangers|swarm_keep|items_near|blocks_around|cache_scan|pearl_plan)$/.test(m) ? null : (b.last = { m, at: Date.now(), p, pending: true, status: undefined as string | undefined })
     const out = raw(m, p)
     if (action) Promise.resolve(out).then(r => {
       action.pending = false
+      action.status = r?.status
       if (r?.code === 'RESCUE_BUSY' && pos[b.name]) pos[b.name].rescuing = true
     }, () => { action.pending = false })
     if (m === 'chest_take') Promise.resolve(out).then(r => markOpened(r?.detail?.at || (Number.isFinite(p.x) ? { x: p.x, y: p.y, z: p.z } : null)), () => {})
@@ -317,7 +318,9 @@ export function watchStatus (ctx: ArenaContext) {
       }
       // Стойка на месте (засада кемпера, кольцо щитов, оцепление) — её дело и есть стоять (кемпер в коробке: «стоит 6 с — сброс»).
       // (на месте: по дороге к засаде сторож нужен — зависший поход иначе не сбрасывался; Codex 15.10)
-      if (!m?.p || m.rescuing || !ctx.alive(b.name) || b.waiting || b.climbing || b.swarmReserved || b.swarmTask?.data?.hold && b.swarmTask.position && dist3(b.swarmTask.position, m.p) < 1.5 || b.swarmExecuting && (b.swarmBusyUntil || ctx.swarmDriver?.holding?.(b)) || busy.has(b.name) || (b.last?.m === 'craft' && b.last.pending) || (/^(mine|dig_to|swarm_work|box_in|box_out|ladder_up|tnt_at)$/.test(b.last?.m || '') && Date.now() - b.last.at < ((b.last.p?.timeoutSeconds ?? 12) + 2) * 1000)) { b.anchor = null; continue }
+      if (!m?.p || m.rescuing || !ctx.alive(b.name) || b.waiting || b.climbing || b.swarmReserved || b.swarmTask?.data?.hold && b.swarmTask.position && dist3(b.swarmTask.position, m.p) < 1.5 ||
+        // Приманка ложного отхода ест у сбора, насест — сидит и стреляет: на своём месте это дело, а не зависание (cl28a: «eat (0 с)» ×6 в начале раунда).
+        (b.swarmTask?.data?.bait || b.swarmTask?.data?.perch) && b.swarmTask.position && dist3(b.swarmTask.position, m.p) < 3 || b.swarmExecuting && (b.swarmBusyUntil || ctx.swarmDriver?.holding?.(b)) || busy.has(b.name) || (b.last?.m === 'craft' && b.last.pending) || (/^(mine|dig_to|swarm_work|box_in|box_out|ladder_up|tnt_at)$/.test(b.last?.m || '') && Date.now() - b.last.at < ((b.last.p?.timeoutSeconds ?? 12) + 2) * 1000)) { b.anchor = null; continue }
       // A delayed status or paused native physics is not evidence that a route is physically stuck.
       if (!Number.isFinite(m.observedAt) || !Number.isFinite(m.frameAt) || Date.now() - Math.min(m.observedAt, m.frameAt) > 5000) { b.anchor = null; continue }
       if (!b.anchor || dist3(b.anchor.p, m.p) > 1) { b.anchor = { p: { ...m.p }, at: Date.now() }; continue }
@@ -338,7 +341,7 @@ export function watchStatus (ctx: ArenaContext) {
       const goal = L0.p?.at || L0.p?.to || L0.p
       // Отказ конкретного подхода: снимается сменой стойки/раунда, а не ожиданием; читатель — swarm-driver (1b).
       if (goal && Number.isFinite(goal.x) && !(b.badSpots || []).some(s => dist3(s, goal) < 1)) (b.badSpots ||= []).push({ x: goal.x, y: goal.y, z: goal.z, from: { ...m.p }, round: ctx.round })
-      log(`🧊 ${b.name} стоит ${Math.round(still / 1000)} с — ${L0.m || '?'} ${L0.p?.item || L0.p?.target || L0.p?.mode || ''} (${L0.at ? Math.round((Date.now() - L0.at) / 1000) + ' с' : ''}) — сброс`)
+      log(`🧊 ${b.name} стоит ${Math.round(still / 1000)} с — ${L0.m || '?'} ${L0.p?.item || L0.p?.target || L0.p?.mode || ''} (${L0.at ? Math.round((Date.now() - L0.at) / 1000) + ' с' : ''}${L0.pending ? ', ждёт ответа' : ', ответ ' + (L0.status || '?')}; ход ${b.swarmTask?.kind || '-'}${b.swarmExecuting ? '' : ' вне хода'}${L0.p?.timeoutSeconds ? '; срок ' + L0.p.timeoutSeconds + ' с' : ''}${L0.p?.climb ? ', climb' : ''}; y ${m.p.y.toFixed(0)}${Number.isFinite(goal?.y) ? '→' + goal.y.toFixed(0) + ' в ' + Math.round(dist3(goal, m.p)) + ' бл.' : ''}) — сброс`)
       // Застрял наверху (крыша камеры, уступ галереи: спуск 6+ без воды pathfinder не планирует) — спрыгнуть.
       // Человек высоко (соло, 12.10: «поднимаются ко мне и встают» — спрыгивали и телепортировались на старт): наверху — охота, не застревание.
       if (m.p.y > Y + 3 && !(SOLO && Object.values(humans).some((h: any) => h.p && h.p.y > Y + 6))) b.needDrop = true
@@ -361,7 +364,17 @@ export function watchStatus (ctx: ArenaContext) {
           if ((d.steps > 0 || d.dug > 0) && b.frozen?.recovery === recovery) delete b.frozen.recovery
           log(`🧊 ${b.name}: выбираюсь шагами — ${d.steps ?? 0} шаг., ${d.dug ?? 0} бл.${d.why ? ' (' + String(d.why).slice(0, 50) + ')' : ''}`)
         }).catch(() => {})
-      else b.c.call('stop').catch(() => {})
+      // Застрял наверху — спуск к полю с разрешённым падением (как было до разделения ffa.ts 14.10: needDrop ставился, а читателя
+      // не осталось; cl28s — бот на крыше Колизея y 153, 1749 путей боя noPath). Резерв: ход не перебивает спуск до ответа.
+      else if (b.needDrop && !b.swarmReserved) {
+        b.needDrop = false
+        const token = {}, from = m.p.y
+        b.swarmReserved = token
+        b.c.call('stop').catch(() => {}).then(() => ctx.between || ctx.round !== round || !ctx.alive(b.name) ? null :
+          b.c.call('goto', { x: X + .5, y: Y, z: Z + .5, range: 6, timeoutSeconds: 8, climb: true, descent: { maxFallDamage: 8, minGain: 0 } }))
+          .then(r => { if (r) log(`🪂 ${b.name}: спуск с высоты ${Math.round(from - Y)} — ${r?.detail?.why || r?.status || '?'} → y ${Math.round(pos[b.name]?.p?.y ?? from)}`) })
+          .catch(() => {}).finally(() => { if (b.swarmReserved === token) delete b.swarmReserved })
+      } else b.c.call('stop').catch(() => {})
       b.anchor = { p: { ...m.p }, at: Date.now() }
     }
   }, 2000)
@@ -452,6 +465,7 @@ export function watchStatus (ctx: ArenaContext) {
       const now = Date.now(), frame = s.state.physicsTicks ?? tick, clockId = s.state.clock?.id
       const frameAt = was?.frame === frame && was?.clockId === clockId ? (was.frameAt ?? now) : now
       pos[b.name] = { p, v, hp: s.state.health, gliding: !!s.state.gliding, rescuing: !!s.detail?.rescuing, combo: s.detail?.combo || null, lance: s.state.lance || null, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: withOffHand(s.state.inventory, s.state.offHand), attackArrows: s.state.attackArrows, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
+      pos[b.name].antidote = s.state.antidote ? { ...s.state.antidote, receivedAt: now } : undefined
       if (dz && !pos[b.name].rescuing) b.c.onDanger?.({ pos: p, dangers: dz, observedAt: asked, status: true })
       // Реактивный сброс ветром (тело: combat/wind-out): попытки — в журнал, бросок — метка на цели для учёта смерти.
       for (const w of s.detail?.windOut || []) {
