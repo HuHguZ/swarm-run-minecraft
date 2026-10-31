@@ -281,7 +281,7 @@ test('S9: findBlocks по номеру состояния — те же клет
   } finally { if (prev === undefined) delete process.env.ND_S9; else process.env.ND_S9 = prev }
 })
 
-test('S9: нарезка кадров протокола без исключения на конце буфера — те же кадры при любой нарезке потока', () => {
+test('S9: нарезка кадров протокола без исключения на конце буфера — те же кадры при любой нарезке потока', async () => {
   const framing = require('minecraft-protocol/src/transforms/framing')
   const [, writeVarInt, sizeOfVarInt] = (require('protodef') as any).types.varint
   // Поток кадров разной длины (длины с 1-, 2- и 3-байтовым varint).
@@ -290,21 +290,24 @@ test('S9: нарезка кадров протокола без исключен
   const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff }
   for (let i = 0; i < 49; i++) { const n = [0, 1, 5, 127, 128, 300, 17000][i % 7] + Math.floor(rnd() * 3); const b = Buffer.alloc(n); for (let k = 0; k < n; k++) b[k] = (i * 31 + k) & 255; frames.push(b) }
   const stream = Buffer.concat(frames.map(f => { const h = Buffer.alloc(sizeOfVarInt(f.length)); writeVarInt(f.length, h, 0); return Buffer.concat([h, f]) }))
-  const run = (soft: boolean, cuts: number[]) => {
+  const run = async (soft: boolean, cuts: number[]) => {
     const sp = framing.createSplitter()
     const proto = Object.getPrototypeOf(sp)
     const out: string[] = []
     const t = soft ? fastblocks._softTransform : proto._ndOrigTransform || proto._transform
     sp.push = (b: Buffer) => { out.push(b.toString('hex')); return true }
     let at = 0
-    for (const c of [...cuts, stream.length]) { t.call(sp, stream.subarray(at, c), null, () => {}); at = c }
+    for (const c of [...cuts, stream.length]) {
+      await new Promise<void>((resolve, reject) => t.call(sp, stream.subarray(at, c), null, error => error ? reject(error) : resolve()))
+      at = c
+    }
     return { out, rest: sp.buffer.toString('hex') }
   }
   for (let trial = 0; trial < 12; trial++) {
     const cuts: number[] = []
     let p = 0
     while (p < stream.length) { p += 1 + Math.floor(rnd() * (trial < 6 ? 9 : 4000)); if (p < stream.length) cuts.push(p) }
-    const a = run(false, cuts); const b = run(true, cuts)
+    const a = await run(false, cuts); const b = await run(true, cuts)
     assert.deepEqual(b, a, `нарезка ${trial}`)
     assert.equal(a.out.length, frames.length)
   }

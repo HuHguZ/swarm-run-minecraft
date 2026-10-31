@@ -24,7 +24,8 @@ const FULL = [[0, 0, 0, 1, 1, 1]]
 function shapesOf (b) {
   if (!b) return null
   if (OUTLINE_FULL.has(b.name) || b.name === 'powder_snow' && process.env.ND_OW_ENV_RESCUE === '1') return FULL
-  const p = b.getProperties?.() || {}
+  const p = b.name === 'stone_pressure_plate' || b.name === 'tripwire' || b.name === 'tripwire_hook'
+    ? b.getProperties?.() || {} : null
   if (b.name === 'stone_pressure_plate') return [[1 / 16, 0, 1 / 16, 15 / 16, p.powered ? 1 / 32 : 1 / 16, 15 / 16]]
   if (b.name === 'tripwire') return [[0, p.attached ? 1 / 16 : 0, 0, 1, p.attached ? 2.5 / 16 : 8 / 16, 1]]
   if (b.name === 'tripwire_hook') return [{

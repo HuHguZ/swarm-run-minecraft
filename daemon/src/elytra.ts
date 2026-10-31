@@ -112,8 +112,8 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
           return { kind: 'escape' }
         }
         const decision = aerial.decide(undefined, ctx)
-        // Уже над ним с заряженной булавой — падение раньше нового разбега копьём.
-        if (decision.node === 'DiveStrike') return { kind: 'aerial', decision }
+        // Готовое пике или выбранный залп — раньше нового разбега копьём.
+        if (decision.node === 'DiveStrike' || decision.node === 'RangedVolley') return { kind: 'aerial', decision }
         // Таран копьём (s7b): в полёте — тоже, если копьё и ракеты есть, а его щит не в деле.
         // Показ 09.10: 4 с паузы в воздухе отдавали полёт перехвату (AerialIntercept) — оба бота кружили друг вокруг друга;
         // таран сам разводит (разбег прочь) и бросает в пике.
@@ -140,7 +140,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
       if (plan.kind === 'aerial') return aerial.run(ctl, ctx)
       if (plan.kind === 'escape') return escape(bot, ctl, e, { heal: ctx.heal, enough: ctx.enough, stats: st, used, allow, arena })
       if (plan.kind === 'lance') {
-        const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena, telemetryHp,
+        const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena, telemetryHp, deadline: ctx.deadline,
           afterPass: flightCtl => aerial.afterLance(flightCtl, ctx) })
         // Ни одного попадания — не сразу снова (ракеты и время).
         if (!res.hit) nextLance = gameClock.now() + 1000
@@ -185,6 +185,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
         lanceTrace: st.lanceTrace,
         lanceEarly: st.lanceEarly || undefined,
         lanceBail: st.lanceBail || undefined,
+        lanceEvasions: st.lanceEvasions || undefined,
         guardSaves: ((bot._ndElytra?.guardSaves || 0) - guard0) || undefined,
         reglideReflex: bot._ndElytra?.reglideReflex || undefined, airDrops: bot._ndElytra?.drops || undefined,
         // Чужие повороты взгляда, отбитые замком руля (кто — по кадру стека), за всё время демона.

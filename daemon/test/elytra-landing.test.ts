@@ -4,14 +4,15 @@ import { Vec3 } from 'vec3'
 import { EventEmitter } from 'node:events'
 import { fly } from '../src/elytra/flight'
 import { choose, cost } from '../src/elytra/control'
-import { worldOf } from '../src/elytra/physics'
+import { glideStep, rollout, worldOf } from '../src/elytra/physics'
 import { install } from '../src/elytra/install'
 import { observedCollision } from '../src/pvp/search'
 import * as clock from '../src/game-clock'
 
 test('landing cost includes same-tick motion and surface-dependent runout', () => {
-  const goal: any = { kind: 'land', at: new Vec3(.5, 100, .5) }
-  const result = (vx: number): any => ({ kind: 'floor', t: 1, p: goal.at, v: { x: vx, y: -.2, z: 0 }, fd: 1, remainingMove: { x: .5, z: 0 } })
+  const contact = new Vec3(.5, 100, .5)
+  const goal: any = { kind: 'land', at: contact.offset(.5, 0, 0) }
+  const result = (vx: number): any => ({ kind: 'floor', t: 1, p: contact, v: { x: vx, y: -.2, z: 0 }, fd: 1, remainingMove: { x: .5, z: 0 } })
   const world = (wall: number, drag = .6 * .91): any => ({
     airborneInertia: .91, groundInertia: () => drag,
     floorBelow: () => ({ top: 100 }), boxHit: x => x + .3 >= wall
@@ -87,6 +88,57 @@ test('player movement fall estimate survives shallow descent and resets after an
   assert.equal(S.moveFd, 0)
 })
 
+test('landing fallback prices accepted downward movement instead of resetting fall by client velocity', () => {
+  const W: any = { boxHit: (_x, y) => y < 120, floorBelow: () => ({ top: 120 }) }
+  // Native BR: the rocket forecast reached zero before entityGone; the complete bounded plan was unavailable.
+  const st = { p: { x: 628.6393766084998, y: 122.74454416702912, z: 600.5956828996544 },
+    v: { x: .5971915649839818, y: -.2593764020470014, z: .3425873497024843 },
+    boost: 0, boostMin: 0, boostMax: 5, boostUntil: 1, fd: 2.7665253607980986 }
+  const plan = choose(W, st, { kind: 'land', at: new Vec3(631.5, 120, 600.5) })
+  assert(plan)
+  assert.equal(plan.work, undefined, 'exercise the local fallback')
+  const p = { ...st.p }, v = { ...st.v }
+  let movementFd = st.fd
+  for (let t = 0; t < (plan.r.kind ? plan.r.t + 1 : 18); t++) {
+    const oldY = p.y
+    glideStep(p, v, plan.yaw, plan.pitch, false)
+    movementFd = p.y > oldY ? 0 : movementFd + oldY - p.y
+  }
+  assert(Math.abs(plan.r.fd - movementFd) < 1e-8, `priced ${plan.r.fd}, accepted movement ${movementFd}`)
+})
+
+test('movement fall prediction resets on ascent while the client flight channel remains available', () => {
+  const W: any = { boxHit: () => false, floorBelow: () => null }
+  const p = new Vec3(0, 140, 0), v = new Vec3(1, -.1, 0)
+  assert(rollout(W, p, v, -Math.PI / 2, 0, 0, 2, { fd: 6 }).fd < 3)
+  const movement = rollout(W, p, v, -Math.PI / 2, 0, 0, 2, { fd: 6, movementFall: true })
+  assert(Math.abs(movement.fd - (6 + p.y - movement.p.y)) < 1e-8)
+  assert.equal(rollout(W, p, new Vec3(1, .3, 0), -Math.PI / 2, .7, 0, 1, { fd: 6, movementFall: true }).fd, 0)
+})
+
+test('flight collision includes a fence extending above the cell beneath the body and invalidates its cached height', async () => {
+  const data = require('minecraft-data')('1.21.11'), Block = require('prismarine-block')(data)
+  const { Physics, PlayerState } = require('prismarine-physics')
+  let fence = true
+  const getBlock = p => {
+    const at = p.floored(), name = fence && at.x === 1 && at.y === 120 && at.z === 0 ? 'oak_fence' : 'air'
+    const b = Block.fromStateId(data.blocksByName[name].minStateId, 0); b.position = at; return b
+  }
+  const bot: any = Object.assign(new EventEmitter(), { version: '1.21.11', blockAt: getBlock,
+    inventory: { slots: [] }, jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0,
+    entity: { position: new Vec3(.5, 121.1, .5), velocity: new Vec3(1, 0, 0), effects: {}, attributes: {},
+      onGround: false, elytraFlying: true, yaw: -Math.PI / 2, pitch: 0 } })
+  bot.inventory.slots[6] = { name: 'elytra' }; bot.physics = Physics(data, { getBlock })
+  const native = bot.physics.simulatePlayer(new PlayerState(bot, {}), { getBlock })
+  assert(native.isCollidedHorizontally, 'the real client AABB hits the tall fence below its feet cell')
+  const W = worldOf(bot)
+  assert.equal(rollout(W, bot.entity.position, bot.entity.velocity, bot.entity.yaw, 0, 0, 4).kind, 'wall')
+  assert.equal(W.floorBelow(1.5, 123, .5).top, 121.5)
+  await Promise.resolve()
+  fence = false; bot.emit('blockUpdate', null, getBlock(new Vec3(1, 120, 0)))
+  assert.equal(W.boxHit(1.5, 121.1, .5, .6), false, 'a removed fence cannot leave a phantom extension')
+})
+
 function occludedFloor(surface = 'air') {
   return Object.assign(new EventEmitter(), {
     entity: { position: new Vec3(603.5067110125685, 120, 605.5091611740959) },
@@ -141,4 +193,19 @@ test('unloaded default flight space is blocked but supplies no landing floor', (
   assert.equal(W.solid(2, 0, 0), true)
   assert.equal(W.boxHit(2.5, 0, .5), true)
   assert.equal(W.floorBelow(2.5, 0, .5, 0), null)
+})
+
+test('an emergency landing prices continuing thrust when no complete safe route exists', () => {
+  const W: any = { boxHit: (_x, y) => y < 120,
+    floorBelow: (_x, y, _z, depth = 40) => y >= 120 && y - 120 <= depth ? { top: 120 } : null }
+  const st = { p: { x: 0, y: 124, z: 0 }, v: { x: 1.6, y: -1.3, z: 0 }, fd: 5,
+    boost: 0, boostMin: 0, boostMax: 35 }
+  const goal = { kind: 'land', at: new Vec3(0, 120, 0), pitches: [-1.3, .95] }
+  const plan = choose(W, st, goal)
+  assert(plan)
+  assert.equal(plan.work, undefined, 'the existing falling body cannot certify a complete safe landing')
+  assert.equal(plan.pitch, .95, 'brake instead of diving harder under the still-active rocket')
+  const powered = rollout(W, st.p, st.v, plan.yaw, plan.pitch, 35, 18, { fd: st.fd, movementFall: true })
+  assert(plan.c >= cost(W, st, goal, () => goal.at, powered, plan.yaw, plan.pitch),
+    'the selected emergency price includes the powered trajectory')
 })

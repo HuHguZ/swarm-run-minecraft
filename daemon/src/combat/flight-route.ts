@@ -51,13 +51,19 @@ export async function runFlightRoute(session: any, ctl: { aborted: boolean }, pa
         maxMs: Math.max(2, Math.min(30, params.gateSeconds ?? 15)) * 1000,
         goal: () => {
           const target = graph.target()!
-          return { kind: 'point', at: new Vec3(target.x, target.y, target.z), reach: true,
+          // The final gate leads into landing; price its approach instead of a fast fly-through.
+          return { kind: 'point', at: new Vec3(target.x, target.y, target.z), reach: index + 1 < graph.gates.length,
             minY: gate.center.y - gate.radius + 1, maxY: gate.center.y + gate.radius - 1 }
         },
         until: () => graph.index > index ? 'gate crossed' : bot.health <= 6 ? 'low health' : null,
         stats: statistics,
         noRocket: () => sky.rocketCount(bot) <= (params.rocketReserve ?? 2),
-        rocketIf: (state: any) => Math.hypot(state.v.x, state.v.z) < .6 || state.p.y < gate.center.y - 2 && state.v.y < .1
+        rocketIf: (state: any) => {
+          if (state.p.y < gate.center.y - 2 && state.v.y < .1) return true
+          if (Math.hypot(state.v.x, state.v.z) >= .6) return false
+          // Slow down for landing; an optional rocket must beat the unboosted approach's price.
+          return index + 1 < graph.gates.length ? true : undefined
+        }
       })
       if (graph.index === index) { stop = flight.why; break }
     }
@@ -87,7 +93,9 @@ function landAnyway (bot: any, parentCtl: any, arena: any, stats: Record<string,
   const W = sky.worldOf(bot, { observed: !!arena })
   const at = sky.landingSpot(bot, W, { near: bot.entity.position, radius: 16, inside })
   stats.landAnyway = (stats.landAnyway || 0) + 1
-  sky.land(bot, ctl, { at, stats, arena })
+  const finish = () => sky.land(bot, ctl, { at, stats, arena })
     .then(() => !ctl.aborted && !bot.entity.elytraFlying && sky.wearingElytra(bot) ? sky.chestDown(bot, ctl, { stats, arena }) : null)
     .catch(() => {})
+  if (bot._ndReflexSession) (require('../reflex-lock') as typeof import('../reflex-lock')).run(bot._ndReflexSession, ctl, finish)
+  else finish()
 }

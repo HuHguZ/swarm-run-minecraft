@@ -273,22 +273,23 @@ function healthOf (bot: any, e: any): number | null {
 
 // Таран: взлёт → набор высоты и отход на разбег → заход (ракета, затем копьё «использовать») → касание → выход
 // вверх → повтор (до passes) → посадка без кругов и нагрудник назад. stats — общая статистика элитр (report()).
-export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {} as any, used = (_: string) => {}, allow = null as any, maxMs = 45000, passes = 8, arena = null as any, telemetryHp = e => ehpTele(bot, e), afterPass = null }: any = {}) {
-  const ln = lanceContext(bot, ctl, e, { vel, stats, used, allow, maxMs, passes, arena, telemetryHp })
+export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {} as any, used = (_: string) => {}, allow = null as any, maxMs = 45000, deadline = Infinity, passes = 8, arena = null as any, telemetryHp = e => ehpTele(bot, e), afterPass = null }: any = {}) {
+  const ln = lanceContext(bot, ctl, e, { vel, stats, used, allow, maxMs, deadline, passes, arena, telemetryHp })
   const { t0, out, valid, sp, onHurt, stopUse } = ln
   if (!sp) { out.note = 'таран: копья нет'; return out }
   const name = sp.item.name
   const spec = spear.SPEARS[name]
   const delayMs = Math.round(spec.delay * 20) * 50
   Object.assign(ln, { name, spec, delayMs })
-  const early = await lanceMount(ln)
-  if (early) return early
-  stats.lances = (stats.lances || 0) + 1
-  used('элитры: таран копьём — разбег')
-  try { bot._client.on('damage_event', onHurt) } catch {}
+  if (!valid()) return lanceLand(ln)
   const flight = { target: e.username || e.name }
-  ln.S.lance = flight
   try {
+    const early = await lanceMount(ln)
+    if (early) return early
+    stats.lances = (stats.lances || 0) + 1
+    used('элитры: таран копьём — разбег')
+    try { bot._client.on('damage_event', onHurt) } catch {}
+    ln.S.lance = flight
     while (valid() && out.passes < passes && clock.now() - t0 < maxMs && sky.gliding(bot.entity)) {
       if (sky.rocketCount(bot) < 1 || (bot.health ?? 0) < 6) break
       // После пике возвращаем ракеты в левую, копьё — в правую до разбега и зарядки.
@@ -305,7 +306,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
       const res = await lanceApproach(ln)
       if (!valid() || !sky.gliding(bot.entity)) break
       await lanceExit(ln, res)
-      if (valid() && sky.gliding(bot.entity) && /^(попал|мимо)$/.test(res.why) && afterPass) {
+      if (valid() && sky.gliding(bot.entity) && /^(попал|мимо|долго)$/.test(res.why) && afterPass) {
         const combo = await afterPass(ln.ctl)
         if (combo?.hit) { out.hit = true; out.maceHits = (out.maceHits || 0) + 1 }
       }
@@ -320,7 +321,7 @@ export async function lance (bot: any, ctl: { aborted: boolean }, e: any, { vel 
 
 // Один таран — прежние параметры и const тела lance; using/useAt/hitAt — копьё «в деле» и время его касания.
 interface LanceCtx {
-  bot: any; ctl: { aborted: boolean }; e: any; vel: () => any; stats: any; used: (s: string) => void; allow: any; maxMs: number; passes: number
+  bot: any; ctl: { aborted: boolean }; e: any; vel: () => any; stats: any; used: (s: string) => void; allow: any; maxMs: number; deadline: number; passes: number
   arena: any; telemetryHp: (e: any) => number | null; W: any; S: any; t0: number; out: any; hp0: number; hisHp0: number | null
   valid: () => any; sp: any; name: string; spec: any; delayMs: number
   foe: () => any; hisH: () => number; hv: () => any; footAt: (t: number) => any; ceilY: () => number; cruiseY: () => number
@@ -334,15 +335,16 @@ function syncLanceUse (ln: LanceCtx) {
   ln.useAt = ln.using ? use.since : 0
 }
 
-function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats, used, allow, maxMs, passes, arena, telemetryHp }: any): LanceCtx {
+function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats, used, allow, maxMs, deadline, passes, arena, telemetryHp }: any): LanceCtx {
   const W = sky.worldOf(bot)
   const S = sky.install(bot)
   ctl = sky.flightControl(bot, ctl)
   const t0 = clock.now()
+  deadline = Math.min(deadline, t0 + maxMs)
   const out: any = { ok: false, hit: false, passes: 0, hits: 0, dealt: 0, note: '' }
   const hp0 = bot.health ?? 20
   const hisHp0 = telemetryHp(e)
-  const valid = () => !ctl.aborted && (bot.health ?? 0) > 0 && e && e.isValid !== false && e.position
+  const valid = () => clock.now() < deadline && !ctl.aborted && (bot.health ?? 0) > 0 && e && e.isValid !== false && e.position
   const sp = spear.spearOf(bot)
   const foe = () => e.position
   const hisH = () => hitboxOf(bot, e).h
@@ -352,7 +354,7 @@ function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats
   const footAt = leadTarget(e, hv, bot, 0)
   const ceilY = () => sky.arenaAround(bot, W, bot.entity.position).ceilY - 1.8 - 1.4
   const cruiseY = () => Math.min(ceilY(), foe().y + 7)
-  const ln: LanceCtx = { bot, ctl, e, vel, stats, used, allow, maxMs, passes, arena, telemetryHp, W, S, t0, out, hp0, hisHp0, valid, sp,
+  const ln: LanceCtx = { bot, ctl, e, vel, stats, used, allow, maxMs, deadline, passes, arena, telemetryHp, W, S, t0, out, hp0, hisHp0, valid, sp,
     name: null, spec: null, delayMs: 0, foe, hisH, hv, footAt, ceilY, cruiseY, using: false, useAt: 0, hitAt: 0, onHurt: null, stopUse: null,
     clip: lanceCollider(observedCollision(bot)) }
   // Попадание — его damage_event, причина которого — я (sourceCauseId = мой id + 1), пока копьё «в деле».
@@ -361,14 +363,20 @@ function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats
     if (!ln.using || !bot.entity || !ownSpearHit(pk, bot.entity.id, e.id)) return
     ln.hitAt = clock.now()
   }
-  const stopUse = () => { if (ln.using) { ln.using = false; try { if ((ctl as any)._ndFlightOwner.active) bot.deactivateItem() } catch {} } }
+  const stopUse = () => {
+    if (!ln.using) return
+    ln.using = false
+    const use = bot._ndUse?.cur
+    try { if ((ctl as any)._ndFlightOwner.active && (!use || use.hand === 0 && use.name === ln.name)) bot.deactivateItem() } catch {}
+  }
   Object.assign(ln, { onHurt, stopUse })
   return ln
 }
 
 // Земля: элитры, ракеты, копьё; не в полёте — взлёт. Не вышло — итог (out) с причиной, вышло — ничего.
 async function lanceMount (ln: LanceCtx) {
-  const { bot, ctl, stats, allow, arena, out, sp, name, foe } = ln
+  const { bot, ctl, stats, used, allow, arena, out, sp, name, foe } = ln
+  const previousUse = sky.wearingElytra(bot) ? null : bot._ndUse?.cur
   // Земля: элитры на тело (правой), ракеты — в левую, копьё — в правую.
   if (!sky.wearingElytra(bot)) {
     const sw = await sky.swapChest(bot, 'elytra', { hand: 'main' })
@@ -380,6 +388,15 @@ async function lanceMount (ln: LanceCtx) {
     if (!sky.gliding(bot.entity)) await sky.swapChest(bot, 'chest')
     out.note = 'таран: копьё или ракета не в руках'
     return out
+  }
+  if (!ln.valid()) return lanceLand(ln)
+  // Equipment ended the native charge even when its old local receipt has not caught up.
+  if (previousUse?.hand === 0 && previousUse.name === name &&
+      (!bot._ndUse?.cur || bot._ndUse.cur === previousUse) && spear.teamSafe(bot)) {
+    bot.deactivateItem()
+    bot.activateItem()
+    syncLanceUse(ln)
+    used('элитры: копьё после смены экипировки')
   }
   if (allow) allow()
   if (!sky.gliding(bot.entity)) {
@@ -411,7 +428,7 @@ async function lanceRunUp (ln: LanceCtx) {
   // Разворот — по фактической длине разбега (не дальше 13).
   let runR = 13
   const climb = await sky.fly(bot, ctl, { arena,
-    maxMs: 4000, stats, phase: 'таран: разбег',
+    maxMs: Math.max(0, Math.min(4000, ln.deadline - clock.now())), stats, phase: 'таран: разбег',
     goal: () => { const P = runUp(); const f = foe(); runR = Math.max(0, Math.min(13, Math.hypot(P.x - f.x, P.z - f.z) - 1.5)); return { kind: 'point', at: P, reach: true, minY: foe().y + 3, maxY: ceilY(), gap: 3, speedMin: 0.5 } },
     rocketIf: (s: any) => (s.p.y < foe().y + 4 || Math.hypot(s.v.x, s.v.z) < 0.5) ? true : null,
     noRocket: () => sky.rocketCount(bot) <= 1,
@@ -470,6 +487,11 @@ async function lanceApproach (ln: LanceCtx) {
         syncLanceUse(ln)
         if (allow) allow()
         if (clock.now() - tR > 4500) return fin('долго')
+        // The approach owns steering, so the ground overlay cannot see or evade a third player's lance.
+        if (incomingLance(bot)) {
+          stats.lanceEvasions = (stats.lanceEvasions || 0) + 1
+          return fin('опасно: встречный таран')
+        }
         const f = foe()
         // Его смещение за тик по позициям (трекер лука у летуна даёт 0) — для разбора промахов.
         const hd = prevF ? { x: f.x - prevF.x, y: f.y - prevF.y, z: f.z - prevF.z } : null
@@ -586,7 +608,7 @@ async function lanceExit (ln: LanceCtx, res: any) {
   const { bot, ctl, stats, allow, arena, foe, hv, ceilY, cruiseY } = ln
   // 3) Выход вверх и прочь от стен: точка впереди по ходу на cruiseY.
   await sky.fly(bot, ctl, { arena,
-    maxMs: 1500, stats, phase: 'таран: выход',
+    maxMs: Math.max(0, Math.min(1500, ln.deadline - clock.now())), stats, phase: 'таран: выход',
     // Отказ от захода (его копьё на изготовке, опасный выход) — прочь от него, а не «по ходу» (по ходу — в его
     // копьё: s7j р.1 «таран — мимо, себе −20», встречный разгон убил тараном его копья).
     // Его копьё на изготовке (S7d, ревью Codex №5: один встречный таран на 33–49 бл/с решает бой, а отказ уходил
@@ -603,11 +625,18 @@ async function lanceExit (ln: LanceCtx, res: any) {
       const L = sky.lookVec(away, 0)
       return { kind: 'point', at: lancePoint(new Vec3(b.position.x + L.x * 10, cruiseY(), b.position.z + L.z * 10), arena), minY: f.y + 3, maxY: ceilY(), gap: 3, speedMin: 0.4, away: f, awayR: 6 }
     },
-    noRocket: () => !/копьё на изготовке/.test(res.why),
+    noRocket: () => !/копьё на изготовке|встречный таран/.test(res.why),
     rocketIf: (st: any) => Math.hypot(st.v.x, st.v.z) < 1.0 ? true : null,
     onTick: () => { if (allow) allow() },
-    until: () => bot.entity.position.y >= foe().y + 3 && bot.entity.velocity.y < 0.3 ? 'вышел' : null
+    until: () => {
+      if (/встречный таран/.test(res.why) && incomingLance(bot)) return null
+      return bot.entity.position.y >= foe().y + 3 && bot.entity.velocity.y < 0.3 ? 'вышел' : null
+    }
   })
+}
+
+function incomingLance (bot) {
+  return (require('../threats') as typeof import('../threats')).incomingGliders(bot, { foes: bot._ndFoes ?? null }).some(p => p.kind === 'lance' && p.ticks <= 12)
 }
 
 async function lanceLand (ln: LanceCtx) {
@@ -654,7 +683,9 @@ async function lanceLand (ln: LanceCtx) {
     out.note = `элитры: таран копьём ${out.passes} заход(а), попаданий ${out.hits}${out.maceHits ? `, булавой ${out.maceHits}` : ''}${out.dealt ? `, снял ${r2(out.dealt)}` : ''}${out.self ? `, себе −${out.self}` : ''}, посадка ${l.ok ? 'цела' : (l.why || '?')}`
   }
   if (ctl.aborted && bot.entity.elytraFlying) {
-    finish().then(account).catch(() => {})
+    // The landing owns its continuation; the cancelled skill must stay fenced.
+    const landing = bot._ndReflexSession ? (require('../reflex-lock') as typeof import('../reflex-lock')).run(bot._ndReflexSession, landCtl, finish) : finish()
+    landing.then(account).catch(() => {})
     out.note = `элитры: таран копьём ${out.passes} заход(а), попаданий ${out.hits}${out.dealt ? `, снял ${r2(out.dealt)}` : ''} — бой кончился в воздухе, сажусь`
     return out
   }

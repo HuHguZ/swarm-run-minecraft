@@ -83,7 +83,7 @@ function getPhysics () {
     bot.entity.ndInPowderSnow = this.ndInPowderSnow
 `)
   if ((powderSource.match(/ndInPowderSnow/g) || []).length !== 7 || !powderSource.includes('const ndPowderSnowId')) throw new Error('Cannot apply reviewed powder snow movement to native physics')
-  // Avatar 1.21.11: swimming is .6 high, crouching 1.5; Player.updatePlayerPose retains it
+  // Avatar 1.21.11: swimming/fall flying are .6 high, crouching 1.5; Player.updatePlayerPose retains it
   // while the standing body cannot fit. Keep the dimension on each state, never
   // mutate a Physics instance shared by live integration and independent forecasts.
   const poseSource = powderSource
@@ -110,7 +110,7 @@ function getPhysics () {
       }
       const swim = ndWaterBudget && fits(.6) && (entity.ndSwimming || !fits(1.5))
       entity.ndPoseHeight = swim ? .6 : fits(1.5) && (entity.control.sneak || !fits(physics.playerHeight)) ? 1.5 : physics.playerHeight
-    } else entity.ndPoseHeight = physics.playerHeight`)
+    } else entity.ndPoseHeight = entity.elytraFlying ? .6 : physics.playerHeight`)
     .replace('    this.isInWeb = bot.entity.isInWeb\n', `    this.isInWeb = bot.entity.isInWeb
     this.ndPoseHeight = bot.entity._ndPoseHeight ?? (ndWaterBudget && bot.entity.metadata?.[6] === 3 ? .6 : bot.entity.metadata?.[6] === 5 ? 1.5 : bot.physics?.playerHeight ?? 1.8)
     this.ndSwimming = bot.entity._ndSwimming ?? bot.entity.metadata?.[6] === 3

@@ -30,23 +30,38 @@ function visiblePlayerItem (it) {
   return view
 }
 
+// One synchronous query: an observed opaque cube can reject later rays without another DDA.
+function sightRay (bot) {
+  const eye = pick.eyeOf(bot), unknown = { boundingBox: 'block', shapes: FULL }, cache = fastblocks.install(bot)
+  const world = { blockAt: p => { try { return (cache ? cache.block(p.x, p.y, p.z) : bot.blockAt(p, false)) || unknown } catch { return unknown } } }
+  let occluder: { lo: import('vec3').Vec3; hi: import('vec3').Vec3 } | null = null
+  return (point, range) => {
+    const delta = point.minus(eye), distance = delta.norm()
+    if (distance > range) return false
+    if (distance < 1e-6) return true
+    const dir = delta.scaled(1 / distance)
+    if (occluder && pick.rayBox(eye, dir, occluder.lo, occluder.hi, distance) != null) return false
+    const hit = pick.blockOnRay(world, eye, dir, distance, SEE_THROUGH)
+    if (!hit) return true
+    if (hit.block !== unknown && hit.block.boundingBox === 'block' && hit.block.shapes?.some(s =>
+      s[0] === 0 && s[1] === 0 && s[2] === 0 && s[3] === 1 && s[4] === 1 && s[5] === 1)) {
+      // Leave grazing edges and partial shapes to the exact ray, as in observedCollision.
+      occluder = { lo: hit.pos.offset(1e-7, 1e-7, 1e-7), hi: hit.pos.offset(1 - 1e-7, 1 - 1e-7, 1 - 1e-7) }
+    }
+    return false
+  }
+}
+
 // The same collision rays as pick, with transparent blocks skipped only for sight.
 function seesPlayer (bot, e) {
   if (!bot.entity || !e?.position || e.isValid === false) return false
   try {
-    const eye = pick.eyeOf(bot)
-    const box = pick.hitboxOf(bot, e)
-    const unknown = { boundingBox: 'block', shapes: FULL }
-    const cache = fastblocks.install(bot)
-    const world = { blockAt: p => { try { return (cache ? cache.block(p.x, p.y, p.z) : bot.blockAt(p, false)) || unknown } catch { return unknown } } }
+    const box = pick.hitboxOf(bot, e), visible = sightRay(bot)
     for (const [x, y, z] of [[.5, .5, .5], [.5, .9, .5], [.1, .5, .1], [.9, .5, .9], [.1, .5, .9], [.9, .5, .1]]) {
       const point = new Vec3(box.lo.x + box.w * x, box.lo.y + box.h * y, box.lo.z + box.w * z)
-      const delta = point.minus(eye)
-      const d = delta.norm()
       // Глаза — до 128 бл. (трекинг игроков сервера): на открытом его видно издали (пользователь 25.10: «видели меня на максимальном
       // расстоянии»).
-      if (d > 128) continue
-      if (d < 1e-6 || !pick.blockOnRay(world, eye, delta.scaled(1 / d), d, SEE_THROUGH)) return true
+      if (visible(point, 128)) return true
     }
   } catch {}
   return false
@@ -57,14 +72,10 @@ function gearPartVisible(bot, raw, index) {
   // Rendered player proportions: hands, feet, legs, torso, head. Test the part before reading its item packet.
   const heights = [[.35, .75], [.35, .75], [0, .18], [.15, .50], [.48, .75], [.75, 1]][index]
   try {
-    const eye = pick.eyeOf(bot), box = pick.hitboxOf(bot, raw)
-    const unknown = { boundingBox: 'block', shapes: FULL }
-    const cache = fastblocks.install(bot)
-    const world = { blockAt: p => { try { return (cache ? cache.block(p.x, p.y, p.z) : bot.blockAt(p, false)) || unknown } catch { return unknown } } }
+    const box = pick.hitboxOf(bot, raw), visible = sightRay(bot)
     for (const y of heights) for (const x of [.1, .5, .9]) for (const z of [.1, .5, .9]) {
-      const point = new Vec3(box.lo.x + box.w * x, box.lo.y + box.h * y, box.lo.z + box.w * z), delta = point.minus(eye), distance = delta.norm()
-      if (distance > 64) continue
-      if (distance < 1e-6 || !pick.blockOnRay(world, eye, delta.scaled(1 / distance), distance, SEE_THROUGH)) return true
+      const point = new Vec3(box.lo.x + box.w * x, box.lo.y + box.h * y, box.lo.z + box.w * z)
+      if (visible(point, 64)) return true
     }
   } catch {}
   return false
@@ -78,7 +89,23 @@ function observePlayerGear(bot, raw, prior = null) {
   return { equipment, known, visible, unknownArmorSlots: known.slice(2).filter(k => !k).length }
 }
 
+const sharedSights = new WeakMap<object, { sight: ReturnType<typeof buildLastSeen>; owners: number }>()
 function createLastSeen (bot) {
+  let shared = sharedSights.get(bot)
+  if (!shared) {
+    shared = { sight: buildLastSeen(bot), owners: 0 }
+    sharedSights.set(bot, shared)
+  }
+  shared.owners++
+  let closed = false
+  return { ...shared.sight, close () {
+    if (closed) return
+    closed = true
+    if (--shared.owners === 0) { shared.sight.close(); sharedSights.delete(bot) }
+  } }
+}
+
+function buildLastSeen (bot) {
   const records = new Map<number, any>()
   const sources = new WeakMap<object, any>()
   const source = e => sources.get(e) || e

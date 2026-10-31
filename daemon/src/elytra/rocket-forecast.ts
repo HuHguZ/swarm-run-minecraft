@@ -61,7 +61,8 @@ export function rocketForecast (bot): { boost: number; boostMin: number; boostMa
   // Missing/late observations retain the previous nominal upper model, with immediate expiry still possible.
   if (unknown) return { boost: active || 0, boostMin: 0, boostMax: active || 0, boostUntil: null }
   const boost = active && Number.isFinite(remaining) ? Math.min(active, remaining) : 0
-  const boostMax = active && Number.isFinite(maximum) ? Math.min(active, maximum) : 0
+  // Past the native expiry, continuing client thrust means its release packet is still unobserved.
+  const boostMax = active && Number.isFinite(maximum) ? maximum > 0 ? Math.min(active, maximum) : active : 0
   // A receipt dates our observation, not the earlier native birth. Even the very next step may lose thrust.
   return { boost, boostMin: 0, boostMax, boostUntil: active ? until : null }
 }

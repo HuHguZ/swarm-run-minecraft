@@ -37,6 +37,59 @@ function scene() {
   return { bot, ally, start, releases, sent }
 }
 
+for (const packet of ['look', 'position_look', 'position', 'flying']) test(`held spear checks the transmitted look before ${packet}`, () => {
+  const { bot, ally, start, releases, sent } = scene()
+  bot._client.write('look', { yaw: 270, pitch: 0, onGround: true })
+  bot.entity.yaw = 0; ally.position.z = 0
+  assert.equal(spear.teamSafe(bot), true, 'the desired northward turn misses this ally')
+  start(); sent.length = 0
+  bot._client.write(packet, { ...(packet === 'look' || packet === 'position_look' ? { yaw: 270, pitch: 0 } : {}),
+    ...(packet === 'position' || packet === 'position_look' ? { x: 0, y: 100, z: 0 } : {}), onGround: true })
+  assert.equal(releases(), 1, 'the actual eastward native ray still pierces the ally')
+  assert.equal(sent[0].name, 'block_dig')
+  assert.equal(sent[0].packet.status, 5)
+  assert.equal(sent[1].name, packet)
+  assert.equal(bot._ndUse.cur, null)
+  bot.emit('end')
+})
+
+test('wire spear guard keeps a clear charge and forgets the old look on a server teleport', () => {
+  const { bot, ally, start, releases } = scene()
+  bot._client.write('look', { yaw: 270, pitch: 0, onGround: true })
+  start(); bot._client.write('position', { x: 0, y: 100, z: 0, onGround: true })
+  assert.equal(releases(), 0)
+  assert.equal(bot._ndUse.cur?.confirmed, true)
+  bot.entity.yaw = 0; ally.position.z = 0
+  bot._client.emit('position', { yaw: 180, pitch: 0 })
+  bot._client.write('position', { x: 0, y: 100, z: 0, onGround: true })
+  assert.equal(releases(), 0, 'the old eastward look no longer belongs to this native position')
+  bot.emit('end')
+})
+
+test('an airborne charge checks transmitted pitch while the desired look already points above its ally', () => {
+  const { bot, ally, start, releases } = scene()
+  bot.entity.onGround = false; bot.entity.elytraFlying = true; bot.entity.pitch = 1
+  Object.assign(ally, { onGround: false, elytraFlying: true, height: .6 })
+  ally.position.z = 0
+  assert.equal(spear.teamSafe(bot), true)
+  start(); bot._client.write('look', { yaw: 270, pitch: 0, onGround: false })
+  assert.equal(releases(), 1)
+  bot.emit('end')
+})
+
+test('HL31aa: the previous transmitted ray remains dangerous before the next smooth turn is sent', () => {
+  const { bot, ally, start, releases } = scene()
+  bot.entity.position = new Vec3(608.1545994890334, 150.5, 658.2099358851897)
+  bot.entity.velocity = new Vec3(-.09015076593709592, -.0784000015258789, -.06847691256030031)
+  bot.entity.yaw = .7763952309798299; bot.entity.pitch = .01914434043256463
+  ally.position = new Vec3(603.4276534393194, 150.5, 656.6287854060699)
+  assert.equal(spear.teamSafe(bot), true, 'the recorded desired look missed the visible ally')
+  bot._client.write('look', { yaw: 107.10456085205078, pitch: .054849982261657715, onGround: true })
+  start(); bot.emit('physicTick')
+  assert.equal(releases(), 1, 'native still holds the previous wire ray until our next packet reaches it')
+  bot.emit('end')
+})
+
 for (const status of [2, 3, 9]) test(`foreign entity_status ${status} cannot disable a held spear's late ally guard`, () => {
   const { bot, ally, start, releases } = scene()
   start(); bot.emit('physicTick'); assert.equal(releases(), 0, 'clear enemy charge remains active')

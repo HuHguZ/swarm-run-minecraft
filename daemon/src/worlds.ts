@@ -337,6 +337,7 @@ function installWorldTracker (session, bot) {
     if (!s || session.bot !== bot) return
     const to = worldOf(bot)
     if (to === s.from) return
+    session._rescue = null
     const purged = purgeEntities(bot)
     const via = s.portal ? 'portal' : (gameClock.now() - deathAt < 60000 ? 'death' : 'teleport')
     if (watch) gameClock.clearInterval(watch.timer)

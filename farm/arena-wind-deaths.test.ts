@@ -18,6 +18,17 @@ test('native deaths near a wind throw are temporal observations for bots and hum
     teamOf: () => 'red', log: line => logs.push(line), emote() {}, relSay() {} }
   installRounds(ctx)
   ctx.endRound = async () => {}
+  for (const name of [bot, human]) for (const reason of ['keepalive timeout', 'floating too long']) {
+    ctx.windOutAt = { [name]: { by: 'NeuroFarm31w', at: 49000, kind: 'volley' } }
+    fs.appendFileSync(LOGF, `[20:00:00] [Server thread/INFO]: ${name} was kicked due to ${reason}!\n`)
+    ctx.readDeaths()
+    assert.equal(ctx.deaths[bot], undefined, 'disconnect must not count as a death')
+    assert.equal(ctx.deadNow.size, 0, 'a live bot must remain eligible to reconnect into this round')
+    assert.equal(ctx.humanOut.size, 0)
+    assert.equal(ctx.windRecentDeaths, undefined, 'a nearby throw cannot turn a kick into a wind death')
+    assert(ctx.windOutAt[name], 'a kick does not consume the pending wind observation')
+    assert.equal(logs.length, 0)
+  }
   const causes = ['was speared by NeuroFarm31v', 'fell from a high place', 'fell out of the world']
   for (const name of [bot, human]) for (const cause of causes) {
     ctx.windOutAt = { [name]: { by: 'NeuroFarm31w', at: 49000, kind: 'volley' } }

@@ -190,6 +190,24 @@ test('native scene bots have separate tick plugin scopes and only primary suppli
   }
 })
 
+test('a native scene bot tells Paper it is loaded only after its spawn chunks arrive', async t => {
+  const bot: any = new EventEmitter(), sent: string[] = []
+  bot._client = Object.assign(new EventEmitter(), { write: name => sent.push(name) })
+  bot.registry = { protocol: { play: { toServer: { types: { packet_player_loaded: true } } } } }
+  let chunksReady: () => void
+  bot.waitForChunksToLoad = () => new Promise<void>(resolve => { chunksReady = resolve })
+  t.mock.method(require('mineflayer'), 'createBot', () => bot)
+  createGameBot({ username: 'Scene' })
+  try {
+    bot.emit('spawn')
+    assert.deepEqual(sent, [], 'the loading handshake must wait for actual chunk readiness')
+    assert.equal(typeof chunksReady, 'function', 'scene construction must install the readiness listener before spawn')
+    chunksReady()
+    await Promise.resolve()
+    assert.deepEqual(sent, ['player_loaded'], 'Paper can now accept movement and item use')
+  } finally { bot.emit('end') }
+})
+
 test('scene RNG reset salts every copy of a seed and confirms the chat-only reply in both worlds', async () => {
   const asked: string[] = []
   const reply = (lines: string[]) => async (method: string, params: Record<string, any>) => {

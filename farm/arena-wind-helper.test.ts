@@ -190,6 +190,18 @@ test('a real wind orbit reservation protects nongliding launch from task preempt
   }
 })
 
+test('a visible glider stays available to ordinary combat instead of reserving a wind-only orbit', async () => {
+  const f = fixture(), before = f.helper.last
+  f.api.windWing(f.victim, [{ ...f.seen[0], airborne: true, gliding: true }])
+  assert.equal(f.calls.some(c => c.method === 'wing_orbit'), false)
+  assert.equal(f.helper.swarmReserved, undefined)
+  assert.equal(f.helper.last, before)
+  f.api.windWing(f.victim, [{ ...f.seen[0], airborne: true, gliding: false, threat: 'aerial' }])
+  const flight = f.calls.find(c => c.method === 'wing_orbit')
+  assert.equal(flight?.name, 'Helper', 'a thrown or falling mace user still permits a wind orbit')
+  flight.reply({ ok: true }); await settle()
+})
+
 test('wind orbit reservations preserve emergency reactions, death invalidation and actual round reset', async () => {
   const f = fixture()
   f.api.windWing(f.victim, [{ ...f.seen[0], airborne: true }])
@@ -206,4 +218,48 @@ test('wind orbit reservations preserve emergency reactions, death invalidation a
   assert.equal(f.calls.filter(c => c.method === 'swarm_keep').length, f.bots.length)
   for (const c of f.calls) c.reply?.({ ok: true })
   await settle()
+})
+
+test('wind orbit retries require target movement after completion, not movement during the reserved flight', async () => {
+  const f = fixture()
+  let seen = { ...f.seen[0], airborne: true }
+  f.sw.boardOf = () => ({ enemies: () => [seen] })
+  f.api.windWing(f.victim, [seen])
+  const first = f.calls.find(c => c.method === 'wing_orbit')
+  assert.ok(first)
+  seen = { ...seen, position: { ...seen.position, x: seen.position.x - 10 } }
+  first.reply({ ok: true, ms: 18000, windShots: 0, nearTicks: 0, closest: 17, landed: true })
+  await settle()
+  f.api.windWing(f.victim, [seen])
+  assert.equal(f.calls.filter(c => c.method === 'wing_orbit').length, 1, 'the completed flight already covered this movement')
+  assert.equal(f.helper.swarmReserved, undefined, 'ordinary combat can resume')
+  seen = { ...seen, position: { ...seen.position, x: seen.position.x - 6 } }
+  f.api.windWing(f.victim, [seen])
+  assert.equal(f.calls.filter(c => c.method === 'wing_orbit').length, 2, 'new movement permits another useful approach')
+  f.calls.at(-1).reply({ ok: true, windShots: 1 }); await settle()
+  f.sw.generation++
+  f.api.windWing(f.victim, [seen])
+  assert.equal(f.calls.filter(c => c.method === 'wing_orbit').length, 3, 'the next round does not inherit the last flight position')
+  f.calls.at(-1).reply({ ok: true }); await settle()
+})
+
+test('an old round orbit reply cannot poison the current round launch memory', async () => {
+  const f = fixture()
+  let seen = { ...f.seen[0], airborne: true }
+  f.sw.boardOf = () => ({ enemies: () => [seen] })
+  f.api.windWing(f.victim, [seen])
+  const old = f.calls.at(-1)
+  f.sw.generation++
+  delete f.helper.swarmReserved
+  f.helper.last.pending = false
+  f.api.windWing(f.victim, [seen])
+  const current = f.calls.at(-1), owner = f.helper.swarmReserved
+  assert.notEqual(current, old)
+  old.reply({ ok: false, why: 'взлёт: blocked' }); await settle()
+  assert.equal(f.helper.swarmReserved, owner, 'late cleanup leaves the new flight owner intact')
+  current.reply({ ok: true, windShots: 1 }); await settle()
+  seen = { ...seen, position: { ...seen.position, x: seen.position.x - 6 } }
+  f.api.windWing(f.victim, [seen])
+  assert.equal(f.calls.filter(c => c.method === 'wing_orbit').length, 3, 'the old failure did not block the same launch point')
+  f.calls.at(-1).reply({ ok: true }); await settle()
 })

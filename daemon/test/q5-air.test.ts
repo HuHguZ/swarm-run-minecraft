@@ -9,6 +9,32 @@ import sky = require('../src/elytra')
 import pick = require('../src/pick')
 import clock = require('../src/game-clock')
 
+test('выбранный воздушный залп не заменяется новым разгоном копья; уход и готовое пике сохраняются', t => {
+  const executor: typeof import('../src/combat/aerial-executor') = require('../src/combat/aerial-executor')
+  const lance: typeof import('../src/combat/aerial-lance') = require('../src/combat/aerial-lance')
+  let node = 'RangedVolley'
+  t.mock.method(executor, 'createAerialCombat', () => ({ decide: () => ({ node, selected: { id: node } }) }) as any)
+  t.mock.method(lance, 'lancePlan', () => ({}) as any)
+  const bot: any = new EventEmitter()
+  bot.health = 20; bot._ndElytra = {}; bot._ndSkyWorld = {}
+  bot.entity = { position: new Vec3(0, 90, 0), velocity: new Vec3(1, 0, 0), elytraFlying: true }
+  bot.inventory = { slots: [], items: () => [{ name: 'elytra', count: 1 }, { name: 'firework_rocket', count: 8 }] }
+  const flight = sky.create(bot, { enemy: () => ({ id: 2, position: new Vec3(20, 90, 0), elytraFlying: true }) })
+  try {
+    const volley = flight.decide({ hp: 20, healAt: 8 })
+    assert.equal(volley.kind, 'aerial')
+    assert.ok('decision' in volley)
+    assert.equal(volley.decision.node, 'RangedVolley')
+    node = 'DiveStrike'
+    const dive = flight.decide({ hp: 20, healAt: 8 })
+    assert.ok('decision' in dive)
+    assert.equal(dive.decision.node, 'DiveStrike')
+    node = 'AerialIntercept'
+    assert.equal(flight.decide({ hp: 20, healAt: 8 }).kind, 'lance')
+    assert.equal(flight.decide({ hp: 2, healAt: 8 }).kind, 'escape')
+  } finally { flight.close() }
+})
+
 test('граф не предлагает пике, которое исполнитель отверг по щиту, потолку или паузе', async () => {
   const items = [{ name: 'mace', count: 1 }, { name: 'elytra', count: 1 }]
   const obs = { dist: 8, los: true, me: { items, armor: [], ehp: 20, since: 40 },

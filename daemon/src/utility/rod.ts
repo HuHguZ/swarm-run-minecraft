@@ -5,6 +5,7 @@ import * as edges from '../edges'
 import { sleep } from '../movement'
 import { EYE, TICK_MS, findItem, isPlayer, hpOf, onTickThen } from './common'
 import { Vec3 } from './common'
+import { install as installNativePull } from '../rod-pull'
 
 // ================================================================ удочка
 
@@ -51,10 +52,12 @@ const ROD_MAX = 11
 // зацепившего его, сам прибавляет себе 0.1 × (владелец − поплавок). mineflayer —
 // нет, и человек удочкой бота не сдёргивал. Один раз на бота, всегда.
 function installRodPull (bot) {
+  installNativePull(bot)
   if (bot._ndRodPull) return bot._ndRodPull
   const R = { owners: new Map(), pulled: 0, last: null, mine: null, targets: new Map(), hurtAt: -Infinity }
   bot._ndRodPull = R
   bot.on('entityHurt', e => { if (e?.id === bot.entity?.id) R.hurtAt = gameClock.now() })
+  bot.on('nd_rodPulled', event => { R.pulled++; R.last = event })
   const typeId = bot.registry.entitiesByName.fishing_bobber ? bot.registry.entitiesByName.fishing_bobber.id : -1
   try {
     bot._client.on('spawn_entity', (p) => {
@@ -62,24 +65,6 @@ function installRodPull (bot) {
       R.owners.set(p.entityId, p.objectData)
       if (bot.entity && p.objectData === bot.entity.id) R.mine = { id: p.entityId, at: gameClock.now() }
       if (R.owners.size > 64) R.owners.delete(R.owners.keys().next().value)
-    })
-    bot._client.on('entity_status', (p) => {
-      try {
-        if (!p || p.entityStatus !== 31 || !bot.entity) return
-        const hook = bot.entities[p.entityId]
-        if (!hook || hook.name !== 'fishing_bobber') return
-        if (hook.metadata[8] !== bot.entity.id + 1) return
-        const owner = bot.entities[R.owners.get(p.entityId)]
-        if (!owner || !owner.position) return
-        const me = bot.entity.position
-        const v = { x: (owner.position.x - me.x) * 0.1, y: (owner.position.y - (me.y + 0.8 * 1.8)) * 0.1, z: (owner.position.z - me.z) * 0.1 }
-        bot.entity.velocity.x += v.x
-        bot.entity.velocity.y += v.y
-        bot.entity.velocity.z += v.z
-        R.pulled++
-        R.last = { at: gameClock.now(), v, from: owner.username || owner.name }
-        bot.emit('nd_rodPulled', R.last)
-      } catch {}
     })
   } catch {}
   return R

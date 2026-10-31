@@ -30,6 +30,7 @@ import * as gameClock from './game-clock'
 //    не скажет player_loaded (read.installLoaded).
 
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const conversions = require('mineflayer/lib/conversions')
 import { sleep } from './movement'
 import { allyOnSpearRay } from './combat/ally-safety'
 
@@ -144,23 +145,49 @@ function install (bot) {
   if (bot._ndSpear) return bot._ndSpear
   const S = { lastJab: 0, jabs: 0, hits: 0 }
   bot._ndSpear = S
-  const guard = () => {
+  let yaw = bot.entity?.yaw, pitch = bot.entity?.pitch
+  let position: { x: number; y: number; z: number } | undefined
+  const guard = (rayYaw = yaw ?? bot.entity?.yaw, rayPitch = pitch ?? bot.entity?.pitch, rayPosition = position ?? bot.entity?.position) => {
     if (!bot.entity || bot.health <= 0 || !isSpear(bot.heldItem?.name)) return
     const use = bot._ndUse?.cur
     // Mineflayer clears usingHeldItem on any entity_status, even a foreign
     // hurt/death. Our own held-use receipt survives until our actual use ends.
     if (use ? use.hand !== 0 || use.name !== bot.heldItem.name : !bot.usingHeldItem) return
-    if (!teamSafe(bot)) bot.deactivateItem()
+    if (!teamSafe(bot, rayYaw, rayPitch, rayPosition) ||
+        ((rayYaw !== bot.entity.yaw || rayPitch !== bot.entity.pitch) && !teamSafe(bot))) bot.deactivateItem()
   }
   Object.defineProperty(guard, '_ndLatePacketAim', { value: true })
   bot.on?.('physicTick', guard)
   bot.once?.('end', () => bot.removeListener('physicTick', guard))
+  if (bot._client?.write) {
+    const reset = () => { yaw = pitch = position = undefined }
+    bot._client.on?.('position', reset)
+    bot.on?.('respawn', reset)
+    bot.once?.('end', () => { bot._client.removeListener?.('position', reset); bot.removeListener('respawn', reset) })
+    const write = bot._client.write
+    bot._client.write = function (name, packet, ...rest) {
+      if (!['position', 'position_look', 'look', 'flying'].includes(name)) return write.call(this, name, packet, ...rest)
+      const looking = name === 'position_look' || name === 'look'
+      const nextYaw = looking && Number.isFinite(packet?.yaw) ? conversions.fromNotchianYaw(packet.yaw) : yaw ?? bot.entity?.yaw
+      const nextPitch = looking && Number.isFinite(packet?.pitch) ? conversions.fromNotchianPitch(packet.pitch) : pitch ?? bot.entity?.pitch
+      const moving = name === 'position' || name === 'position_look'
+      const nextPosition = moving && [packet?.x, packet?.y, packet?.z].every(Number.isFinite)
+        ? { x: packet.x, y: packet.y, z: packet.z } : position ?? bot.entity?.position
+      // Movement and smooth look can differ from local prediction; release before changing the native ray.
+      guard(nextYaw, nextPitch, nextPosition)
+      const result = write.call(this, name, packet, ...rest)
+      yaw = nextYaw; pitch = nextPitch
+      position = nextPosition && { ...nextPosition }
+      return result
+    }
+  }
   return S
 }
-function teamSafe(bot, yaw = bot.entity?.yaw, pitch = bot.entity?.pitch) {
+function teamSafe(bot, yaw = bot.entity?.yaw, pitch = bot.entity?.pitch, position = bot.entity?.position) {
   if (!(bot._ndSwarmAllies?.length || bot.teamMap?.[bot.username || bot.entity?.username]?.team)) return true
   if (!bot.entity || !Number.isFinite(yaw) || !Number.isFinite(pitch)) return false
-  const pick: typeof import('./pick') = require('./pick'), eye = pick.eyeOf(bot), dir = dirOf(yaw, pitch)
+  const pick: typeof import('./pick') = require('./pick'), here = bot.entity.position
+  const eye = pick.eyeOf(bot).offset(position.x - here.x, position.y - here.y, position.z - here.z), dir = dirOf(yaw, pitch)
   const v = bot.entity.velocity || { x: 0, y: 0, z: 0 }
   return !allyOnSpearRay(bot, eye, new Vec3(dir.x, dir.y, dir.z), MIN_R, MAX_R + Math.max(0, dir.x * v.x + dir.y * v.y + dir.z * v.z))
 }

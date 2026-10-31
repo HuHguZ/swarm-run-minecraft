@@ -212,15 +212,29 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     }
     // Кемпер на месте — замуроваться (стены и крыша); раскопают — увидит врага в упор, и контакт поднимет бой.
     // Не замуровался — снова, когда пришли блоки или он на другом месте (retry.ts), а не через 10 с.
-    if (task.data.camp && !boxed.has(`${b.name}:${task.data.camp}`) && !sw.blocked(b, `box:${b.name}`, String(blockCount(m.inv))) && blockCount(m.inv) >= 10) {
+    if (task.data.camp && !task.data.ramWall && !boxed.has(`${b.name}:${task.data.camp}`) && !sw.blocked(b, `box:${b.name}`, String(blockCount(m.inv))) && blockCount(m.inv) >= 10) {
       const r = detail(await b.c.call('box_in', {}).catch(e => ({ why: e.message })))
       if (!currentTurn(sw, b, round)) return
       const tries = (boxTries.get(`${b.name}:${task.data.camp}`) || 0) + 1; boxTries.set(`${b.name}:${task.data.camp}`, tries)
       if (r.sealed || tries >= 2) boxed.add(`${b.name}:${task.data.camp}`); else sw.failed(b, `box:${b.name}`, String(blockCount(pos[b.name]?.inv || m.inv)))
       if (r.sealed) b.boxedCamp = task.data.camp
       log(`🧱 ${b.name}: кемпер замуровался у ${task.data.camp} — ${r.sealed ? `готово (${r.placed} бл., ${r.material || '?'})` : String(r.why || `стен ${r.walls ?? '?'}`).slice(0, 60)}`)
+      // Коробка от тарана не встала (клетка не закрывается, нечем выйти) — с этой клетки план её не предлагает (факт на доске по клетке),
+      // и не стоять на месте под ним: следующий ход — отход, как без коробки (cl29j 28.10: 4 попытки, 0 закрытых).
+      if (!r.sealed && task.data.ramBox) context.board?.recordFact?.(b.name, now(), { id: `box-failed:${b.name}:${task.data.camp}`, kind: 'mark', position: task.position }, 60000)
       return
     }
+    // Стенка от тарана (или коробка не встала): стенка в его сторону на месте; луч закрыт — стоять за ней на шифте, пока план не даст
+    // другое дело (угроза ушла); не вышло — с этой клетки не предлагать (факт по клетке), ход — отход.
+    if ((task.data.ramWall || task.data.ramBox && !b.boxedCamp) && !b.ramWallAt?.[task.data.camp]) {
+      const foe = enemies.find(e => e.id === task.data.target)
+      const w = foe ? detail(await b.c.call('take_cover', { from: foe.id, wall: true, fromAt: foe.position, arena }).catch(e => ({ why: e.message }))) : { why: 'цели нет' }
+      if (!currentTurn(sw, b, round)) return
+      log(`🧱 ${b.name}: стенка от тарана ${task.data.target} — ${w.ok ? w.how : String(w.why || '?').slice(0, 50)}`)
+      if (w.ok) (b.ramWallAt ||= {})[task.data.camp] = true
+      else { context.board?.recordFact?.(b.name, now(), { id: `wall-failed:${b.name}:${task.data.camp}`, kind: 'mark', position: task.position }, 60000); return }
+    }
+    if ((task.data.ramWall || task.data.ramBox) && !b.boxedCamp && !b.ramWallAt?.[task.data.camp]) return
     const held = await execute(b, 'swarm_hold', { camp: !!b.boxedCamp, ...(task.data.hold === 'shield' ? { shield: true, face: task.data.face, timeoutSeconds: 4 } : { sneak: true, timeoutSeconds: 2 }),
       enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), arena })
     if (!currentTurn(sw, b, round)) return

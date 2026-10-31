@@ -38,6 +38,7 @@ function fleeIntent (this: any, p: any = {}) {
         goals: Array.isArray(p.toward) ? p.toward.filter(g => Number.isFinite(g?.x) && Number.isFinite(g?.z)) : []
       })
     }, {
+      params: p,
       timeoutMs: (Math.min(60, p.timeoutSeconds ?? 15) + 5) * 1000,
       interruptOn: ['chat', 'death', 'kicked', 'disconnected']
     })

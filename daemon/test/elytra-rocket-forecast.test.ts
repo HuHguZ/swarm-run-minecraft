@@ -6,6 +6,8 @@ import { rocketForecast } from '../src/elytra/rocket-forecast'
 import { landingPlan } from '../src/elytra/landing'
 import { glideStep, rollout } from '../src/elytra/physics'
 import { install } from '../src/elytra/install'
+import { Vec3 } from 'vec3'
+import { native, worldOf as physicsWorld } from './parkour-fixture'
 
 function fixture () {
   const bot: any = new EventEmitter()
@@ -214,5 +216,33 @@ test('a legally late Flight1 survivor still has a planning upper bound after the
     assert.equal(forecast.boostMax, 5, 'jar lifetime31 survives native age27 through expiry age32')
     assert.equal(forecast.boostMin, 0)
     assert.equal(bot.fireworkRocketDuration, 13)
+  } finally { clock.dispose() }
+})
+
+test('DN late rocket receipt still bounds the client thrust after the native expiry forecast', () => {
+  const { bot, clock, attach } = fixture()
+  try {
+    attach(10, 1)
+    clock.advanceTicks(40)
+    bot.fireworkRocketDuration = 37 // DN: elapsed age advanced while only three body steps ran.
+    const forecast = rocketForecast(bot)
+    assert.equal(forecast.boost, 0, 'the fixed nominal expiry is not renewed')
+    assert.equal(forecast.boostMax, 37, 'late packet delivery leaves the client thrust release unobserved')
+    assert.equal(bot.fireworkRocketDuration, 37, 'forecast never changes the body counter')
+    const { bot: body, world } = physicsWorld([])
+    Object.assign(body.entity, { position: new Vec3(650.8, 149.9, 549.4), velocity: new Vec3(.21, -1.18, -.11),
+      yaw: -1.09, pitch: -1.3, onGround: false, elytraFlying: true })
+    body.inventory.slots[6] = { name: 'elytra' }
+    body.fireworkRocketDuration = bot.fireworkRocketDuration
+    const p = { ...body.entity.position }, v = { ...body.entity.velocity }
+    const physical = new native.PlayerState(body, {})
+    body.physics.simulatePlayer(physical, world)
+    glideStep(p, v, body.entity.yaw, body.entity.pitch, forecast.boostMax > 0)
+    assert(Math.hypot(physical.pos.x - p.x, physical.pos.y - p.y, physical.pos.z - p.z) < 1e-8,
+      'the upper trajectory includes the real next physical step with continuing thrust')
+    assert.equal(physical.fireworkRocketDuration, 36)
+    bot.fireworkRocketDuration = 0
+    bot.emit('entityGone', bot.entities[10])
+    assert.equal(rocketForecast(bot).boostMax, 0, 'actual thrust release clears the extra uncertainty')
   } finally { clock.dispose() }
 })

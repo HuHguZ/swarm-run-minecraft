@@ -1,13 +1,34 @@
 // Рой (swarm.ts): план боя (planPvp) — ва-банк и бегство (погоня, паника, перегруппировка), затем раненые и лекари.
 import * as damage from '../pvp/damage-model'
-import type { SwarmMember } from './types'
+import type { SwarmMember, SwarmPosition, SharedEnemy } from './types'
 import type { PvpPlan } from './plan-frame'
 import { markFled, pvpState } from './board'
-import { distance, ratio, count } from './common'
+import { distance, ratio, count, cellKey } from './common'
 import { assessSwarmFight, assessTeamFight, groupOf, TEAM_LINK, REINFORCE_LINK } from './fight'
 import { retreatWhy, retreatStep, retreatHolds, inContact, alliesNear, caughtBy, nearestGap, SAFE } from './retreat'
 import { behindRace } from './race'
 
+// Срок до укрытия: ходьба спринтом 5.6 бл/с + 1 с на блок подъёма (как travelCost драйвера) против подлёта летуна. Для крыши
+// проверку срока убрали: A/B cl30 (29.10, по 3 раунда) — с ней смертей в отходе 8 против 6, всего 70 против 64.
+const walkSeconds = (m: SwarmMember, at: SwarmPosition) => distance(at, m.position) / 5.6 + Math.max(0, at.y - m.position.y)
+// Через сколько он у меня: по скорости сближения (не полной) — кружащий в стороне долетит не раньше разворота, тогда не быстрее ходьбы.
+function arrivalSeconds(m: SwarmMember, foe: SharedEnemy): number {
+  const v = foe.velocity, gap = distance(foe.position, m.position) || 1
+  const closing = v ? ((m.position.x - foe.position.x) * v.x + (m.position.y - foe.position.y) * v.y + (m.position.z - foe.position.z) * v.z) / gap * 20 : 0
+  return gap / Math.max(closing, 5.6)
+}
+
+// Коробка на месте (fortify.boxIn через box_in: стены в два блока и крыша, до 9 блоков по ≈ 0.18 с + центровка 0.35 с); драйвер
+// строит её только при 10+ блоках (turn-tasks turnHold). Блоки — как BLOCK драйвера (farm/swarm/swarm-driver/common.ts).
+const BOX_SECONDS = 9 * .18 + .35, WALL_SECONDS = 2 * .25
+const anyBlocks = (m: SwarmMember) => Object.entries(m.inventory || {}).filter(([n]) => /^(cobblestone|stone|dirt|smooth_sandstone|cut_sandstone|sandstone|sand|red_sand|netherrack|.*_planks)$/.test(n)).reduce((s, [, c]) => s + (c as number), 0)
+// Выйти из коробки нужно уметь (box_in иначе отказывает: «выйти не смогу: нет мягких блоков и кирки» — 13 из 19 попыток cl29j–m):
+// с киркой — любые блоки, без неё — только мягкие (земля, доски, песок — рукой быстро), как fortify.refugeFiller/canBreakOut.
+const boxBlocks = (m: SwarmMember) => {
+  const inv = m.inventory || {}, pick = Object.keys(inv).some(n => /_pickaxe$/.test(n) && inv[n] > 0)
+  const ok = pick ? /^(cobblestone|stone|dirt|smooth_sandstone|cut_sandstone|sandstone|sand|red_sand|netherrack|.*_planks)$/ : /^(dirt|sand|red_sand|.*_planks)$/
+  return Object.entries(inv).filter(([n]) => ok.test(n)).reduce((s, [, c]) => s + (c as number), 0)
+}
 export function pvpFlee(S: PvpPlan): void {
   const { board, team, enemies, aggressive, assault, forward, groups, futile, outnumbered, hopeless, put, weak, outclassed, perchFor, rallyFor, hideoutFor, archer, threatReach } = S
   // Ва-банк (пользователь 14.10: «когда мало хп, я начинаю убегать, а они не гонятся добивать — если чувствуют слабость,
@@ -66,7 +87,8 @@ export function pvpFlee(S: PvpPlan): void {
     if (near && gap <= (prevKind === 'loot' ? far : far + 6) && pursuing && !outrun && !(prevKind === 'fight' && gap <= 6) && !assault?.voters.includes(m.id) && (weak(m) || outclassed(m, near))) {
       // От лучника — за укрытие (стена ломает линию выстрела), иначе к своим или в отрыв.
       // От лучника и от тарана — за укрытие (стена ломает выстрел и луч копья); к летуну на насест не лететь.
-      const rammer = near.threat === 'aerial', perch = rammer ? null : perchFor(m), cover = !perch && (ranged || rammer) && hideoutFor(m), group = !perch && !cover && rallyFor(m, near)
+      const rammer = near.threat === 'aerial', perch = rammer ? null : perchFor(m), den = !perch && (ranged || rammer) ? hideoutFor(m) : null
+      const cover = den || null, group = !perch && !cover && rallyFor(m, near)
       markFled(board, m.id)
       put(m, 'flee', { target: near.id, enemyPosition: near.position, panic: true, pursuit: true, ...(perch ? { perch: true } : cover ? { hide: true } : { kite: true, regroup: !!group }), reason: `ухожу от ${cover ? 'лучника за укрытие' : 'погони'} (враг в ${Math.round(gap)} бл.)` }, perch || cover || group || m.position)
       continue
@@ -127,6 +149,20 @@ export function pvpFlee(S: PvpPlan): void {
     // (cl28 28.10: 35 из 127 наземных смертей — в этом отходе, почти все с полным хп и одни).
     const den = threat.threat === 'aerial' ? hideoutFor(m) : null
     const roof = den && (!home || distance(den, m.position) < distance(middle(home), m.position)) ? den : null
+    // Ни крыши, ни своих в срок, а блоки есть — коробка на месте, если успею до его подлёта (пользователь 28.10: «укрытия умеют строить …
+    // если не можешь убежать быстро»). Выход — box_out, когда план даст другое дело (угроза ушла), не по таймеру.
+    // Коробка не встаёт или из неё не выйти — стенка на линии подлёта (take_cover wall: 2 бл. высотой в 1.5 бл. в его сторону, при
+    // пикировании — 3): луч копья обрывают блоки (ProjectileUtil.getHitEntitiesAlong — COLLIDER, jar 1.21.11), выходить не нужно.
+    const boxFailed = board.facts().some(f => f.id === `box-failed:${m.id}:${cellKey(m.position)}`)
+    const box = !boxFailed && boxBlocks(m) >= 10 && BOX_SECONDS <= arrivalSeconds(m, threat)
+    const wall = !box && !board.facts().some(f => f.id === `wall-failed:${m.id}:${cellKey(m.position)}`) && anyBlocks(m) >= 2 && WALL_SECONDS <= arrivalSeconds(m, threat)
+    // Выбор по времени: построить на месте (коробка ≈ 2 с, стенка ≈ 0.5 с) быстрее, чем дойти до готовой крыши, — строить; свои
+    // рядом в срок подлёта — к ним, как прежде.
+    const build = box ? BOX_SECONDS : wall ? WALL_SECONDS : Infinity
+    if (threat.threat === 'aerial' && build < (roof ? walkSeconds(m, roof) : Infinity) && !(home && walkSeconds(m, middle(home)) <= arrivalSeconds(m, threat))) {
+      put(m, 'goto', { hold: 'ambush', camp: cellKey(m.position), ...(box ? { ramBox: true } : { ramWall: true }), target: threat.id, range: .8, reason: `${cause}, ${box ? 'коробка' : 'стенка'} от тарана` }, { ...m.position })
+      continue
+    }
     const perch = roof || threat.threat === 'aerial' || home && (why === 'один' || held?.why === 'пустой размен') ? null : perchFor(m)
     put(m, 'flee', { target: threat.id, enemyPosition: threat.position, panic: true, risk, reason: cause + ', ' + risk.reason + (roof ? ', под крышу от тарана' : ''), ...(roof ? { hide: true } : perch ? { perch: true } : home ? { regroup: true } : {}) },
       roof ?? perch ?? (home ? middle(home) : away))
@@ -134,10 +170,20 @@ export function pvpFlee(S: PvpPlan): void {
   Object.assign(S, { prey, hunting })
 }
 
+// Есть ли чем лечиться: голод 18+ (естественная регенерация, FoodData 1.21.11), еда в запасе или зелье лечения/регенерации.
+// Голод неизвестен — как раньше, считаем, что есть.
+const EDIBLE = /^(bread|cooked_\w+|golden_apple|enchanted_golden_apple|apple|baked_potato|golden_carrot|carrot|melon_slice|\w+_stew|pumpkin_pie|cookie|sweet_berries)$/
+export const canMend = (m: SwarmMember) => m.food === undefined || m.food >= 18 ||
+  Object.entries(m.inventory || {}).some(([n, c]) => EDIBLE.test(n) && c > 0) || Object.entries(m.potions || {}).some(([n, c]) => /(healing|regeneration)$/.test(n) && c > 0)
+
 export function pvpRecover(S: PvpPlan): void {
   const { board, team, plan, enemies, aggressive, assault, doctrine, center, forward, hunting, put } = S
   const hurt = team.filter(m => {
     if (plan.has(m.id)) return false
+    // Лечиться нечем — отход не даёт ни хп (cl86: в хвосте у всех 0 еды в запасе и голод 7–17, 88 из 88 «recover» без
+    // регенерации; стороны минутами отходили друг от друга, раунд до 600 с) — бой дальше. Цена, не запрет: появилась еда или
+    // зелье, голод 18+ — снова отход.
+    if (!canMend(m)) return false
     // Натиск: у врага под носом не есть и не отходить — добьёт в спину; лечиться — оторвавшись (дальше 8 бл.).
     // Но если его один ближний удар меня убивает — сперва лечиться и при натиске (игра пользователя 25.10: h с 7 хп по голосу
     // штурма полетел к нему на элитрах и умер за 1 с; NeuroFarm30 так же с 2 хп).

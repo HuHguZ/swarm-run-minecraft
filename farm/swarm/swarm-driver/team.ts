@@ -91,7 +91,7 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     // комбинировать»): у кого булава, тот свои держит и просит ещё — подброс и удар сверху; у прочих один — на выход из ямы.
     // И паутину (22.10: «паутиной и булавой добивание»): прижать его перед ударом (smashSetupTurn) — у прочих её берут передачи.
     if (inv.mace) { reserve.wind_charge = inv.wind_charge || 0; needs.wind_charge = 8; needs.cobweb = 2 }
-    const member = { id: o.name, team: teamOf(o), position: m.p, health: m.hp, strength, role, canHeal: heal, inventory: inv, attackArrows: m.attackArrows, potions: m.potions || {}, reserve, needs, armor: m.armor || {}, offHand, weapon, ench, antidote: m.antidote }
+    const member = { id: o.name, team: teamOf(o), position: m.p, health: m.hp, food: m.food, strength, role, canHeal: heal, inventory: inv, attackArrows: m.attackArrows, potions: m.potions || {}, reserve, needs, armor: m.armor || {}, offHand, weapon, ench, antidote: m.antidote }
     const medical = antidoteExchange(member, now(), stock)
     Object.assign(needs, medical.needs); Object.assign(reserve, medical.reserve)
     return member

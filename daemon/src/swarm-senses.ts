@@ -44,7 +44,8 @@ export function swarmSightings(bot: any, allies: string[] = []) {
     const hp = observer.foeHpUpper(bot, e), hitProof = observer.foeHitProof(bot, e)
     // В воздухе высоко над опорой (подлетел: заряд, булава, удар) — рою позиции для бокового броска ветром (driver wind.ts).
     const airborne = !e.onGround && (require('./combat/wind-out') as typeof import('./combat/wind-out')).heightAbove(bot, e.position) >= 2.5
-    sightings.push({ id: e.username, position, velocity, equipment, threat, visible: true, seenAt: now, ...(airborne ? { airborne: true } : {}), ...(Number.isFinite(hp) ? { hpEstimate: hp } : {}), ...(hitProof && (hitProof.hits.length || hitProof.healing) ? { hitProof } : {}) })
+    const gliding = (require('./elytra/track') as typeof import('./elytra/track')).gliding(e)
+    sightings.push({ id: e.username, position, velocity, equipment, threat, visible: true, seenAt: now, gliding, ...(airborne ? { airborne: true } : {}), ...(Number.isFinite(hp) ? { hpEstimate: hp } : {}), ...(hitProof && (hitProof.hits.length || hitProof.healing) ? { hitProof } : {}) })
     current.set(e.id, { position, now })
   }
   previous.set(bot, current)

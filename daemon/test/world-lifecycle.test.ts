@@ -30,14 +30,29 @@ test('смена мира после переподключения продол
 test('пакет прошлого соединения не меняет мир новой сессии', async () => {
   const { bot, session } = fixture()
   session.bot = { game: { dimension: 'overworld' } }
+  session._rescue = { arena: { x: 600, y: 120, z: 600, r: 80 } }
+  const rescue = session._rescue
   bot._client.emit('respawn', { dimension: 'the_nether' })
   await new Promise<any>(resolve => setTimeout(resolve, 150))
   assert.equal(session.worldChange.seq, 9)
   assert.equal(session.worldChange.to, 'overworld')
+  assert.equal(session._rescue, rescue, 'an old connection must not clear the active arena')
 })
 test('новый заголовок мира прекращает движение к координатам старого портала', () => {
   assert.equal(portalChanged({ worldChange: { seq: 1, to: 'the_nether' } },
     { game: { dimension: 'the_nether' } }, 'overworld', 9), true)
   assert.equal(portalChanged({ worldChange: { seq: 9, to: 'the_nether' } },
     { game: { dimension: 'overworld' } }, 'overworld', 9), false)
+})
+
+test('arena rescue configuration survives same-world respawn and is cleared on dimension change', () => {
+  const { bot, session } = fixture()
+  const rescue = { arena: { x: 600, y: 120, z: 600, r: 80 }, killY: 113 }
+  session._rescue = rescue
+  try {
+    bot._client.emit('respawn', { dimension: 'overworld' })
+    assert.equal(session._rescue, rescue)
+    bot._client.emit('respawn', { dimension: 'the_nether' })
+    assert.equal(session._rescue, null)
+  } finally { bot.emit('end') }
 })

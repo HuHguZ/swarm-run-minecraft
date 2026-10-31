@@ -1,6 +1,7 @@
 'use strict'
 // Элитры (elytra.ts): полёт — ракета на тик, лететь, взлёт, посадка, нагрудник назад.
 const gameClock: typeof import('../game-clock') = require('../game-clock')
+const { AsyncResource }: typeof import('node:async_hooks') = require('node:async_hooks')
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const { TICK_MS, HALF, ROCKET_MAX_TICKS, RESCUE_ROCKETS, KEYS, DEBUG, sleep, wrap, r2, nextTick }: typeof import('./consts') = require('./consts')
 const { worldOf, rollout, headroom }: typeof import('./physics') = require('./physics')
@@ -8,6 +9,7 @@ const { offName, chestName, rocketCount, plainRocket, wearingElytra, toHotbar, s
 const { choose, returnInside }: typeof import('./control') = require('./control')
 const { flightControl, install, steer, startGlide, fireRocket }: typeof import('./install') = require('./install')
 import { rocketForecast } from './rocket-forecast'
+import { ceilingExit } from './ceiling-exit'
 
 // ---------------------------------------------------------------- полёт
 
@@ -22,7 +24,7 @@ function rocketChoice (W, st, g, pl, want): any {
   const withR = choose(W, st, g, { rocketNow: true })
   if (!withR) return { fire: false }
   const crash = withR.r.kind === 'wall' && withR.r.dmg >= 1
-  const fire = { fire: true, yaw: withR.yaw, pitch: withR.pitch, c: withR.c }
+  const fire = { fire: true, ...withR }
   if (want === true) return withR.c <= pl.c + 40 ? fire : { fire: false, veto: crash }
   return withR.c < pl.c - 4 ? fire : { fire: false }
 }
@@ -41,6 +43,7 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
     let done = false
     let ticks = 0
     let planMs = 0
+    const evasion = { lance: null }
     S.driving = (S.driving || 0) + 1
     const finish = (why) => {
       if (done) return
@@ -51,7 +54,14 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
       const ground = why === 'сел' && bot.entity?.onGround ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null
       resolve({ why, ground, ms: gameClock.now() - t0, ticks, planMs: ticks ? r2(planMs / ticks) : 0 })
     }
-    const onT = () => {
+    // EventEmitter does not retain the launching tactical/skill hand lease.
+    const onT = AsyncResource.bind(() => {
+      const session = bot._ndReflexSession
+      const hands: typeof import('../reflex-lock') = require('../reflex-lock')
+      // An independent landing may outlive its launching intent, but never borrow another active lease.
+      return session && !hands.owner(session) ? hands.run(session, ctl, step) : step()
+    })
+    const step = () => {
       if (done) return
       try {
         const b = bot.entity
@@ -68,23 +78,24 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
         if (arena) g = { ...g, arena }
         // Лук натянут на меня или стрела на подлёте — рывок вбок с ракетой: прямой полёт — лёгкая мишень (пользователь 25.10:
         // «на элитрах не уворачиваются от стрел, должны летать активнее и быстро»). Сторона меняется каждые 0.6 с — «змейка».
-        const jink = g.kind === 'point' && dodgeSide(bot, b)
+        const landing = g.kind === 'land'
+        const jink = (g.kind === 'point' || landing) && dodgeSide(bot, b, !landing, evasion)
         if (jink) {
           const at0 = g.at, shift = q => new Vec3(q.x + jink.x * 5, q.y, q.z + jink.z * 5)
-          g = { ...g, at: typeof at0 === 'function' ? t => shift(at0(t)) : shift(at0) }
+          g = { ...g, ...(g.kind === 'land' ? { kind: 'point', gap: 3 } : {}), at: jink.at || (typeof at0 === 'function' ? t => shift(at0(t)) : shift(at0)) }
         }
         S.phase = phase || g.kind
-        const st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: g.kind === 'land' ? Math.max(S.fd, S.moveFd || 0) : S.fd }
+        const st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: landing ? Math.max(S.fd, S.moveFd || 0) : S.fd }
         const tp = gameClock.wall.now()
         let pl = inside ? choose(W, st, g) : null
         const returning = !pl && !!arena
-        if (returning) { pl = returnInside(W, st, arena); S.phase = 'возврат в арену' }
+        if (returning) { pl = returnInside(W, st, arena); if (pl) g = pl.goal; S.phase = 'возврат в арену' }
         if (!pl) return finish('no_safe_arena_trajectory')
         let fire = false
-        if (!returning && !(noRocket && noRocket()) && !(bot.fireworkRocketDuration > 0) && rocketCount(bot) > 0) {
+        if (!(noRocket && noRocket()) && !(bot.fireworkRocketDuration > 0) && rocketCount(bot) > (useReserve ? 0 : RESCUE_ROCKETS)) {
           const want = jink ? true : rocketIf ? rocketIf(st, pl, g) : false
           const rc = rocketChoice(W, st, g, pl, want)
-          if (rc.fire) { fire = true; pl.yaw = rc.yaw; pl.pitch = rc.pitch; pl.c = rc.c } else if (rc.veto && stats) stats.rocketVeto = (stats.rocketVeto || 0) + 1
+          if (rc.fire) { fire = true; pl = { ...pl, ...rc } } else if (rc.veto && stats) stats.rocketVeto = (stats.rocketVeto || 0) + 1
         }
         planMs += gameClock.wall.now() - tp
         S.lastPlan = { c: r2(pl.c), k: pl.r.kind, t: pl.r.t, fd: r2(pl.r.fd), vyHit: pl.r.vyHit == null ? null : r2(pl.r.vyHit), gx: r2(typeof g.at === 'function' ? g.at(0).x : g.at.x), gz: r2(typeof g.at === 'function' ? g.at(0).z : g.at.z) }
@@ -115,16 +126,51 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
   })
 }
 
-// Поперёк линии стрелка: ближайшая стрела в 12 тиков или натянутый лук в 40 бл.; null — никто не целит.
-function dodgeSide (bot, b) {
+// Поперёк тарана в ближайшие 12 тиков, иначе — линии стрелы или натянутого лука.
+function dodgeSide (bot, b, arrows, memory) {
   let d
-  try { d = (require('../threats') as typeof import('../threats')).projectileDangers(bot, { foes: bot._ndFoes ?? null }) } catch { return null }
+  try {
+    const threats: typeof import('../threats') = require('../threats'), scope = { foes: bot._ndFoes ?? null }
+    const glider = threats.incomingGliders(bot, scope).find(p => p.kind === 'lance' && p.ticks <= 12 && p.side)
+    // Сдвиг далёкой цели едва меняет курс; от копья сначала уходим в ближнюю боковую точку.
+    if (glider) {
+      const raw = bot.entities?.[glider.id], previous = memory.lance, side = { ...glider.side }
+      if (previous?.raw === raw && previous.side.x * side.x + previous.side.z * side.z < 0) { side.x *= -1; side.z *= -1 }
+      const relative = { x: glider.vel.x - b.velocity.x, y: glider.vel.y - b.velocity.y, z: glider.vel.z - b.velocity.z }
+      memory.lance = { raw, from: { ...glider.from }, vel: { ...glider.vel }, relative, side, at: gameClock.now() }
+      return { ...side, at: b.position.offset(side.x * 5, 0, side.z * 5) }
+    }
+    const episode = memory.lance
+    if (episode) {
+      const raw = episode.raw, age = (gameClock.now() - episode.at) / TICK_MS
+      const valid = raw && bot.entities?.[raw.id] === raw && raw.isValid !== false &&
+        (scope.foes === null || scope.foes.includes(raw.username)) &&
+        !(require('../combat/ally-safety') as typeof import('../combat/ally-safety')).isAlly(bot, raw)
+      const landed = valid && (require('../pvp/last-seen') as typeof import('../pvp/last-seen')).seesPlayer(bot, raw) &&
+        !(require('./track') as typeof import('./track')).gliding(raw)
+      // shortcut: coast the last visible velocity for the existing 24-tick horizon; use a fresh path if traces show turns during gaps.
+      const ahead = (b.position.x - episode.from.x - episode.vel.x * age) * episode.relative.x +
+        (b.position.y - episode.from.y - episode.vel.y * age) * episode.relative.y +
+        (b.position.z - episode.from.z - episode.vel.z * age) * episode.relative.z
+      if (valid && !landed && age >= 0 && age <= 24 && ahead > 0) {
+        const side = episode.side
+        if (process.env.ND_GLIDER_TRACE === '1' && !episode.logged) {
+          episode.logged = true
+          console.log('[glider-trace]', JSON.stringify({ event: 'flight_hold', id: raw.id, ageTicks: age, ahead: r2(ahead), side }))
+        }
+        return { ...side, at: b.position.offset(side.x * 5, 0, side.z * 5) }
+      }
+      memory.lance = null
+    }
+    if (!arrows) return null
+    d = threats.projectileDangers(bot, scope)
+  } catch { memory.lance = null; return null }
   const shot = (d.arrows || []).filter(p => p.ticks <= 12 && p.from).sort((x, y) => x.ticks - y.ticks)[0]
   const src = shot?.from || (d.aims || []).find(a => a.at && b.position.distanceTo(a.at) <= 40)?.at
   if (!src) return null
   const dx = b.position.x - src.x, dz = b.position.z - src.z, n = Math.hypot(dx, dz) || 1
   const flip = Math.floor(gameClock.now() / 600) % 2 ? 1 : -1
-  return { x: -dz / n * flip, z: dx / n * flip }
+  return { x: -dz / n * flip, z: dx / n * flip, at: null }
 }
 
 // Взгляд взлёта (S7d, колизей с рельефом s7d-n-30: 5 ударов о стену на взлёте, −0.6…−6.8): от «раскрыть» до
@@ -195,18 +241,27 @@ async function takeoff (bot, ctl, { pitch = 1.0, yaw = null, stats = null, liqui
   }
   // В воздухе: подъём прыжка ещё идёт — «раскрыть» сейчас.
   for (let i = 0; i < 4 && bot.entity.onGround; i++) await nextTick(bot)
+  if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
   if (bot.entity.onGround) return { ok: false, why: 'не оторвался от земли' }
   if (!startGlide(bot)) return { ok: false, why: 'не раскрыл элитры' }
   install(bot).phase = 'взлёт'
-  await bot.look(lYaw, lPitch, true).catch(() => {})
+  await steer(bot, lYaw, lPitch)
+  if (!plainRocket(bot.inventory.slots[45])) await toHotbar(bot, plainRocket)
   await nextTick(bot)
-  if (arena && rollout(W, bot.entity.position, bot.entity.velocity, lYaw, lPitch, ROCKET_MAX_TICKS, 14, { arena }).kind === 'outside') return { ok: false, why: 'no_safe_arena_launch' }
-  let fr = fireRocket(bot)
-  if (!fr.ok && /хотбаре/.test(fr.why || '')) {
-    // Ракеты в рюкзаке — в хотбар (клики) и ещё раз.
-    await toHotbar(bot, plainRocket)
-    fr = fireRocket(bot)
+  if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
+  let launch = rollout(W, bot.entity.position, bot.entity.velocity, lYaw, lPitch, ROCKET_MAX_TICKS, 14, { arena })
+  // Jump, knockback or fresh geometry may invalidate the course chosen before the awaited body tick.
+  if (!fromLava && launch.kind) {
+    const ll = launchLook(W, bot.entity.position, lYaw, lPitch, bot.entity.velocity, arena)
+    if (ll) {
+      lYaw = ll.yaw; lPitch = ll.pitch
+      await steer(bot, lYaw, lPitch)
+      launch = rollout(W, bot.entity.position, bot.entity.velocity, lYaw, lPitch, ROCKET_MAX_TICKS, 14, { arena })
+    }
   }
+  if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
+  if (launch.kind === 'outside') return { ok: false, why: 'no_safe_arena_launch' }
+  const fr = fireRocket(bot)
   if (fr.ok && stats) stats.rockets = (stats.rockets || 0) + 1
   // Сервер подтвердил полёт (метаданные) и ракету (сущность прицепилась).
   const t0 = gameClock.now()
@@ -250,7 +305,8 @@ async function walkToCell(bot, ctl, at, ms) {
   const { goals }: typeof import('mineflayer-pathfinder') = require('mineflayer-pathfinder')
   let timer: unknown = null
   try {
-    await Promise.race([bot.pathfinder.goto(new goals.GoalNear(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z), .5)),
+    // Pathfinder represents standing on a partial block by the grid cell above it.
+    await Promise.race([bot.pathfinder.goto(new goals.GoalNear(Math.floor(at.x), Math.ceil(at.y), Math.floor(at.z), .5)),
       new Promise((_, reject) => { timer = gameClock.setTimeout(() => reject(new Error('timeout')), ms) })])
     return !ctl.aborted
   } catch { try { bot.pathfinder.setGoal(null) } catch {} ; return false } finally { if (timer) gameClock.clearTimeout(timer) }
@@ -303,7 +359,7 @@ function landingSpot (bot, W, { near, away = null, floorY = null, radius = 20, m
 }
 
 // Посадка: планирование к точке пола, касание с v.y > −0.5 (высота падения ≤ 1
-// — без урона), не в пустоту и не у самого края. Ракеты — нет.
+// — без урона), не в пустоту и не у самого края. Без полного плана сравниваем и тягу.
 async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = null, arena = null, maxFallDamage = 0 }: any = {}) {
   ctl = flightControl(bot, ctl)
   if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
@@ -332,11 +388,22 @@ async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = 
     }
     return false
   }
+  let exit: ReturnType<typeof ceilingExit> = null
   const r: any = await fly(bot, ctl, {
     phase: 'посадка',
-    goal: () => ({ kind: 'land', at: spot, away, edge, maxFallDamage }),
+    goal: () => {
+      const me = bot.entity.position
+      if (me.y < spot.y && !exit) exit = ceilingExit(W, me, p => !arena || (require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(p, arena, HALF))
+      const cruiseY = Math.max(me.y, spot.y) + 4
+      const detour = exit?.(me, spot.y, cruiseY, Number.isFinite(arena?.killY) ? arena.killY + 1 : -Infinity)
+      if (detour) return detour
+      if (me.y < spot.y) return { kind: 'point', at: new Vec3(spot.x, cruiseY, spot.z), minY: spot.y }
+      exit = null
+      return { kind: 'land', at: spot, away, edge, maxFallDamage }
+    },
     maxMs,
-    noRocket: () => true,
+    rocketIf: (_st, _plan, goal) => goal.kind === 'point',
+    useReserve: true,
     arena,
     stats
   })

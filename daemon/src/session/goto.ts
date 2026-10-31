@@ -159,7 +159,7 @@ function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface
       const off = ctl.onAbort.indexOf(stopSurface); if (off >= 0) ctl.onAbort.splice(off, 1)
       bounds.restore()
     }
-  }, { timeoutMs: (secs + 15) * 1000, params: { climb: !!climb }, ...(climb ? { interruptOn: HOLDING } : {}) })
+  }, { timeoutMs: (secs + 15) * 1000, params: { climb: !!climb, arena: boundedArena }, ...(climb ? { interruptOn: HOLDING } : {}) })
 }
 
 function gotoArenaBounds (this: Session, bot, ctl, boundedArena, avoiding: boolean, climb): GotoBounds {

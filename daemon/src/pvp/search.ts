@@ -8,18 +8,24 @@ import * as pick from '../pick'
 
 // Shared by acquisition and LOS repositioning: packet-only cells stay unknown,
 // including apparently empty head space above a visible support.
-export function observedCollision (bot, blockAt = pos => bot.blockAt(pos, false)) {
+export function observedCollision (bot, blockAt = pos => bot.blockAt(pos, false), cachedRead = false) {
   const cells = new Map(); let observedAt = -Infinity
+  const occluders: { cell: Vec3; lo: Vec3; hi: Vec3 }[] = []; let occluderArmed = false
   const unknown = { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
   return { physics: bot.physics, game: bot.game, blockAt (pos) {
-    if (observedAt !== clock.now()) { observedAt = clock.now(); cells.clear() }
+    if (observedAt !== clock.now()) { observedAt = clock.now(); cells.clear(); occluders.length = 0 }
     const cell = pos.floored(); const key = cell.toString()
     if (cells.has(key)) return cells.get(key)
-    const raw = new Map()
-    const read = at => {
-      const key = at.toString()
-      if (!raw.has(key)) raw.set(key, blockAt(at))
-      return raw.get(key)
+    // Flight supplies its own bounded end-of-pass raw cache; other readers still need query-local reuse.
+    const raw = cachedRead ? null : new Map()
+    const read = cachedRead ? blockAt : at => {
+      const key = ((at.x + 30000) * 60001 + at.z + 30000) * 1024 + at.y + 512
+      const cached = raw.get(key)
+      // Avoid string allocation per ray step; coordinates also disambiguate distant hash collisions.
+      if (cached && cached.x === at.x && cached.y === at.y && cached.z === at.z) return cached.block
+      const block = blockAt(at)
+      raw.set(key, { x: at.x, y: at.y, z: at.z, block })
+      return block
     }
     const sightWorld = { blockAt: pos => { try { return read(pos) || unknown } catch { return unknown } } }
     const eye = pick.eyeOf(bot)
@@ -27,8 +33,25 @@ export function observedCollision (bot, blockAt = pos => bot.blockAt(pos, false)
     for (const x of [.05, .95]) for (const y of [.05, .95]) for (const z of [.05, .95]) points.push([x, y, z])
     const seen = points.some(([x, y, z]) => {
       const delta = cell.offset(x, y, z).minus(eye); const len = delta.norm()
-      const hit = len > 0 ? pick.blockOnRay(sightWorld, eye, delta.scaled(1 / len), len, /glass|_pane$|^barrier$|^iron_bars$/) : null
-      return !hit || hit.pos.equals(cell)
+      const dir = len > 0 ? delta.scaled(1 / len) : null
+      // The same observed full cube can block several rays; partial shapes and failed reads still trace normally.
+      if (dir) for (const o of occluders) if (!o.cell.equals(cell) && pick.rayBox(eye, dir, o.lo, o.hi, len) != null) {
+        if (o !== occluders[0]) { occluders[1] = occluders[0]; occluders[0] = o }
+        return false
+      }
+      const hit = dir ? pick.blockOnRay(sightWorld, eye, dir, len, /glass|_pane$|^barrier$|^iron_bars$/) : null
+      if (!hit || hit.pos.equals(cell)) return true
+      if (hit.block !== unknown && hit.block.boundingBox === 'block' && hit.block.shapes?.some(s =>
+        s[0] === 0 && s[1] === 0 && s[2] === 0 && s[3] === 1 && s[4] === 1 && s[5] === 1)) {
+        // Leave a corner/edge touch to the exact DDA instead of treating it as an opaque crossing.
+        if (!occluders.some(o => o.cell.equals(hit.pos))) {
+          occluders.unshift({ cell: hit.pos, lo: hit.pos.offset(1e-7, 1e-7, 1e-7), hi: hit.pos.offset(1 - 1e-7, 1 - 1e-7, 1 - 1e-7) })
+          if (occluders.length > 2) occluders.pop()
+        }
+        // Like the flight world's raw reads, share only one synchronous forecast.
+        if (!occluderArmed) { occluderArmed = true; queueMicrotask(() => { occluders.length = 0; occluderArmed = false }) }
+      }
+      return false
     })
     const block = seen ? read(cell) : null
     cells.set(key, block); return block

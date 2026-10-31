@@ -1,5 +1,6 @@
 import { goals } from 'mineflayer-pathfinder'
 import { shoot as bowShoot } from '../bow'
+import { aimMoving, blockedAt } from '../bow/ballistics'
 import * as gameClock from '../game-clock'
 import { webCells } from '../hazards'
 import { blockName, keyDir } from '../moves'
@@ -12,6 +13,32 @@ import { findItem, findPotion } from './potions'
 import { FIX, HIT_REACH, TICK_MS, cooldownMs } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 import { lanceWebRequest } from './turn-approach'
+
+// Выстрел по летуну есть сейчас (Kimi 29.10, сверено): готов арбалет или лук со стрелами, тело видно, и баллистика (bow/ballistics,
+// упреждение по прогнозу полёта) находит решение — вместо порога 48 бл. Нет выстрела — копьё заранее, а не «лук в рюкзаке».
+export function airShotReady (ctx: DuelCtx, turn: TurnFrame) {
+  const { bot, sky } = ctx
+  // Почему не стреляю — раз на причину за бой в сводку ⚔ (разбор 29.10: с луком в наборе выстрелов по летуну почти нет).
+  const no = (why: string) => { const seen = ctx.noShot ||= new Set(); if (!seen.has(why)) { seen.add(why); ctx.used?.('по летуну на элитрах не стреляю: ' + why) } return false }
+  if (!sky?.gliding?.()) return false
+  if (!ctx.rangedAllowed?.()) return no('стрелять нельзя')
+  const xbow = ranged.crossbows(bot).some(x => x.info.loaded && x.info.ammo !== 'firework')
+  if (!xbow && !(findItem(bot, i => i.name === 'bow') && findItem(bot, i => /arrow$/.test(i.name)))) return no(findItem(bot, i => /^(bow|crossbow)$/.test(i.name)) ? 'арбалет не заряжен, лука/стрел нет' : 'нет лука и арбалета')
+  // skyDefenseTurn и flightTurn идут раньше noteSightTurn — turn.seesBody в них ещё не посчитан (кадр новый каждый тик):
+  // видимость — из глаз (лучи на хитбокс, как у noteSightTurn), иначе «не вижу» выходило всегда (cl66–67: 26 из 26).
+  if (!(turn.seesBody ?? ctx.vision?.visible?.(ctx.entity))) return no('не вижу')
+  const point = (t: number) => { const q = sky.fl?.at?.(Math.max(0, t)); return (q || ctx.entity.position).offset(0, .3, 0) }
+  const eye = pick.eyeOf(bot).offset(0, -.1, 0), u = bot.entity.velocity || { x: 0, y: 0, z: 0 }
+  const sol = aimMoving(eye, point, u, !bot.entity.onGround)
+  if (!sol) return no('нет решения баллистики')
+  // Дуга упирается в блок или в своего — bowShoot откажет («на линии стрельбы блок», cl71: почти все отказы у стен колизея),
+  // а копьё заранее уже не поднято: выстрела нет — значит копьё.
+  const hit = blockedAt(bot, eye, sol, u)
+  if (!hit) return true
+  // Чем закрыта: блок или свой; до цели или на падении стрелы за ней (blockedAt ведёт своих до земли).
+  const block = bot.world?.blockAt?.(hit)?.boundingBox === 'block'
+  return no(`дуга закрыта: ${block ? 'блок' : 'свой'}${hit.distanceTo(eye) > sol.at.distanceTo(eye) ? ' за целью' : ''}`)
+}
 
 // Паутина на мне, его пике с элитр.
 export function skySenseTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -33,33 +60,42 @@ export function skySenseTurn (ctx: DuelCtx, turn: TurnFrame) {
 export function braceReleaseTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, heldName } = ctx
   const { meInWeb, skyThreat } = turn
-  if (ctx.bracing && (!skyThreat || meInWeb || !spear.isSpear(heldName()))) { ctx.bracing = false; try { bot.deactivateItem() } catch {} }
+  // Цель кружит на элитрах дальше удара — копьё держится и без угрозы в эту секунду (поднято заранее, skyDefenseTurn). Своё use
+  // кончилось (сторож союзника на луче снял) — снова поднять можно: _ndUse, не usingHeldItem (его mineflayer сбрасывает на чужом статусе).
+  const circling = !bot.entity.elytraFlying && ctx.sky?.gliding?.() && turn.r > HIT_REACH
+  if (ctx.bracing && (!skyThreat && !circling || meInWeb || !spear.isSpear(heldName()) || bot._ndUse && !bot._ndUse.cur)) { ctx.bracing = false; try { bot.deactivateItem() } catch {} }
 }
 
 // Копьё против тарана, щит или уклон от пике.
 export async function skyDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, guard, pathTo, ready, rest, set, sky, st, used } = ctx
+  if (bot.entity.elytraFlying) return // Airborne controls and counterattack belong to flightTurn.
   const { me, meInWeb, now, r, skyThreat } = turn
   // Он летит на нас (пике/таран): копьё в руку, взгляд на него и «использовать» — задержка копья должна кончиться
   // до встречи. Урон разгона ему = 1 + floor(rel·mult), rel = −(наш взгляд · его скорость)·20 (KineticWeapon, javap):
   // на его 1.5 б/т — ~29 до брони. Наш щит/уклон — если копья нет или поздно.
-  const braceWith = skyThreat && !ctx.bracing && !meInWeb ? spear.spearOf(bot) : null
-  if (braceWith && skyThreat.eta >= Math.round(braceWith.spec.delay * 20) + 1 && skyThreat.eta <= 30) {
+  // Цель кружит на элитрах дальше удара («жду посадки») — копьё на изготовку заранее: таран замечается ближе задержки копья
+  // (алмазное 10 т.), и поднятое по угрозе не успевало (cl29a–e: на земле чаще всего гибли в бою с кружащей целью). Ходьба с копьём
+  // в use — без замедления (UseEffects копья, jar 1.21.11).
+  // Есть выстрел по летуну (airShotReady: оружие готово, видно, баллистика решает) — стрелять (glideShotTurn); нет — копьё заранее.
+  const early = !skyThreat && !ctx.bracing && !meInWeb && sky.gliding?.() && r > HIT_REACH && !airShotReady(ctx, turn)
+  const braceWith = (skyThreat || early) && !ctx.bracing && !meInWeb ? spear.spearOf(bot) : null
+  if (braceWith && (early || skyThreat.eta >= Math.round(braceWith.spec.delay * 20) + 1 && skyThreat.eta <= 30)) {
     if (ctx.pathing) { pathTo(false); ctx.pathing = false }
     for (const x of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(x, false)
     try {
       if (bot.heldItem?.name !== braceWith.item.name) await bot.equip(braceWith.item, 'hand')
-      const q = skyThreat.at || ctx.entity.position
+      const q = skyThreat?.at || sky.fl?.at?.(2) || ctx.entity.position
       const ey = pick.eyeOf(bot)
       await bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true)
-      if (bot.heldItem?.name === braceWith.item.name) { bot.activateItem(); ctx.bracing = true; used('копьё на изготовку против тарана') }
+      if (bot.heldItem?.name === braceWith.item.name && spear.teamSafe(bot)) { bot.activateItem(); ctx.bracing = true; used(early ? 'копьё на изготовку заранее (он кружит)' : 'копьё на изготовку против тарана') }
     } catch {}
     await ctx.sleep(TICK_MS)
     return NEXT
   }
   if (ctx.bracing && skyThreat) {
     // Держим и ведём взгляд за ним (луч копья 2.0–4.5 по взгляду).
-    const o = skyThreat.other
+    const o = skyThreat?.other
     const q = o ? new (require('vec3').Vec3)(o.from.x + o.vel.x * 2, o.from.y + o.vel.y * 2, o.from.z + o.vel.z * 2) : sky.fl.at(2) || ctx.entity.position
     const ey = pick.eyeOf(bot)
     bot.look(Math.atan2(-(q.x - ey.x), -(q.z - ey.z)), Math.atan2(q.y + 0.3 - ey.y, Math.hypot(q.x - ey.x, q.z - ey.z)), true).catch(() => {})
@@ -156,7 +192,7 @@ export async function flightTurn (ctx: DuelCtx, turn: TurnFrame) {
       if (guard) await guard.raise(false)
       ctx.aim = 'free'
       let res = null
-      try { res = await sky.run(ctl, sp, { heal: airHeal, enough: () => (bot.health ?? 0) >= 16, vel: () => ctx.track.vel(), chain: ctx.maceChain }) } catch (e) { res = { note: 'элитры: ' + e.message } }
+      try { res = await sky.run(ctl, sp, { heal: airHeal, enough: () => (bot.health ?? 0) >= 16, vel: () => ctx.track.vel(), chain: ctx.maceChain, deadline: ctx.deadline }) } catch (e) { res = { note: 'элитры: ' + e.message } }
       ctx.aim = 'target'
       clear()
       if (res && res.note) used(res.note)
@@ -176,7 +212,7 @@ export async function flightTurn (ctx: DuelCtx, turn: TurnFrame) {
 // Он на элитрах: стрелять, бежать под него, если улетает, или ждать посадки, если кружит рядом.
 export async function glideShotTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, clear, ctl, guard, heldName, holdWeapon, maceNow, pathTo, rangedAllowed, ready, rest, set, shotInputs, sky, st, strafeStep, switched, used } = ctx
-  const { me, meInWeb, r, seesBody } = turn
+  const { me, meInWeb, r } = turn
   if (ctx.prof.player && sky.gliding() && !meInWeb && r > HIT_REACH) {
     const halt = () => { if (ctx.pathing) { pathTo(false); ctx.pathing = false } }
     const chase = glideChaseGoal(me, ctx.entity.position, sky.fl.vel(), t => sky.fl.at(t), ctx.arena)
@@ -187,7 +223,7 @@ export async function glideShotTurn (ctx: DuelCtx, turn: TurnFrame) {
     const airPoint = (t) => { const q = sky.fl.at(Math.max(0, t)); return q ? q.offset(0, .3, 0) : ctx.entity.position.offset(0, .3, 0) }
     const stopAirShot = () => ctl.aborted || !sky.gliding() || !!sky.threat() || (FIX && maceNow())
     const airCrossbow = ranged.crossbows(bot).find(x => x.info.loaded && x.info.ammo !== 'firework')
-    if (rangedAllowed() && airCrossbow && d3 >= 4 && d3 < 48 && seesBody && !stopAirShot() &&
+    if (rangedAllowed() && airCrossbow && d3 >= 4 && airShotReady(ctx, turn) && !stopAirShot() &&
         (!ctx.failedAirXbow || ctx.failedAirXbow.inputs !== shotInputs())) {
       halt()
       if (guard) await guard.raise(false)
@@ -198,7 +234,7 @@ export async function glideShotTurn (ctx: DuelCtx, turn: TurnFrame) {
       ctx.failedAirXbow = airShot.fired ? null : { inputs: shotInputs(), why: airShot.why || 'air_bolt_unconfirmed' }
       if (airShot.fired) { used('арбалет по летуну на элитрах'); st.arrows = (st.arrows || 0) + 1; sky.fl.st.shots++; return NEXT }
     }
-    if (rangedAllowed() && bowA && arrA && d3 >= 4 && d3 < 48 && seesBody && !stopAirShot() &&
+    if (rangedAllowed() && bowA && arrA && d3 >= 4 && airShotReady(ctx, turn) && !stopAirShot() &&
         (!ctx.failedAirBow || ctx.failedAirBow.inputs !== shotInputs())) {
       halt()
       if (guard) await guard.raise(false)

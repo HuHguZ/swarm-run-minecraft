@@ -61,6 +61,33 @@ function installedActor(weapon) {
   return { ...a, item, frame: async () => { a.c.advanceTicks(1); await new Promise(resolve => setImmediate(resolve)) } }
 }
 
+test('moving airborne bow checks its compensated arc before drawing; raw arc remains blocked', async () => {
+  for (const mode of ['compensate', 'raw']) for (const ceiling of [22, 21.6]) {
+    const a = actor()
+    let draws = 0
+    a.bot.entity.onGround = false
+    a.bot.entity.velocity.x = 1.5
+    a.target.position.x = 40
+    a.bot.activateItem = () => { draws++ }
+    // A low ceiling catches the slower stationary arc, above the moving shot.
+    a.bot.world.raycast = (from, dir, reach) => {
+      const t = (ceiling - from.y) / dir.y
+      const x = from.x + dir.x * t
+      return t >= 0 && t <= reach && x >= 0 && x <= 40 ? { position: new Vec3(x, ceiling, 0) } : null
+    }
+    try {
+      const shot = await bow.shoot(a.bot, a.target, {
+        mode, point: () => a.target.position.offset(0, .9, 0), shouldStop: () => true
+      })
+      const clear = mode === 'compensate' && ceiling === 22
+      assert.equal(draws, clear ? 1 : 0)
+      assert.equal(shot.shot, false)
+      assert.equal(a.releases(), 0)
+      assert.match(shot.why, clear ? /отменил натяжение/ : /на линии стрельбы блок/)
+    } finally { a.close() }
+  }
+})
+
 for (const weapon of ['bow', 'crossbow', 'iron_spear']) test(`${weapon} confirms raw hurt events for an observed target by entity id`, async t => {
   const a = actor()
   const raw = Object.assign(a.target, { type: 'player', username: 'Foe' })

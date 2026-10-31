@@ -138,7 +138,7 @@ test('a newly unsafe strafe side yields to the safe side immediately', () => {
 test('spear bracing follows the current dive instead of expiring after three seconds', () => {
   const ctx: any = { bracing: 1000, skyThreat: { eta: 10 }, meInWeb: false,
     gameClock: { now: () => 60000 }, drops: 0, heldName: () => 'iron_spear',
-    spear: req('./spear'), bot: { deactivateItem: () => { ctx.drops++ } } }
+    spear: req('./spear'), bot: { entity: { elytraFlying: false }, deactivateItem: () => { ctx.drops++ } } }
   const { braceReleaseTurn } = parts(ctx, ['braceReleaseTurn'])
   braceReleaseTurn(ctx, ctx)
   assert.equal(ctx.drops, 0)

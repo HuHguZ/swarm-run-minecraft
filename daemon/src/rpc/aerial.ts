@@ -17,13 +17,16 @@ function aerialMethods ({ session }: RpcContext) {
       if (!p.at) throw new Error('нужна точка at')
       const k = sky.kit(bot)
       if (!k.elytra || (!p.rescue && k.rockets < 2 + sky.RESCUE_ROCKETS)) return { ok: false, why: k.elytra && k.rockets ? `ракет ${k.rockets} — запас на спасение` : 'нет элитр или ракет' }
+      // Escape and landing read their boundary from arena, while the rescue RPC also accepts killY separately.
+      if (p.rescue && p.arena && Number.isFinite(p.killY)) p = { ...p, arena: { ...p.arena, killY: p.killY } }
       const W = sky.worldOf(bot, { observed: !!p.arena })
       const t = new Vec3(p.at.x, p.at.y, p.at.z)
       const inside = at => require('../combat/team-wind').windInside(at, p.arena)
       if (!inside(t) || (!p.rescue && !inside(bot.entity.position))) return { ok: false, why: 'outside_arena' }
-      // В спасении важна ближайшая площадка; прямой маршрут к центру через гребень не нужен.
+      // В спасении сначала ищем ближайшую площадку, к заданной точке идём лишь пока местной нет.
       if (p.rescue) {
         const hpBefore = bot.health
+        const rescueUntil = gameClock.now() + (p.timeoutSeconds ?? 15) * 1000
         const minFloorY = Number.isFinite(p.killY) ? p.killY + 1 : -Infinity
         const rescueCtl = sky.flightControl(bot, ctl)
         // В яме у врага сухой пол ещё не спасение: с ракетой и открытым верхом уходим вверх и прочь.
@@ -35,15 +38,19 @@ function aerialMethods ({ session }: RpcContext) {
             if (foe) {
               const r = await sky.escape(bot, rescueCtl, foe, { arena: p.arena ? { ...p.arena, y: t.y } : null })
               const ok = !!r.ok && (bot.health ?? 0) > 0 && !rescueCtl.aborted
-              return { ...r, ok, why: ok ? null : (bot.health ?? 0) <= 0 ? 'death' : rescueCtl.aborted ? 'flight_superseded' : r.note,
+              if (ok || (bot.health ?? 0) <= 0 || rescueCtl.aborted || gameClock.now() >= rescueUntil) return { ...r, ok, why: ok ? null : (bot.health ?? 0) <= 0 ? 'death' : rescueCtl.aborted ? 'flight_superseded' : r.note,
                 hp: Math.round(hpBefore - bot.health) }
             }
           } finally { sight.close() }
         }
-        const pickLanding = () => sky.landingSpot(bot, W, {
-          near: bot.entity.position, floorY: Math.max(bot.entity.position.y, t.y), depth: 80, minFloorY,
-          inside: (x, z) => inside({ x, y: bot.entity.position.y, z })
-        })
+        // Failed escape may still leave us airborne without support: use the remaining rescue time locally.
+        const pickLanding = () => {
+          const options = { near: bot.entity.position, floorY: Math.max(bot.entity.position.y, t.y), depth: 80, minFloorY,
+            inside: (x, z) => inside({ x, y: bot.entity.position.y, z }) }
+          const local = sky.landingSpot(bot, W, options)
+          // landingSpot starts six blocks above floorY; the known field may be below that scan window.
+          return local || (options.floorY + 6 - options.depth > t.y ? sky.landingSpot(bot, W, { ...options, floorY: t.y }) : null)
+        }
         if (!bot.entity.onGround && !sky.wearingElytra(bot)) {
           let sw = await sky.swapChest(bot, 'elytra', { hand: 'main', ctl: rescueCtl })
           if (!sw.ok && !rescueCtl.aborted) { await bot.waitForTicks(1); sw = await sky.swapChest(bot, 'elytra', { hand: 'main', ctl: rescueCtl }) }
@@ -53,19 +60,25 @@ function aerialMethods ({ session }: RpcContext) {
         if (!bot.entity.onGround && !sky.gliding(bot.entity) && !sky.startGlide(bot)) return { ok: false, why: 'не раскрыл элитры' }
         if (!sky.plainRocket(bot.inventory.slots[45]) && k.rockets > 0) await sky.toHotbar(bot, sky.plainRocket)
         let landing = pickLanding()
+        let cruiseY = Math.max(bot.entity.position.y + 4, t.y + 4, minFloorY)
+        const from = bot.entity.position.clone()
+        const exit = from.y < (landing?.y ?? t.y)
+          ? (require('../elytra/ceiling-exit') as typeof import('../elytra/ceiling-exit')).ceilingExit(W, from, inside) : null
         let probes = 0
         const flight = await sky.fly(bot, rescueCtl, {
-          arena: p.arena, maxMs: (p.timeoutSeconds ?? 15) * 1000,
+          arena: p.arena, maxMs: Math.max(0, rescueUntil - gameClock.now()),
           phase: 'спасение', noRocket: () => false, useReserve: true,
           goal: () => {
             if (!landing && ++probes % 20 === 0) landing = pickLanding()
             const me = bot.entity.position
+            const detour = exit?.(me, landing?.y ?? t.y, cruiseY, minFloorY)
+            if (detour) return detour
+            // Until a support is visible, rise above the obstruction instead of circling at a lower cruise height.
+            if (!landing) cruiseY = Math.max(cruiseY, me.y + Math.min(4, sky.headroom(W, me, 6) - 1))
             const at = landing
               ? new Vec3(landing.x, landing.y + Math.min(4, sky.headroom(W, landing, 6) - 1), landing.z)
-              : new Vec3(p.arena ? Math.max(p.arena.x - p.arena.r + 3, Math.min(p.arena.x + p.arena.r - 3, me.x)) : me.x,
-                Math.max(me.y + 4, t.y + 4, minFloorY),
-                p.arena ? Math.max(p.arena.z - p.arena.r + 3, Math.min(p.arena.z + p.arena.r - 3, me.z)) : me.z)
-            return { kind: 'point', at, minY: landing ? landing.y : minFloorY }
+              : new Vec3(t.x, cruiseY, t.z)
+            return { kind: 'point', at, minY: landing ? landing.y : cruiseY }
           },
           rocketIf: s => !landing || s.p.y < landing.y || s.v.y < -0.5,
           until: () => landing && bot.entity.position.y >= landing.y && bot.entity.velocity.y > -0.5 &&
@@ -106,31 +119,70 @@ function aerialMethods ({ session }: RpcContext) {
         return { ok, why, landing, hp: Math.round(hpBefore - bot.health), contact }
       }
       // Гребень на линии полёта (13.10: «летят ко мне сквозь стену Колизея, бьются, получают урон и уходят — облёт надо
-      // считать»): верх твёрдого в колонках вдоль прямой (шаг 1 бл., без 2 бл. у старта и у цели; непрогруженное — твёрдое).
-      // Высота полёта — над гребнем +4 (не ниже +8 над концами); посадка — только с открытым небом до этой высоты (в нишу
+      // считать»): верх наблюдаемого твёрдого в колонках вдоль прямой (шаг 1 бл., без 2 бл. у старта и у цели).
+      // Высота полёта — над гребнем и стартом +4, над целью +8; посадка — только с открытым небом до этой высоты (в нишу
       // под навесом на элитрах не сесть — тогда отказ, пусть идёт пешком/копает).
       const me0 = bot.entity.position
       const yHi = Math.floor(Math.max(me0.y, t.y)) + 48; const yLo = Math.floor(Math.min(me0.y, t.y)) - 2
-      const topAt = (x, z) => { for (let y = yHi; y >= yLo; y--) if (W.solid(Math.floor(x), y, Math.floor(z))) return y + 1; return yLo }
-      const H0 = Math.hypot(t.x - me0.x, t.z - me0.z)
-      let ridge = { y: -Infinity, x: (me0.x + t.x) / 2, z: (me0.z + t.z) / 2, d: H0 / 2 }
-      for (let d = 2; d <= H0 - 2; d += 1) {
-        const x = me0.x + (t.x - me0.x) * d / H0; const z = me0.z + (t.z - me0.z) * d / H0
-        const y = topAt(x, z); if (y > ridge.y) ridge = { y, x, z, d }
-        // Ниже пика тоже бывает крыша: не начинать посадку до её дальнего края; ранний подъём сохраняем.
-        else if (y > t.y + 1.5) ridge = { ...ridge, x, z }
+      // Unknown still blocks body forecasts, but cannot establish an obstacle's height or a landing support.
+      const solidTop = (x, y, z) => {
+        const f = W.floorBelow(Math.floor(x) + .5, y, Math.floor(z) + .5, 0)
+        return f && !f.lava && !f.water && f.top > y ? f.top : null
       }
-      // Ровный пол не гребень у старта: высоту набираем вперёд, без круга над собой.
-      if (ridge.y <= Math.min(me0.y, t.y)) ridge = { ...ridge, x: (me0.x + t.x) / 2, z: (me0.z + t.z) / 2, d: H0 / 2 }
-      const cruise = Math.max(ridge.y + 4, Math.max(me0.y, t.y) + 8)
+      const tops = new Map<string, number>()
+      const topAt = (x, z) => {
+        const key = `${Math.floor(x)},${Math.floor(z)}`
+        if (tops.has(key)) return tops.get(key)
+        let top = yLo
+        for (let y = yHi; y >= yLo; y--) { const found = solidTop(x, y, z); if (found != null) { top = found; break } }
+        tops.set(key, top); return top
+      }
+      const ridgeTo = at => {
+        const H0 = Math.hypot(at.x - me0.x, at.z - me0.z)
+        let ridge = { y: -Infinity, x: (me0.x + at.x) / 2, z: (me0.z + at.z) / 2, d: H0 / 2 }
+        for (let d = 2; d <= H0 - 2; d += 1) {
+          const x = me0.x + (at.x - me0.x) * d / H0; const z = me0.z + (at.z - me0.z) * d / H0
+          const y = topAt(x, z); if (y > ridge.y) ridge = { y, x, z, d }
+          // Ниже пика тоже бывает крыша: не начинать посадку до её дальнего края; ранний подъём сохраняем.
+          else if (y > at.y + 1.5) ridge = { ...ridge, x, z }
+        }
+        // Только общий пол не требует обхода; при спуске с крыши начинаем посадку за её дальним краем.
+        if (ridge.y <= Math.min(me0.y, at.y)) ridge = { ...ridge, x: (me0.x + at.x) / 2, z: (me0.z + at.z) / 2, d: H0 / 2 }
+        return ridge
+      }
+      let ridge = ridgeTo(t)
+      let cruise = Math.max(ridge.y + 4, me0.y + 4, t.y + 8)
       if (cruise > yHi) return { ok: false, why: 'гребень выше 48 бл. — не перелететь' }
-      const skyOpen = (x, y0, z) => { for (let y = Math.floor(y0) + 2; y <= cruise; y++) if (W.solid(Math.floor(x), y, Math.floor(z))) return false; return true }
+      const noKnownCeiling = (x, y0, z, until = cruise) => { for (let y = Math.floor(y0) + 2; y <= until; y++) if (solidTop(x, y, z) != null) return false; return true }
+      const landingChecks = { support: 0, fluid: 0, bounds: 0, occupied: 0, ceiling: 0 }
+      let recoveredSupports = 0
+      const landingFloor = (x, y, z, depth) => {
+        let floor = W.floorBelow(x, y, z, depth)
+        if (floor) return floor
+        // Search observed supports below unknown space; the flight forecast still blocks unknown cells.
+        for (let Y = Math.floor(y) - 1; !floor && Y >= Math.floor(y) - depth; Y--) floor = W.floorBelow(x, Y, z, 0)
+        if (floor) recoveredSupports++
+        return floor
+      }
+      const landingFits = (x, z, fl, minY, maxY) => {
+        const why = !fl ? 'support' : fl.lava || fl.water ? 'fluid'
+          : !inside({ x, y: fl.top, z }) || !(fl.top >= minY && fl.top <= maxY) ? 'bounds'
+            : W.boxHit(x, fl.top, z, 1.8) ? 'occupied' : !noKnownCeiling(x, fl.top, z) ? 'ceiling' : null
+        if (why) landingChecks[why]++
+        return !why
+      }
       let landing = null
+      let rejectedApproaches = 0
+      const tryLanding = at => {
+        const nextRidge = ridgeTo(at), nextCruise = Math.max(nextRidge.y + 4, me0.y + 4, t.y + 8, at.y + 4)
+        if (nextCruise > yHi || !noKnownCeiling(at.x, at.y, at.z, nextCruise)) { rejectedApproaches++; return false }
+        landing = at; ridge = nextRidge; cruise = nextCruise; return true
+      }
       for (const r of [1.5, 2.5, 3.5]) for (let a = 0; a < 8 && !landing; a++) {
         const x = Math.floor(t.x + Math.cos(a * Math.PI / 4) * r) + 0.5; const z = Math.floor(t.z + Math.sin(a * Math.PI / 4) * r) + 0.5
         for (const dy of [0, 1, -1]) {
-          const fl = W.floorBelow(x, Math.floor(t.y) + dy, z, 2)
-          if (fl && !fl.lava && !fl.water && inside({ x, y: fl.top, z }) && Math.abs(fl.top - t.y) <= 1.5 && !W.boxHit(x, fl.top, z, 1.8) && skyOpen(x, fl.top, z)) { landing = { x, y: fl.top, z }; break }
+          const fl = landingFloor(x, Math.floor(t.y) + dy, z, 2)
+          if (landingFits(x, z, fl, t.y - 1.5, t.y + 1.5) && tryLanding({ x, y: fl.top, z })) break
         }
         if (landing) break
       }
@@ -138,39 +190,44 @@ function aerialMethods ({ session }: RpcContext) {
       // пешком (13.10: «сижу в нычке под навесом — ни один не прилетел»).
       let walkIn = false
       if (!landing) {
-        let best = null
+        const candidates = []
         for (let r = 2; r <= 8; r++) for (let a = 0; a < 16; a++) {
           const x = Math.floor(t.x + Math.cos(a * Math.PI / 8) * r) + 0.5; const z = Math.floor(t.z + Math.sin(a * Math.PI / 8) * r) + 0.5
-          const fl = W.floorBelow(x, Math.floor(t.y) + 10, z, 14)
-          if (!fl || fl.lava || fl.water || !inside({ x, y: fl.top, z }) || fl.top < t.y - 3 || fl.top > t.y + 10 || W.boxHit(x, fl.top, z, 1.8) || !skyOpen(x, fl.top, z)) continue
+          const fl = landingFloor(x, Math.floor(t.y) + 10, z, 14)
+          if (!landingFits(x, z, fl, t.y - 3, t.y + 10)) continue
           const c = r + Math.abs(fl.top - t.y) * 0.7
-          if (!best || c < best.c) best = { c, x, y: fl.top, z }
+          candidates.push({ c, x, y: fl.top, z })
         }
-        if (best) { landing = { x: best.x, y: best.y, z: best.z }; walkIn = true }
+        for (const at of candidates.sort((a, b) => a.c - b.c)) {
+          if (tryLanding({ x: at.x, y: at.y, z: at.z })) { walkIn = true; break }
+        }
       }
-      if (!landing) return { ok: false, why: 'негде сесть у цели (под навесом или занято)' }
+      if (!landing) return { ok: false, why: 'негде сесть у цели (под навесом или занято)', landingStage: rejectedApproaches ? 'approach' : 'selection', rejectedApproaches, landingChecks, recoveredSupports }
+      if (!ctl.aborted) ctl = sky.flightControl(bot, ctl)
+      if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
       if (!sky.wearingElytra(bot)) {
         // В падении клик инвентаря сервер иногда не принимает — ещё раз через тик.
-        let sw = await sky.swapChest(bot, 'elytra', { hand: 'main' })
-        if (!sw.ok && !bot.entity.onGround) { await bot.waitForTicks(1); sw = await sky.swapChest(bot, 'elytra', { hand: 'main' }) }
+        let sw = await sky.swapChest(bot, 'elytra', { hand: 'main', ctl })
+        if (!sw.ok && !ctl.aborted && !bot.entity.onGround) { await bot.waitForTicks(1); sw = await sky.swapChest(bot, 'elytra', { hand: 'main', ctl }) }
         if (!sw.ok) return { ok: false, why: 'элитры: ' + sw.why }
       }
+      if (ctl.aborted) return { ok: false, why: 'flight_superseded' }
       // В падении (спасение из пропасти) — раскрыть сразу; маршрут дальше без взлёта с земли (runFlightRoute: уже летим).
       if (!bot.entity.onGround && !sky.gliding(bot.entity)) sky.startGlide(bot)
       const me = bot.entity.position
       const h = Math.hypot(landing.x - me.x, landing.z - me.z)
       const along = h > 2 ? { x: landing.x - me.x, y: 0, z: landing.z - me.z } : { x: 0, y: 1, z: 0 }
-      // Ворота: гребень близко к старту (взлёт круче 1:1) — сначала подъём над собой; потом — над гребнем на высоте полёта.
+      // Подъём над собой нужен перед высоким препятствием, а не перед полом ниже стартовой площадки.
       const gates: any[] = []
-      if (ridge.d < cruise - me.y) gates.push({ id: 'подъём', center: { x: me.x, y: cruise, z: me.z }, normal: { x: 0, y: 1, z: 0 }, radius: 5 })
+      if (ridge.y > me.y && ridge.d < cruise - me.y) gates.push({ id: 'подъём', center: { x: me.x, y: cruise, z: me.z }, normal: { x: 0, y: 1, z: 0 }, radius: 5 })
       gates.push({ id: 'над гребнем', center: { x: ridge.x, y: cruise, z: ridge.z }, normal: along, radius: 4 })
       let r: any = null
       try { r = await require('../combat/flight-route').runFlightRoute(session, ctl, { gates, landing, timeoutSeconds: p.timeoutSeconds ?? 20, arena: p.arena }) } catch (e: any) { r = { ok: false, stopped: e.message } }
-      try { if (!sky.gliding(bot.entity) && sky.wearingElytra(bot)) await sky.swapChest(bot, 'chest') } catch {}
+      try { if (!ctl.aborted && !sky.gliding(bot.entity) && sky.wearingElytra(bot)) await sky.swapChest(bot, 'chest', { ctl }) } catch {}
       // Дальше пешком — боем драйвера (fight сам идёт к цели); goto отсюда ждал бы конца этого же полёта.
-      return { ok: !!r?.ok, walkIn, why: r?.stopped || null, at: { ...bot.entity.position },
+      return { ok: !!r?.ok && !ctl.aborted, walkIn, why: ctl.aborted ? 'flight_superseded' : r?.stopped || null, at: { ...bot.entity.position },
         landing: r?.landing || null, ground: r?.ground || null, plannedLanding: landing, landingError: r?.landingError ?? null,
-        ridge: Math.round(ridge.y), cruise: Math.round(cruise), hp: r?.hpBefore != null ? Math.round(r.hpBefore - r.hp) : null }
+        ridge: Math.round(ridge.y), cruise: Math.round(cruise), rejectedApproaches, recoveredSupports, hp: r?.hpBefore != null ? Math.round(r.hpBefore - r.hp) : null }
     }, { timeoutMs: ((p.timeoutSeconds ?? 20) + 10) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Только таран копьём по игроку target (сцена pvp/try-lance: точность захода без выбора хода боя): passes заходов,
     // итог каждого — по used(), касания — его damage_event с причиной «я» за весь таран (не только пока копьё в деле).
@@ -240,7 +297,8 @@ function aerialMethods ({ session }: RpcContext) {
     // (v.y < −0.5), а пола выше смертельной высоты killY подо мной в 80 бл. нет — элитры (из рюкзака на тело в воздухе) и
     // ракеты есть: раскрыть и лететь к safe (fly_to: над гребнем, посадка с открытым небом). Конфиг — от драйвера арены.
     rescue_config: async (p: any = {}) => {
-      session._rescue = p.off ? null : { safe: p.safe, killY: Number(p.killY), arena: p.arena }
+      session._rescue = p.off ? null : { safe: p.safe, killY: Number(p.killY),
+        arena: p.arena ? { ...p.arena, y: p.arena.y ?? p.safe?.y, killY: Number(p.killY) } : null }
       const bot = session.bot
       // Реактивный сброс ветром живёт там же, где знание арены и линии смерти (rescue_config раз в 20 с всем ботам).
       if (bot && p.arena && !p.off) require('../combat/wind-out').installWindOut(session)
@@ -250,12 +308,16 @@ function aerialMethods ({ session }: RpcContext) {
         let busyRescue = false
         bot.on('physicsTick', () => {
           const cfg = session._rescue; const b = bot.entity
-          if (!cfg || busyRescue || !b || b.onGround || b.isInWater || (bot.health ?? 0) <= 0) return
+          if (session.bot !== bot || !cfg || busyRescue || !b || b.onGround || b.isInWater || (bot.health ?? 0) <= 0) return
           // Медленное планирование тоже пересекает зону смерти (c31: vy=-0.086).
           const killSoon = b.velocity.y < 0 && b.position.y + b.velocity.y * 8 <= cfg.killY + 1
-          if (b.velocity.y > -0.25 && !killSoon) return
           const sky = require('../elytra')
           const S = sky.install(bot)
+          // Без рулевого возврат нужен уже за границей: outside обрывает прогноз раньше опасного снижения.
+          const outside = b.elytraFlying && !S.driving && cfg.arena &&
+            !(require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(b.position, cfg.arena)
+          const unmanaged = b.elytraFlying && !S.driving && !session.current && !session.reflex
+          if (b.velocity.y > -0.25 && !killSoon && !outside && !unmanaged) return
           const W = sky.worldOf(bot, { observed: !!cfg.arena })
           const f = W.floorBelow(b.position.x, b.position.y, b.position.z, 80)
           const fd = S.fd + Math.max(0, (S.lastY ?? b.position.y) - b.position.y)
@@ -263,7 +325,7 @@ function aerialMethods ({ session }: RpcContext) {
             // Обычный управляемый полёт не перебиваем; авария — смертельное касание или зона смерти в прогнозе.
             const r = sky.rollout(W, b.position, b.velocity, b.yaw, b.pitch, bot.fireworkRocketDuration || 0, 8, { fd, arena: cfg.arena })
             const lethal = r.kind === 'floor' && Math.max(0, Math.floor(r.fd + 1e-6 - 3)) >= bot.health
-            if (!lethal && r.p.y > cfg.killY + 1) return
+            if (!lethal && r.p.y > cfg.killY + 1 && !outside && !unmanaged) return
           }
           const fall = f ? fd + Math.max(0, b.position.y - f.top) : Infinity
           const damage = Math.max(0, Math.floor(fall + 1e-6 - 3))
@@ -281,7 +343,7 @@ function aerialMethods ({ session }: RpcContext) {
           }
           if (!k.elytra) return
           busyRescue = true
-          console.log('[rescue] падаю в пропасть — элитры', JSON.stringify({ at: require('../game-clock').now(), wallAt: require('../game-clock').wall.now(), y: Math.round(b.position.y), vy: b.velocity.y, fd, hp: bot.health, rockets: k.rockets, floor: f ? f.top : null, killY: cfg.killY }))
+          console.log(outside || unmanaged ? '[rescue] полёт без рулевого — элитры' : '[rescue] падаю в пропасть — элитры', JSON.stringify({ at: require('../game-clock').now(), wallAt: require('../game-clock').wall.now(), y: Math.round(b.position.y), vy: b.velocity.y, fd, hp: bot.health, rockets: k.rockets, floor: f ? f.top : null, killY: cfg.killY }))
           methods.fly_to({ at: cfg.safe, killY: cfg.killY, arena: cfg.arena, timeoutSeconds: 15, rescue: true }).then(r => console.log('[rescue]', JSON.stringify(r?.detail || r))).catch(() => {}).finally(() => { busyRescue = false })
         })
       }

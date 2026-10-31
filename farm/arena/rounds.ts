@@ -27,8 +27,8 @@ export function installRounds (ctx: ArenaContext) {
       for (const line of buf.toString('utf8').split(/\r?\n/)) {
         const cm = /<(\S+)> !?(рестарт|restart)\s*$/i.exec(line)
         if (cm && !names.includes(cm[1])) { ctx.endRound(false, `${cm[1]} написал «${cm[2]}»`).catch(() => {}); continue }
-        const m = /\]: (NeuroFarm\S+) (was .+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
-        const hm = !m && /\]: (\S+) (was .+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
+        const m = /\]: (NeuroFarm\S+) (was (?!kicked\b).+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
+        const hm = !m && /\]: (\S+) (was (?!kicked\b).+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
         const dead = m || hm, wind = dead && ctx.windOutAt?.[dead[1]]
         if (wind && Date.now() - wind.at < 4000) {
           ctx.windRecentDeaths = (ctx.windRecentDeaths || 0) + 1; delete ctx.windOutAt[dead[1]]
@@ -68,7 +68,9 @@ export function installRounds (ctx: ArenaContext) {
       // Булава с «Порывом ветра» и заряды (10.10: «летающее месиво — и булавы всем чарованные с ветром»).
       'mace[enchantments={density:3,breach:2,wind_burst:3}] 1', 'wind_charge 16',
       // Паутина под цель к тарану товарища (team_hint lanceWeb): в c33 из сундуков её почти не было — связка ни разу.
-      'cobweb 4'] : []),
+      'cobweb 4',
+      // Лук и арбалет (пользователь 29.10): летуна в хвосте раунда земля иначе не достаёт.
+      'bow 1', 'crossbow 1', 'arrow 64'] : []),
       ...(process.env.ARMS_CRYSTAL === '1' ? ['end_crystal 64', 'end_crystal 64', 'obsidian 64', 'obsidian 64', 'totem_of_undying 1', 'diamond_leggings[enchantments={blast_protection:4}] 1'] : []),
       // ARMS_TNT=1 (10.10: «раунд с кучей динамита — пусть взрывают всё вокруг как психи»): вагонетки с TNT, рельсы и лук
       // с огнём (бой умеет: рельс у врага, вагонетка, горящая стрела — boom.ts).

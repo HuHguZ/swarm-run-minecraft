@@ -49,9 +49,11 @@ export function pieBin (eye: SwarmPosition, x: number, y: number, z: number, ste
 // на расстоянии t (дальше не видно) или 0 — до range пусто. opaque: 1 —
 // непрозрачно, 0 — прозрачно, −1 — не прогружено (конец луча). Демон зовёт с миром тела, тесты — с сеткой.
 export function castRays (o: SwarmPosition, opaque: (x: number, y: number, z: number) => number, n: number, spin: number, range: number): (number[] | 0)[] {
-  const hits: (number[] | 0)[] = []
+  return rayDirs(n, spin).map(d => castRay(o, opaque, d, range))
+}
+
+export function castRay (o: SwarmPosition, opaque: (x: number, y: number, z: number) => number, d: number[], range: number): number[] | 0 {
   const inv = (v: number) => Math.abs(v) < 1e-12 ? Infinity : Math.abs(1 / v)
-  for (const d of rayDirs(n, spin)) {
     let x = Math.floor(o.x), y = Math.floor(o.y), z = Math.floor(o.z)
     const sx = d[0] > 0 ? 1 : -1, sy = d[1] > 0 ? 1 : -1, sz = d[2] > 0 ? 1 : -1
     let tx = Math.abs(d[0]) < 1e-12 ? Infinity : ((sx > 0 ? x + 1 : x) - o.x) / d[0]
@@ -67,9 +69,7 @@ export function castRays (o: SwarmPosition, opaque: (x: number, y: number, z: nu
       if (s < 0) { hit = [t]; break } // не прогружено: луч кончился здесь, дальше не видно
       if (s > 0) { hit = [x, y, z, face]; break }
     }
-    hits.push(hit)
-  }
-  return hits
+    return hit
 }
 
 // «Пирог» с наклоном: счёт сундуков в окнах взгляда от глаз o (range — дальность отрисовки блок-сущностей).

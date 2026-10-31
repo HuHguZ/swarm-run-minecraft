@@ -74,8 +74,9 @@ export function swarmTurn (sw: SwarmDriverCtx) {
   }
   function stopForTask(b, running, task, before, after, why = '') {
     if (b.swarmTurnOwner) b.swarmTurnOwner.cancelled = true
-    // Смена цели при той же фазе — видна в журнале (15×15 26.10: «обычный бой → обычный бой» 108 раз, причина не видна).
-    if (running.data?.target !== task.data?.target && before === after) after = `${after}|цель ${running.data?.target ?? '—'}→${task.data?.target ?? '—'}`
+    // Смена цели — видна в журнале всегда, и при смене фазы (15×15 26.10: «обычный бой → обычный бой» 108 раз, причина не видна;
+    // 29.10: без неё смена цели при вкл/выкл сброса читалась как «сброс у той же цели»).
+    if (running.data?.target !== task.data?.target) after = `${after}|цель ${running.data?.target ?? '—'}→${task.data?.target ?? '—'}`
     b.swarmTask = task; b.swarmTaskAt = now()
     if (b.swarmFight) b.swarmFight.stopping = true
     log(`↪ ${b.name}: смена фазы ${running.kind}${running.data?.fountain ? '/' + running.data.fountain : ''} → ${task.kind}${task.data?.fountain ? '/' + task.data.fountain : ''}${task.data?.hold ? '/' + task.data.hold : ''} (${before.split('|').filter(Boolean).join(', ') || 'обычный бой'} → ${after.split('|').filter(Boolean).join(', ') || 'обычный бой'}) — обрываю дело [${b.last?.m || '-'}]${why ? ' — ' + why : ''}`)

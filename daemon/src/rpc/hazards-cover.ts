@@ -93,7 +93,11 @@ function hazardCoverMethods ({ session, gameClock, state }: RpcContext) {
         const seen = { id: raw.id, position: raw.position.clone(), eye: raw.position.offset(0, pick.eyeHeight(bot, raw), 0), at: gameClock.now() }
         coverShooters.set(name, seen); return seen
       }
-      const remembered = observe() || coverShooters.get(name)
+      // fromAt — где его сейчас видят свои (доска роя): стенка от тарана, когда сам его не вижу (cl30 29.10: 29 из 29 стенок —
+      // «не вижу его»). Только для стенки на месте (wall), не для бега к укрытию.
+      const shared = p.wall && p.fromAt && [p.fromAt.x, p.fromAt.y, p.fromAt.z].every(Number.isFinite)
+        ? { id: null, position: new V(p.fromAt.x, p.fromAt.y, p.fromAt.z), eye: new V(p.fromAt.x, p.fromAt.y + 1.62, p.fromAt.z), at: gameClock.now() } : null
+      const remembered = observe() || coverShooters.get(name) || shared
       if (!remembered) return { ok: false, why: 'не вижу его' }
       // За занятой колонной остаёмся по последнему видимому лучу; на новый путь нужна свежая позиция стрелка.
       if (p.localOnly && archerCovered(bot, remembered.eye)) return { ok: true, how: 'укрытие' }

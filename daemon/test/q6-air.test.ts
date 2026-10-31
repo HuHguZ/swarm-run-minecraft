@@ -107,7 +107,7 @@ test('обычный воздушный бой передаёт продолже
   const executor: typeof import('../src/combat/aerial-executor') = require('../src/combat/aerial-executor')
   let followed = 0
   t.mock.method(executor, 'createAerialCombat', () => ({ afterLance: async () => { followed++; return { hit: true } } }) as any)
-  t.mock.method(lance, 'lance', async (_b, ctl, _e, options) => options.afterPass(ctl))
+  t.mock.method(lance, 'lance', async (_b, ctl, _e, options) => { options.stats.lanceEvasions = 1; return options.afterPass(ctl) })
   const bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(0, 64, 0), onGround: true, velocity: new Vec3(0, 0, 0) }
   bot._ndElytra = {}; bot._ndSkyWorld = { boxHit: () => false }
@@ -116,6 +116,7 @@ test('обычный воздушный бой передаёт продолже
   try {
     assert.equal((await combat.run({ aborted: false }, { kind: 'lance' })).hit, true)
     assert.equal(followed, 1)
+    assert.equal(combat.report().lanceEvasions, 1, 'internal combat reports retain the emergency exit count')
   } finally { combat.close() }
 })
 
@@ -169,66 +170,14 @@ test('таран вызывает продолжение после попада
   }
 })
 
-test('взаимный облёт летунов сохраняет контакт без самоподъёма на новый ярус', async t => {
-  let now = 0
-  t.mock.method(clock, 'now', () => now)
-  const options = new Map<any, any>(), finish = new Map<any, (result: any) => void>()
-  t.mock.method(flight, 'fly', (bot, _ctl, o) => {
-    options.set(bot, o)
-    return new Promise(resolve => finish.set(bot, resolve))
-  })
-  t.mock.method(flight, 'land', async () => ({ ok: false, why: 'orbit-only model' }))
-  const world = { boxHit: (_x, y) => y < 64,
-    floorBelow: (_x, y, _z, depth = 40) => y >= 64 && y - 64 <= depth ? { top: 64 } : null }
-  const results = []
-  for (const mirror of [1, -1]) {
-    now = 0
-    const make = (z, vz, yaw): any => ({ health: 20, remaining: 5, fd: 0, fireworkRocketDuration: 0,
-      entity: { position: new Vec3(0, 120, z), velocity: new Vec3(0, -.1, vz), elytraFlying: true, onGround: false, yaw, pitch: 0 },
-      players: {}, inventory: { slots: [] } })
-    const bots = [make(24 * mirror, -1.2 * mirror, mirror === 1 ? 0 : Math.PI), make(0, 1.2 * mirror, mirror === 1 ? Math.PI : 0)]
-    for (let i = 0; i < 2; i++) {
-      bots[i].players.Foe = { entity: bots[1 - i].entity }
-      bots[i].inventory.items = () => [{ name: 'elytra' }, { name: 'firework_rocket', count: bots[i].remaining }, { name: 'wind_charge', count: 2 }]
-    }
-    const pending = bots.map(bot => wingOrbit({ require: () => bot }, { aborted: false }, { target: 'Foe', floorY: 64, radius: 8 }))
-    const maxY = [120, 120]; let near = 0
-    try {
-      for (let tick = 0; tick < 120; tick++) {
-        // Forecast both from the same physical frame before applying either next move.
-        const plans = bots.map(bot => {
-          const o = options.get(bot), goal = o.goal()
-          assert.equal(o.until(), null, 'модель сохраняет действующий облёт с зарядами')
-          const state = { p: bot.entity.position, v: bot.entity.velocity, fd: bot.fd, boost: bot.fireworkRocketDuration }
-          const plan = sky.choose(world, state, goal)
-          assert.ok(plan)
-          const rocket = !state.boost && sky.rocketCount(bot) > sky.RESCUE_ROCKETS && flight.rocketChoice(world, state, goal, plan, o.rocketIf(state))
-          if (rocket?.fire) { bot.remaining--; plan.yaw = rocket.yaw; plan.pitch = rocket.pitch; state.boost = 26 }
-          return { plan, step: sky.rollout(world, state.p, state.v, plan.yaw, plan.pitch, state.boost, 1, { fd: state.fd }), boost: Math.max(0, state.boost - 1) }
-        })
-        for (let i = 0; i < 2; i++) {
-          const bot = bots[i], { plan, step, boost } = plans[i]
-          assert.equal(step.kind, null, 'облёт не касается пола или стены')
-          bot.entity.position = new Vec3(step.p.x, step.p.y, step.p.z); bot.entity.velocity = new Vec3(step.v.x, step.v.y, step.v.z)
-          bot.entity.yaw = plan.yaw; bot.entity.pitch = plan.pitch; bot.fd = step.fd; bot.fireworkRocketDuration = boost
-          maxY[i] = Math.max(maxY[i], bot.entity.position.y)
-        }
-        if (bots[0].entity.position.distanceTo(bots[1].entity.position) < 16) near++
-        now += 50
-      }
-      results.push({ mirror, maxY, near, remaining: bots.map(b => b.remaining) })
-    } finally {
-      for (const bot of bots) finish.get(bot)!({ why: 'bounded model' })
-      await Promise.all(pending)
-    }
-  }
-  for (const result of results) {
-    assert.ok(result.maxY.every(y => y <= 132), `без внешнего подброса не уходим выше исходного мягкого коридора +12: ${JSON.stringify(result)}`)
-    assert.ok(result.near >= 116, 'сближение и контакт на обеих зеркальных траекториях сохранены')
-    assert.ok(result.remaining.every(n => n >= sky.RESCUE_ROCKETS), 'резерв не тратится ради облёта')
-  }
+test('два летуна не занимают друг друга облётом без исполнимого броска', async t => {
+  t.mock.method(flight, 'fly', async () => { assert.fail('ordinary air combat must retain these actors') })
+  const a = orbitWindFixture(2, 0, true), b = orbitWindFixture(2, 0, true)
+  a.bot.players.Foe.entity = b.bot.entity
+  b.bot.players.Foe.entity = a.bot.entity
+  const out = await Promise.all([a, b].map(f => wingOrbit(f.session, f.ctl, f.params)))
+  assert.ok(out.every(r => !r.ok && r.why === 'цель на элитрах — нужен перехват'))
 })
-
 test('высота облёта стоящего, падающего без элитр и гребня сохраняет прежний заход', async t => {
   t.mock.method(flight, 'land', async () => ({ ok: false, why: 'orbit-only model' }))
   for (const [mode, onGround, ledge, offset] of [['perch', true, false, 3], ['fall', false, false, 3], ['ledge', true, true, 2]] as const) {
@@ -252,11 +201,76 @@ function orbitWindFixture(main = 2, off = 0, flying = false) {
   const foe = { position: new Vec3(20, 150, 0), onGround: false }
   const bot: any = { health: 20, _ndWindCd: 100000,
     entity: { position: new Vec3(0, 130, 0), velocity: new Vec3(1, 0, 0), onGround: !flying, elytraFlying: flying },
+    blockAt: () => ({ name: 'air', boundingBox: 'empty' }),
     players: { Foe: { entity: foe } }, inventory: { slots,
       items: () => [{ name: 'firework_rocket', count: 8 }, ...(supply.main ? [{ name: 'wind_charge', count: supply.main }] : [])] } }
   Object.defineProperty(slots, '45', { get: () => supply.off ? { name: 'wind_charge', count: supply.off } : null })
   return { bot, supply, session: { require: () => bot }, ctl: { aborted: false }, params: { target: 'Foe', floorY: 120 } }
 }
+
+test('wind-only orbit does not launch against an already gliding target', async t => {
+  const f = orbitWindFixture(), foe: any = f.bot.players.Foe.entity
+  foe.metadata = { 0: 0x80 }
+  t.mock.method(flight, 'takeoff', async () => { assert.fail('the wind executor has no attack on a glider') })
+  const r = await wingOrbit(f.session, f.ctl, f.params)
+  assert.equal(r.ok, false)
+  assert.equal(r.why, 'цель на элитрах — нужен перехват')
+})
+
+test('wind orbit keeps its owner through ordinary combat before landing when the target opens elytra', async t => {
+  const f = orbitWindFixture(2, 0, true), foe: any = f.bot.players.Foe.entity
+  let now = 1000
+  t.mock.method(clock, 'now', () => now)
+  ;(f.session as any).updateMovements = () => {}
+  t.mock.method(flight, 'fly', async (_bot, _ctl, options) => {
+    assert.equal(options.until(), null)
+    foe.metadata = { 6: 'fall_flying' }
+    f.bot.blockAt = () => ({ name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] })
+    assert.equal(options.until(), null, 'hidden pose packets must not change the action')
+    f.bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' })
+    assert.equal(options.until(), 'цель на элитрах')
+    now += 2000
+    return { why: options.until() }
+  })
+  let landed = 0
+  t.mock.method(flight, 'land', async () => { landed++; return { ok: true } })
+  let fought = 0
+  t.mock.method(require('../src/combat'), 'fight', async (session, ctl, options) => {
+    fought++
+    assert.equal(session, f.session)
+    assert.equal(ctl, f.ctl)
+    assert.equal(landed, 0, 'keep the existing airborne approach')
+    assert.equal(options.target, 'Foe')
+    assert.equal(options.allowPlayer, true)
+    assert.equal(options.allowRanged, true)
+    assert.equal(options.timeoutSeconds, 10, 'use only the remaining orbit budget')
+    return { hits: 1 }
+  })
+  const r = await wingOrbit(f.session, f.ctl, f.params)
+  assert.equal(fought, 1)
+  assert.equal(landed, 1)
+  assert.equal(r.combat.hits, 1)
+  assert.equal(r.why, 'цель на элитрах')
+})
+
+for (const exit of ['aborted', 'expired', 'failed']) test(`orbit combat handoff ${exit} keeps cancellation, budget and landing`, async t => {
+  const f = orbitWindFixture(2, 0, true), foe: any = f.bot.players.Foe.entity
+  let now = 1000, fought = 0, landed = 0
+  t.mock.method(clock, 'now', () => now)
+  ;(f.session as any).updateMovements = () => {}
+  t.mock.method(flight, 'fly', async () => {
+    foe.metadata = { 0: 0x80 }
+    if (exit === 'aborted') f.ctl.aborted = true
+    if (exit === 'expired') now += 12000
+    return { why: 'цель на элитрах' }
+  })
+  t.mock.method(require('../src/combat'), 'fight', async () => { fought++; throw new Error('combat failed') })
+  t.mock.method(flight, 'land', async (_b, ctl) => { assert.equal(ctl, f.ctl); landed++; return { ok: true } })
+  if (exit === 'failed') await assert.rejects(wingOrbit(f.session, f.ctl, f.params), /combat failed/)
+  else await wingOrbit(f.session, f.ctl, f.params)
+  assert.equal(fought, exit === 'failed' ? 1 : 0)
+  assert.equal(landed, 1, 'normal cleanup is retained even when combat throws')
+})
 
 test('облёт без зарядов не начинает взлёт', async t => {
   const f = orbitWindFixture(0), launches: any[] = []
@@ -327,4 +341,18 @@ for (const grounded of [true, false]) test(`облёт с флагом полё�
   assert.equal(result.ok, true)
   assert.equal(result.nearTicks, 0, 'цель fixture дальше16бл.; goal всё же действительно считался')
   assert(Number.isFinite(result.closest), 'успешный проход не остаётся closest=null')
+})
+
+for (const shots of [0, 2, null]) test(`orbit receipt reports ${shots ?? 'unknown'} actual reflex releases separately from proximity`, async t => {
+  const f = orbitWindFixture(2, 0, true)
+  if (shots !== null) (f.session as any)._windOut = { fired: 12 }
+  t.mock.method(flight, 'fly', async (_bot, _ctl, options) => {
+    options.goal()
+    if (shots !== null) (f.session as any)._windOut.fired += shots
+    return { why: 'receipt control' }
+  })
+  t.mock.method(flight, 'land', async () => ({ ok: true }))
+  const result = await wingOrbit(f.session, f.ctl, f.params)
+  assert.equal(result.windShots, shots)
+  assert.equal(result.nearTicks, 0, 'no charge receipt is inferred from contact distance')
 })

@@ -201,3 +201,31 @@ test('one synchronous enemy wind plan shares raw sight cells and the next plan s
     }
   } finally { clock.activate(null); fixed.dispose() }
 })
+
+// 29.10: прогноз заряда по таранщику — летящего на элитрах считали падающим телом (бег по земле к центру, сопротивление ×0.91):
+// за 10 т. он «тормозил» до шага, а на деле планирует на скорости. Физика полёта — та же, что у нас (prismarine elytraFlying по взгляду).
+test('летящий на элитрах в прогнозе планирует, а не падает и не бежит к центру', () => {
+  const f = fixture()
+  const { enemyWindFrames } = require('../src/combat/enemy-wind')
+  Object.assign(f.foe, { position: new Vec3(-1, 30, -40), velocity: new Vec3(0, -.2, 1.4), elytraFlying: true, yaw: Math.PI, pitch: -.2 })
+  f.foe.metadata[0] = 0x80
+  const frames = enemyWindFrames(f.bot, f.foe, { ...f.options.arena, r: 80 })
+  assert.ok(frames.length > 10)
+  const v = frames[10].vel
+  assert.ok(Math.hypot(v.x, v.z) > 1, `планирует на скорости: ${Math.hypot(v.x, v.z).toFixed(2)} бл/т`)
+  assert.ok(frames[10].pos.z - frames[0].pos.z > 10, 'летит туда же, куда летел')
+})
+
+// 29.10: заряд против таранщика — порыв сбивает его с линии подлёта на меня/своих (отвод), а не выносит за край.
+test('таранщик идёт на меня — план броска с отводом уводит его тело от моих глаз', () => {
+  const f = fixture()
+  const { planEnemyWind } = require('../src/combat/enemy-wind')
+  Object.assign(f.foe, { position: new Vec3(-2, 3, -14), velocity: new Vec3(0, 0, 1.2), elytraFlying: true, yaw: Math.PI, pitch: 0 })
+  f.foe.metadata[0] = 0x80
+  const me = { id: 'A', position: { x: -2, y: 1, z: .5 }, velocity: { x: 0, y: 0, z: 0 }, onGround: true, gameTick: 500 }
+  const plan = planEnemyWind(f.bot, f.foe, [me], { arena: { ...f.options.arena, r: 80 }, startTick: 500, maxShots: 1, delays: [0], protect: [{ x: -2, y: 2.6, z: .5 }] })
+  assert.ok(plan, 'план есть')
+  assert.ok(plan.baseline.clear < 3.5, `без броска проходит вплотную: ${plan.baseline.clear?.toFixed(1)}`)
+  assert.ok(plan.nominal.clear > plan.baseline.clear, `порыв уводит: ${plan.nominal.clear?.toFixed(1)}`)
+  assert.ok(Number.isFinite(plan.baseline.reach) && plan.nominal.reach > plan.baseline.reach, `удар достаёт позже или никогда: ${plan.baseline.reach} → ${plan.nominal.reach}`)
+})

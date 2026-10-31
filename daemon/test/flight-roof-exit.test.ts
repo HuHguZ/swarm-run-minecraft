@@ -64,7 +64,8 @@ test('fly_to from a roof accepts an explicit observed open field destination tow
   assert.equal(world.boxHit(route.landing.x, route.landing.y, route.landing.z), false)
   const over = route.gates.find(g => g.id === 'над гребнем')
   assert.ok(over.center.x > 575 && over.center.z > 575, 'stay above the roof through its far edge before starting descent')
-  assert.equal(route.gates[0].id, 'подъём', 'moving the plateau gate must preserve the early climb at its near edge')
+  assert.equal(over.center.y, 157, 'keep the ordinary four-block roof clearance without adding eight metres above the high launch point')
+  assert.equal(route.gates.length, 1, 'the launch roof is below our feet, so climb forward toward its far edge')
 })
 
 for (const floor of ['unknown', 'water', 'lava'] as const) test(`fly_to roof exit never approves ${floor} field support`, async t => {
@@ -78,8 +79,8 @@ test('fly_to clears the lower roof beyond the highest ridge before beginning the
   assert.ok(route)
   const over = route.gates.find(g => g.id === 'над гребнем')
   assert.ok(over.center.x > 575 && over.center.z > 575, 'a lower roof still blocks the descent to field Y120')
-  assert.equal(over.center.y, 161, 'cruise height still clears the highest part')
-  assert.equal(route.gates[0].id, 'подъём', 'early climb stays at the near high edge')
+  assert.equal(over.center.y, 157, 'cruise height still clears the highest part by four blocks')
+  assert.equal(route.gates.length, 1, 'a descending roof does not require a vertical circle over the launch point')
 })
 
 test('fly_to roof exit preserves the climb over a real higher ridge on the way to the field', async t => {
@@ -91,7 +92,7 @@ test('fly_to roof exit preserves the climb over a real higher ridge on the way t
   assert.equal(route.landing.y, 120)
 })
 
-test('takeoff walks to the height of its open sky pad before accepting the approach', async t => {
+for (const floor of [154, 153.875, 153.5]) test(`takeoff reaches the open sky pad at Y${floor} before accepting the approach`, async t => {
   const ctl = { aborted: false }, bot: any = new EventEmitter()
   bot.entity = { position: new Vec3(551.5, 153, 554.5), onGround: true }
   let goal: any
@@ -99,7 +100,7 @@ test('takeoff walks to the height of its open sky pad before accepting the appro
   t.mock.method(require('../src/elytra/install'), 'flightControl', (_bot, parent) => parent)
   t.mock.method(require('../src/elytra/install'), 'install', () => ({}))
   t.mock.method(require('../src/elytra/physics'), 'worldOf', () => ({
-    solid: () => false, floorBelow: () => ({ top: 154 }), boxHit: (_x, y) => y < 154
+    solid: () => false, floorBelow: () => ({ top: floor }), boxHit: (_x, y) => y < floor
   }))
   const file = require.resolve('../src/elytra/flight'), cached = require.cache[file]
   delete require.cache[file]

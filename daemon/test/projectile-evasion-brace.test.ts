@@ -79,10 +79,10 @@ test('в бою, без копья и со щитом — встречного �
   }
 })
 
-test('уходящий поперёк летун копья не поднимает', async t => {
+test('уходящий поперёк летун дальше броска копья не поднимает', async t => {
   const f = scene(t)
   t.after(() => f.bot.emit('end'))
-  const e = f.spawn(-20)
+  const e = f.spawn(-30)
   for (let i = 0; i < 4; i++) { e.position.x += 1.5; await f.tick() }
   assert.equal(f.bot.heldItem.name, 'diamond_sword')
   assert.deepEqual(f.uses, [])
@@ -121,4 +121,32 @@ test('поднятое копьё до подлёта смотрит накло�
   assert.ok(look, 'наклон к нему задан')
   assert.equal(look[0], f.bot.entity.yaw, 'курс тот же')
   assert.ok(look[1] > .3, `наконечник вверх, к летуну: ${look[1]}`)
+})
+
+// cl46tr: на земле гибли с копьём в руке, не подняв его: летун кружил в 8–20 бл. (курс не на меня), пике — 19→8 бл. за 3 т., а задержка
+// алмазного копья 10 т.; и в прыжке пути (бегство) копьё не поднималось вовсе. Ближе пути летуна за подъём — копьё заранее, и в прыжке.
+test('летун кружит рядом, курс мимо, я в прыжке пути — копьё на изготовку', async t => {
+  const f = scene(t)
+  t.after(() => f.bot.emit('end'))
+  const e = f.spawn(-15)
+  f.bot.entity.onGround = false
+  for (let i = 0; i < 4; i++) { e.position.x += 1.5; await f.tick() }
+  assert.equal(f.bot.heldItem.name, 'diamond_spear', 'копьё в руку')
+  assert.ok(f.uses.some(([w, h]) => w === 'up' && !h), 'копьё поднято')
+})
+
+// cl51: «копьё в use, а рефлекс его не знает» (-U в трассе) — пока рефлекс выключен (замок руки, смена дела), любой setControlState
+// (clearControlStates mineflayer — 1146 раз за 2 раунда) забывал копьё, не опуская: use висит, не наводится, окно истекает, поднять заново нельзя.
+test('пауза рефлекса и сброс клавиш — поднятое копьё не теряется, наводится и после', async t => {
+  const f = scene(t)
+  t.after(() => f.bot.emit('end'))
+  const e = f.spawn(-8); e.position.y = 70
+  let a = -Math.PI / 2
+  const orbit = async (n: number) => { for (let i = 0; i < n; i++) { a += .1; e.position.x = 8 * Math.cos(a); e.position.z = 8 * Math.sin(a); await f.tick() } }
+  await orbit(4)
+  assert.ok(f.uses.some(([w, h]) => w === 'up' && !h), 'копьё поднято')
+  f.bot._ndHandLock = { on: () => true }; f.bot.clearControlStates(); await orbit(1); f.bot._ndHandLock = null
+  const n = f.looks.length
+  await orbit(6)
+  assert.ok(f.looks.length > n, 'копьё по-прежнему наше — наклон к летуну идёт и после паузы')
 })

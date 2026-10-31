@@ -21,6 +21,24 @@ function fakeBot (wallX = 6) {
   return { bot, handlers, looks, tick: () => (handlers.physicsTick || []).forEach(f => f()) }
 }
 
+test('startGlide does not send START_FALL_FLYING again while already gliding', () => {
+  const { startGlide }: typeof import('../src/elytra/install') = require('../src/elytra/install')
+  const { bot } = fakeBot()
+  const packets = []
+  bot.inventory.slots[6] = { name: 'elytra' }
+  bot.supportFeature = () => true
+  bot._client.write = (name, data) => packets.push({ name, data })
+  assert.equal(startGlide(bot), true)
+  assert.equal(packets.length, 0)
+  bot.entity.elytraFlying = false
+  assert.equal(startGlide(bot), true)
+  assert.deepEqual(packets, [{ name: 'entity_action', data: { entityId: 1, actionId: 'start_elytra_flying', jumpBoost: 0 } }])
+  assert.equal(startGlide(bot), true)
+  assert.equal(packets.length, 1)
+  bot.entity.onGround = true
+  assert.equal(startGlide(bot), false)
+})
+
 test('рефлекс столкновения: без руля в стену — отворот; с рулём — нет', () => {
   const sky: typeof import('../src/elytra') = require('../src/elytra')
   const a = fakeBot()
@@ -67,6 +85,37 @@ test('S7d: руль один — пока полёт ведёт fly/таран, 
   S.driving = 0
   await a.bot.look(2, 0, true)
   assert.equal(a.looks.length, 2, 'без руля — как раньше')
+})
+
+test('collision reflex keeps its safe look until the next physical forecast', async () => {
+  const sky: typeof import('../src/elytra') = require('../src/elytra')
+  const a = fakeBot()
+  a.bot.lookAt = async () => { a.looks.push({ yaw: 99, pitch: 99 }) }
+  const S = sky.install(a.bot)
+  a.tick()
+  assert.equal(S.guardSaves, 1)
+  const safe = a.looks[0]
+  await a.bot.look(-Math.PI / 2, 0, true) // A ground flee resumes after the physics listener.
+  await a.bot.lookAt(new Vec3(6, 110, .5), true)
+  assert.deepEqual(a.looks, [safe], 'ground steering must not undo the collision avoidance')
+  await sky.steer(a.bot, 1, .2)
+  assert.equal(a.looks.length, 2, 'a flight pilot can take over immediately')
+  a.bot.entity.position.x = -100
+  a.bot.entity.velocity.x = -1
+  a.bot.entity.yaw = Math.PI / 2
+  a.tick()
+  await a.bot.look(2, 0, true)
+  assert.equal(a.looks.at(-1).yaw, 2, 'a clear new forecast releases ordinary steering')
+  a.bot.entity.position.x = .5
+  a.bot.entity.velocity.x = 1.6
+  a.bot.entity.yaw = -Math.PI / 2
+  a.tick()
+  a.bot.entity.elytraFlying = false
+  a.bot.entity.onGround = true
+  a.tick()
+  a.bot.entity.elytraFlying = true
+  await a.bot.look(3, 0, true)
+  assert.equal(a.looks.at(-1).yaw, 3, 'landing clears the old reflex before another glide')
 })
 
 test('S7d: стена в 1 блок под ракетой 1.6 б/т — прогон видит удар (раньше рамка «перепрыгивала» стекло арены)', () => {

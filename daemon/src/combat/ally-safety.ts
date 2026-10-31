@@ -85,10 +85,11 @@ export function allyOnSegment(bot: any, allies: any[], from: Vec3, to: Vec3, tic
 export function allyOnSpearRay(bot: any, eye: Vec3, direction: Vec3, min: number, max: number): any {
   const start = eye.plus(direction.scaled(min)), movement = bot.entity.velocity || new Vec3(0, 0, 0)
   for (const e of visibleAllies(bot)) {
-    const box = hitboxOf(bot, e), a = allyAt(bot, e, 0), b = allyAt(bot, e, 1).offset(-movement.x, -movement.y, -movement.z)
+    const box = hitboxOf(bot, e), a = allyAt(bot, e, 0), next = allyAt(bot, e, 1), b = next.offset(-movement.x, -movement.y, -movement.z)
     // Observation age can move both forecasts off the ray while the last visible body still overlaps it.
-    const lo = new Vec3(Math.min(e.position.x, a.x, b.x) - box.w / 2 - .125, Math.min(e.position.y, a.y, b.y) - .125, Math.min(e.position.z, a.z, b.z) - box.w / 2 - .125)
-    const hi = new Vec3(Math.max(e.position.x, a.x, b.x) + box.w / 2 + .125, Math.max(e.position.y, a.y, b.y) + box.h + .125, Math.max(e.position.z, a.z, b.z) + box.w / 2 + .125)
+    // The ally may move first while the server still holds our last position and active spear.
+    const lo = new Vec3(Math.min(e.position.x, a.x, b.x, next.x) - box.w / 2 - .125, Math.min(e.position.y, a.y, b.y, next.y) - .125, Math.min(e.position.z, a.z, b.z, next.z) - box.w / 2 - .125)
+    const hi = new Vec3(Math.max(e.position.x, a.x, b.x, next.x) + box.w / 2 + .125, Math.max(e.position.y, a.y, b.y, next.y) + box.h + .125, Math.max(e.position.z, a.z, b.z, next.z) + box.w / 2 + .125)
     if (rayBox(start, direction, lo, hi, max - min) !== null) return e
   }
   return null

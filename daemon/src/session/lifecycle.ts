@@ -37,6 +37,7 @@ function connect (this: Session, { bootstrapPaused }: any = {}): Promise<any> {
         // ND_RESPAWN_MS (анимация смерти видна всем), потом запрос возрождения (respawnNudge с этим периодом).
         respawn: !(Number(process.env.ND_RESPAWN_MS) > 0)
       })
+      this._rescue = null
       this.bot = bot
       gameClock.bind(bot)
       // Autopilot starts before connect. Replace its initial wall timer with
@@ -84,6 +85,9 @@ function connect (this: Session, { bootstrapPaused }: any = {}): Promise<any> {
           // Предметы на земле: скорость из пакета появления и физика полёта (drops.js) —
           // иначе брошенное видно в точке броска до секунды.
           try { (require('../drops') as typeof import('../drops')).install(bot) } catch {}
+          // Рывок удочкой по телу — как у ванильного клиента (rod-pull.ts: mineflayer событие крючка 31 не знает).
+          try { (require('../rod-pull') as typeof import('../rod-pull')).install(bot) } catch {}
+          try { (require('../wind-spend') as typeof import('../wind-spend')).install(bot, this) } catch {}
           // Рюкзак после окон сверяется с сервером (invsync.js): иначе верстак,
           // кирка и прочее «пропадают» у клиента, оставаясь у сервера.
           try { (require('../invsync') as typeof import('../invsync')).install(bot) } catch {}
@@ -163,6 +167,7 @@ async function waitUntilWorldLoaded (this: Session, timeoutMs = 10000): Promise<
 
 function disconnect (this: Session, reason = 'по команде'): { ok: boolean } {
     this.cancel()
+    this._rescue = null
     this.bootstrapPaused = false
     if (this.bot) {
       this.journal.append('выход', reason, this.bot.entity && this.bot.entity.position)

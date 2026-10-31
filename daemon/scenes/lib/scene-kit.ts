@@ -239,6 +239,7 @@ function createGameBot (options, { primary = false }: any = {} as Record<string,
   const { plugins } = (require('../../src/tick-plugins') as typeof import('../../src/tick-plugins')).createTickPlugins(clock)
   const bot = (require('mineflayer') as typeof import('mineflayer')).createBot({ ...options, plugins: { ...plugins, ...options.plugins } })
   clock.attach(bot)
+  ;(require('../../src/client-loaded') as typeof import('../../src/client-loaded')).install(bot)
   if (primary && !gameClock.snapshot()) gameClock.activate(clock)
   return bot
 }

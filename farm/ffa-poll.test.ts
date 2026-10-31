@@ -64,6 +64,36 @@ test('a late status from the previous round cannot overwrite the reset pose or s
   assert.equal(f.observations.filter(o => o.name === 'slow').length, 0)
 })
 
+for (const renewed of ['status', 'round']) test(`a delayed missing-player reply cannot eliminate a peer after a fresh ${renewed}`, async t => {
+  const f = fixture(t)
+  let answer
+  f.context.arms = true
+  f.context.rcon = () => new Promise(resolve => { answer = resolve })
+  f.poll(); await turn(); f.advance(20001); f.poll(); await turn()
+  assert.equal(typeof answer, 'function')
+  if (renewed === 'status') { f.release(); await turn() }
+  else f.context.round++
+  answer('There are 1 of a max of 100 players online: fast')
+  await turn()
+  assert.equal(f.context.deadNow.has('slow'), false)
+  assert.equal(f.context.out.has('slow'), false)
+})
+
+for (const [reply, absent] of [
+  ['RCON timeout', false],
+  ['There are 2 of a max of 100 players online: fast', false],
+  ['There are 2 of a max of 100 players online: fast, slow', false],
+  ['There are 1 of a max of 100 players online: fast', true],
+  ['There are 0 of a max of 100 players online: ', true]
+] as const) test(`only a complete native list proves player absence: ${reply}`, async t => {
+  const f = fixture(t)
+  f.context.arms = true
+  f.context.rcon = async () => reply
+  f.poll(); await turn(); f.advance(20001); f.poll(); await turn()
+  assert.equal(f.context.deadNow.has('slow'), absent)
+  assert.equal(f.context.out.has('slow'), absent)
+})
+
 test('the watchdog never resets an old observation or fresh replies whose own physics frame has stopped', t => {
   const f = fixture(t), b = f.bots[0]
   b.last = { m: 'goto', at: 0, p: { x: 8, y: 64, z: 0, timeoutSeconds: 4 } }
@@ -530,4 +560,19 @@ test('an unsuccessful watchdog dig does not become a timed retry; a new tool can
   assert.equal(f.calls.filter(c => c.method === 'dig_to').length, 1, 'the same failed recovery stays failed')
   f.context.pos.fast.inv = { iron_pickaxe: 1 }; await stuck()
   assert.equal(f.calls.filter(c => c.method === 'dig_to').length, 2)
+})
+
+// cl53onD1: демон бота упал (нехватка памяти), а драйвер числил его живым по старому месту — последний красный «жил» 6 мин,
+// раунд кончился по времени. Молчит ≥ 20 с и сервер его уже не держит (list) — выбыл, как погибший; молчит, но в игре — ждём.
+test('демон молчит, а сервер игрока уже не держит — выбыл; молчит, но в игре — ждём', async t => {
+  for (const online of [false, true]) {
+    const f = fixture(t)
+    Object.assign(f.context, { arms: true, i: 29, rcon: async (_i, cmd) => cmd === 'list' ? `There are 1 of a max of 50 players online: fast${online ? ', slow' : ''}` : '' })
+    f.poll(); await turn()
+    f.advance(21000); f.poll(); await turn(); await turn()
+    assert.equal(f.context.deadNow.has('slow'), !online, online ? 'в игре — не выбыл' : 'нет на сервере — выбыл')
+    assert.equal(f.context.out.has('slow'), !online, 'из живых — сразу')
+    assert.equal(f.context.deadNow.has('fast'), false)
+    f.release(); await turn()
+  }
 })

@@ -59,6 +59,29 @@ test('actual turnFight -> arena wrapper -> real intent -> fight_guard keeps the 
   } finally { await f.done(running) }
 })
 
+for (const worn of [false, true]) test(`a fresh distant glider reaches body combat with ${worn ? 'worn' : 'carried'} elytra and flight fuel`, async () => {
+  const f = pipeline()
+  Object.assign(f.foe, { threat: 'aerial', position: { x: 60.5, y: 84, z: .5 } })
+  f.sw.pos.A.inv = { diamond_spear: 1, firework_rocket: 5, ...(worn ? {} : { elytra: 1 }) }
+  f.sw.pos.A.armor = { torso: worn ? 'elytra' : 'iron_chestplate' }
+  const { running } = await f.start(f.fight({ finishing: true }))
+  try {
+    assert.equal(f.session.current.name, 'fight', 'the body must price an airborne intercept instead of walking below the target')
+    assert.equal(f.calls[0].params.target, 'Champ')
+  } finally { await f.done(running) }
+})
+
+test('distant glider ground pursuit remains for stale sightings, rescue-only fuel and missing elytra', async () => {
+  for (const variant of ['stale', 'reserve', 'no_elytra', 'uncommitted']) {
+    const f = pipeline()
+    Object.assign(f.foe, { threat: 'aerial', seenAt: variant === 'stale' ? -1 : 1000, position: { x: 60.5, y: 84, z: .5 } })
+    f.sw.pos.A.inv = { diamond_spear: 1, firework_rocket: variant === 'reserve' ? 3 : 5, ...(variant === 'no_elytra' ? {} : { elytra: 1 }) }
+    const { running } = await f.start(f.fight({ committed: variant !== 'uncommitted' }))
+    try { assert.equal(f.session.current.name, 'goto', variant) }
+    finally { await f.done(running) }
+  }
+})
+
 test('k onDig evacuation keeps the same real goto across ordinary/shove guard changes', async () => {
   const f = pipeline(), stand = { x: 2.5, y: 64, z: .5 }
   const guard = { digAvoid: [{ x: 0, y: 63, z: 0 }], swarmStand: stand }

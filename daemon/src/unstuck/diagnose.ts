@@ -37,12 +37,13 @@ export const DIRS = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), n
 
 export function at (bot, p) { try { return bot.blockAt(p) } catch { return null } }
 
-// Пересекает ли блок коробку тела (0.6 × 1.8): «завалило» — голова или ноги в твёрдом.
+// Пересекает ли блок коробку текущей позы: стоя — 1.8 м, на элитрах — 0.6 м.
 export function overlapsBody (bot, b) {
   if (!solid(b) || !bot.entity) return false
   const p = bot.entity.position
+  const { h } = (require('../pick') as typeof import('../pick')).hitboxOf(bot, bot.entity)
   const lo = { x: p.x - 0.29, y: p.y + 0.05, z: p.z - 0.29 }
-  const hi = { x: p.x + 0.29, y: p.y + 1.75, z: p.z + 0.29 }
+  const hi = { x: p.x + 0.29, y: p.y + h - .05, z: p.z + 0.29 }
   const shapes = b.shapes ?? [[0, 0, 0, 1, 1, 1]]
   for (const s of shapes) {
     const x0 = b.position.x + s[0]; const y0 = b.position.y + s[1]; const z0 = b.position.z + s[2]

@@ -141,6 +141,8 @@ test('up records the actual spawned birth and a random title before the entry po
   assert.match(f.spawned[0].args[0], /^--title=nd-fleet-31-NeuroFarm31c-\d+-[a-f0-9]{32}$/)
   assert.ok(f.spawned[0].args[1].endsWith(path.join('src', 'index.js')))
   assert.equal(f.spawned[0].options.env.MC_PORT, '25631')
+  // Падение от нехватки памяти оставляет отчёт и снимок кучи в farm/diag (29.10: демон упал за 155 с без следа).
+  assert.match(f.spawned[0].options.env.NODE_OPTIONS, /--report-on-fatalerror .*--heapsnapshot-near-heap-limit=1 .*--max-old-space-size=2048/)
   const record: any = JSON.parse([...f.records.values()][0]); assert.equal(record.pid, 31999); assert.equal(record.born, '638972000000000001')
   assert.equal(await f.fleet.down(31), 1); assert.deepEqual(f.killed, [])
 })

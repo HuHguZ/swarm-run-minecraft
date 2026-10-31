@@ -369,7 +369,8 @@ export function swarmWind(sw: SwarmDriverCtx) {
   function windWing(b, sightings) {
     const team = teamOf(b)
     for (const e of sightings || []) {
-      if (!e.position || !sw.hostile(b, e.id) || e.position.y - arena.y < 8) continue
+      // windKind has no shot against a glider; leave this fighter to the ordinary air-combat planner.
+      if (!e.position || !sw.hostile(b, e.id) || e.gliding === true || e.position.y - arena.y < 8) continue
       // Стоит на гребне у края (ник сквозь уступ — тоже) — заход с центра арены наружу; в воздухе — только видимый.
       const ledge = !e.airborne && (e.visible === true || e.nametag) && edgeRoom(e.position) <= 8
       if (!ledge && (!e.airborne || e.visible === false)) continue
@@ -381,17 +382,25 @@ export function swarmWind(sw: SwarmDriverCtx) {
       const o = bots.filter(q => teamOf(q) === team && available(q) && !meleeBusy(q) && !sw.panic(q) && kit(q) && !wingers.includes(q) &&
         // Ближе 48 бл. и он у меня в глазах (стенд 25.10: со 140 бл. взлетали и тут же «цели не видно», каждый тик).
         distance(pos[q.name].p, e.position) <= 48 &&
-        !(winging.get(q.name)?.foe === e.id && distance(winging.get(q.name).at, e.position) < 6) &&
+        !(winging.get(q.name)?.round === sw.generation && winging.get(q.name)?.foe === e.id && distance(winging.get(q.name).at, e.position) < 6) &&
         // Не взлетел отсюда (крыша, стена) — снова только с другого места (повтор по месту, не по времени).
-        !(winging.get(q.name)?.failAt && distance(winging.get(q.name).failAt, pos[q.name].p) < 3))
+        !(winging.get(q.name)?.round === sw.generation && winging.get(q.name)?.failAt && distance(winging.get(q.name).failAt, pos[q.name].p) < 3))
         .sort((x, y) => distance(pos[x.name].p, e.position) - distance(pos[y.name].p, e.position))[0]
       if (!o) continue
-      winging.set(o.name, { foe: e.id, at: { ...e.position } })
+      const attempt: any = { foe: e.id, at: { ...e.position }, round: sw.generation }
+      winging.set(o.name, attempt)
       log(`🪽🌬 ${o.name} → ${e.id}: ${ledge ? 'на гребне' : 'в воздухе'} +${Math.round(e.position.y - arena.y)} — ${ledge ? 'заход с центра' : 'облёт'} на элитрах, заряды на сближении (${distance(pos[o.name].p, e.position).toFixed(0)} бл.)`)
       // Ход бота полёт не рвёт: резерв до квитанции (guardedTurn пропускает зарезервированного).
       const token = {}; o.swarmReserved = token
       const from = { ...pos[o.name].p }
-      void o.c.call('wing_orbit', { target: e.id, seconds: ledge ? 6 : 12, radius: 8, arena, floorY: arena.y, ledge }).then(r => { const d = detail(r); if (!d.ok && /^взлёт/.test(d.why || '')) winging.set(o.name, { ...winging.get(o.name), failAt: from }); log(`🪽🌬 ${o.name}: облёт ${d.ok ? `${Math.round((d.ms || 0) / 100) / 10} с, ближе 16 бл. ${d.nearTicks} т., ближе всего ${d.closest} бл., ${d.why}${d.landed ? ', сел' : ''}` : d.why || r?.status || '?'}`) }).catch(() => {})
+      void o.c.call('wing_orbit', { target: e.id, seconds: ledge ? 6 : 12, radius: 8, arena, floorY: arena.y, ledge }).then(r => {
+        if (sw.generation !== attempt.round || winging.get(o.name) !== attempt) return
+        const d = detail(r), latest = sw.boardOf(o).enemies().find(foe => foe.id === e.id)
+        // Movement during the reserved flight is already covered; retry only after a later change.
+        if (latest?.position) attempt.at = { ...latest.position }
+        if (!d.ok && /^взлёт/.test(d.why || '')) attempt.failAt = from
+        log(`🪽🌬 ${o.name}: облёт ${d.ok ? `${Math.round((d.ms || 0) / 100) / 10} с, ближе 16 бл. ${d.nearTicks} т., ближе всего ${d.closest} бл., зарядов ${d.windShots ?? '?'}, ${d.why}${d.landed ? ', сел' : ''}` : d.why || r?.status || '?'}`)
+      }).catch(() => {})
         .finally(() => { if (o.swarmReserved === token) delete o.swarmReserved })
     }
   }

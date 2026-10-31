@@ -3,7 +3,38 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import sky = require('../src/elytra')
+import * as clock from '../src/game-clock'
 const empty = { boxHit: () => false, floorBelow: () => null }
+
+test('observed flight reuses the body block cache across calculations without bypassing sight or updates', async t => {
+  const time = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(time)
+  t.after(() => time.dispose())
+  const world: any = new EventEmitter(); world.getColumn = () => ({})
+  let reads = 0, wall = false
+  const bot: any = Object.assign(new EventEmitter(), {
+    world, entity: { position: new Vec3(.5, 10, .5) },
+    blockAt(p: Vec3) {
+      reads++
+      const at = p.floored(), solid = wall && at.x === 2
+      return { position: at, name: solid ? 'stone' : 'air', boundingBox: solid ? 'block' : 'empty', shapes: solid ? [[0, 0, 0, 1, 1, 1]] : [] }
+    }
+  })
+  require('../src/fastblocks').install(bot)
+  const W = sky.worldOf(bot, { observed: true })
+  assert.equal(W.at(4, 10, 0), 0)
+  const firstReads = reads
+  await Promise.resolve(); time.advanceTicks(1); W.clear()
+  assert.equal(W.at(4, 10, 0), 0)
+  assert.equal(reads, firstReads, 'unchanged raw cells must come from the existing body cache on the next calculation')
+  wall = true
+  world.emit('chunkColumnLoad', new Vec3(0, 0, 0))
+  await Promise.resolve(); time.advanceTicks(1); W.clear()
+  assert.equal(W.at(4, 10, 0), 1, 'the updated opaque wall still hides the packet-only cell')
+  assert(reads > firstReads, 'column invalidation fetches fresh blocks')
+  bot.entity.position.x = 3.5
+  await Promise.resolve(); time.advanceTicks(1)
+  assert.equal(W.at(4, 10, 0), 0, 'a new viewpoint can reveal the previously unknown cell')
+})
 
 test('elytra rollout checks the complete boosted trajectory and full body, while legacy flight keeps its behavior', () => {
   const pos = { x: .5, y: 10, z: .5 }, velocity = { x: 1.6, y: 0, z: 0 }, arena = { x: .5, z: .5, r: 4, killY: 0 }

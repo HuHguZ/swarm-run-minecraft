@@ -46,7 +46,10 @@ export function install (session, free) {
     mine?.charge.close()
     if (mine && bot.inventory?.slots?.[45]?.name === 'shield' && (!bot._ndUse?.cur || bot._ndUse.cur === mine.use)) deactivate?.()
   }
-  const forget = () => { shield?.charge.close(); shield = null; brace?.charge.close(); brace = null }
+  // ND_GLIDER_TRACE: кто сбросил наше копьё чужим use (первый кадр вне этого файла и обёрток) — в трассу.
+  let forgotBy: string | null = null
+  const forget = () => { if (brace && traceOn) forgotBy = (new Error().stack || '').split('\n').slice(2).find(l => !/projectile-evasion|itemuse|reflex-lock|node:/.test(l))?.trim().replace(/^at /, '').replace(/\(.*[\\/]/, '(').slice(0, 80) || '?'
+    shield?.charge.close(); shield = null; brace?.charge.close(); brace = null }
   const lower = () => { const mine = brace; brace = null; if (!mine) return; mine.charge.close(); if (bot._ndUse?.cur === mine.use || !bot._ndUse?.cur && spear.isSpear(bot.heldItem?.name)) deactivate?.() }
   // Чужое использование предмета отбирает только наш щит; поздний конец уворота не опускает еду или лук дела.
   if (activate) bot.activateItem = (...args) => { if (!ownUse) forget(); return activate(...args) }
@@ -54,7 +57,9 @@ export function install (session, free) {
   const restore = () => { const old = mix; mix = {}; for (const k of Object.keys(old)) raw(k, wanted[k]) }
   bot.setControlState = (key, value) => {
     wanted[key] = value
-    if (!enabled()) { restore(); forget() }
+    // Пауза рефлекса (замок руки, смена дела) — клавиши у другого, отдаём только щит; копьё в use остаётся нашим (cl51: забытое, но
+    // поднятое копьё не наводилось и не поднималось заново — 1146 сбросов clearControlStates за 2 раунда). Чужой use — activateItem выше.
+    if (!enabled()) { restore(); shield?.charge.close(); shield = null }
     return raw(key, mix[key] ?? value)
   }
   const vector = inputs => {
@@ -88,7 +93,7 @@ export function install (session, free) {
         return { n: e.username, d: +e.position.distanceTo(me).toFixed(1), a: Math.round(Math.acos(Math.max(-1, Math.min(1, (dx * lx + dy * ly + dz * lz) / n))) * 180 / Math.PI) }
       }).sort((a, c) => a.d - c.d)[0]
     if (!near || near.d > 32) return
-    trace.push({ t: clock.now(), why, ...near, g: bot.entity.onGround, j: !!wanted.jump, th: gliders[0] ? gliders[0].kind + ':' + gliders[0].ticks : null, b: brace ? (brace.ackAt !== undefined && clock.now() - brace.ackAt >= brace.delay * 50 ? 'R' : brace.ackAt !== undefined ? 'a' : 'r') + (brace.charge.why() || '') : equipping ? 'e' : '-', h: bot.heldItem?.name, u: bot._ndUse?.cur?.name || null, c: session.current?.name || null })
+    trace.push({ t: clock.now(), why, ...near, g: bot.entity.onGround, j: !!wanted.jump, th: gliders[0] ? gliders[0].kind + ':' + gliders[0].ticks : null, b: brace ? (brace.ackAt !== undefined && clock.now() - brace.ackAt >= brace.delay * 50 ? 'R' : brace.ackAt !== undefined ? 'a' : 'r') + (brace.charge.why() || '') : equipping ? 'e' : '-', h: bot.heldItem?.name, u: bot._ndUse?.cur?.name || null, ...(forgotBy ? { fg: forgotBy } : {}), c: session.current?.name || null })
     while (trace.length > 40) trace.shift()
   }
   const tick = () => {
@@ -134,6 +139,10 @@ export function install (session, free) {
       // в виду идёт на меня — копьё на изготовку заранее. Механика jar 1.21.11: копьё в use — UseEffects(можно бежать, скорость ×1),
       // урон KineticWeapon после задержки (алмазное 10 т.) всё окно урона, rel = его скорость ко мне: на 30 бл/с — 1 + ⌊30·1.075⌋ = 33.
       // На подлёте (угроза ≤ 20 т.) — взгляд на него вместо шага: копьё бьёт по лучу 2–4.5 бл. от глаз. Бой ведёт свой skyDefenseTurn.
+      // Ближе пути летуна за подъём копья (2 бл/т — средняя скорость элитр, пике до 4; × задержка + 2 т. подтверждения) курс не важен:
+      // кружащий в 8–20 бл. пикирует за 3–6 т., быстрее задержки (cl46tr: 6 из 12 наземных смертей от тарана — копьё в руке, не поднято).
+      // Окно урона копья ~11 с (delay + dmgWin, spear.ts) — поднять раньше почти ничего не стоит.
+      const held = spear.spearOf(bot), dive = held ? 2 * (Math.round(held.spec.delay * 20) + 2) : 0
       const approach = (() => {
         let best: any = null
         for (const raw of Object.values(bot.entities || {}) as any[]) {
@@ -145,17 +154,17 @@ export function install (session, free) {
           if (d > 40 || !was || now - was.t > 200 || now === was.t) continue
           const k = 50 / (now - was.t), v = { x: (raw.position.x - was.x) * k, y: (raw.position.y - was.y) * k, z: (raw.position.z - was.z) * k }
           const sp = Math.hypot(v.x, v.y, v.z), to = { x: (me.x - raw.position.x) / d, y: (me.y + 1 - raw.position.y) / d, z: (me.z - raw.position.z) / d }
-          if (sp < .5 || (v.x * to.x + v.y * to.y + v.z * to.z) < .7 * sp || !seesPlayer(bot, raw)) continue
+          if (sp < .5 || d > dive && (v.x * to.x + v.y * to.y + v.z * to.z) < .7 * sp || !seesPlayer(bot, raw)) continue
           if (!best || d < best.d) best = { raw, d, v }
         }
         return best
       })()
-      // Только при ходьбе и в паутине (оттуда не уйти — копьё единственная защита; резку оно прерывает): бой ведёт свой skyDefenseTurn,
+      // Вне боя — при ходьбе, в прыжке пути и в паутине (оттуда не уйти — копьё единственная защита; резку оно прерывает): бой ведёт свой skyDefenseTurn,
       // полёт и броски (облёт, fly_to, ветер, жемчуг) держат руку сами.
       const fighting = !!session.current?.name && !/^(goto|flee|swarm_hold|assist|follow|center_in|take_cover|clear_web)$/.test(session.current.name)
       if (brace && (brace.charge.why() || fighting || !approach && now - brace.seenAt > 1000 || now - brace.since > brace.window)) lower()
       if (brace && approach) brace.seenAt = now
-      const lance = !shield && bot.inventory?.slots?.[45]?.name !== 'shield' && !fighting && approach && bot.entity.onGround && !bot.entity.elytraFlying && spear.spearOf(bot)
+      const lance = !shield && bot.inventory?.slots?.[45]?.name !== 'shield' && !fighting && approach && !bot.entity.elytraFlying && held
       if (lance && !brace && !bot._ndUse?.cur && !bot.usingHeldItem && !bot.currentWindow && !session.armorBusy && !bot._ndShieldEquip) {
         if (bot.heldItem?.name !== lance.item.name) {
           if (!equipping) { equipping = true; Promise.resolve(bot.equip(lance.item, 'hand')).catch(() => {}).finally(() => { equipping = false }) }

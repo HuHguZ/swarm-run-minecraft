@@ -82,6 +82,61 @@ test('shared spear guard cancels an already braced aerial or ground charge befor
   assert.equal(cancelled, 1, 'a spear in the other hand must not release our active shield')
 })
 
+for (const packet of ['position', 'position_look', 'look', 'flying', 'physicTick']) test(`held spear checks its actual transmitted position for ${packet}`, () => {
+  const { bot, ally } = scene(), sent: string[] = []
+  bot._client = new EventEmitter()
+  bot._client.write = name => { sent.push(name) }
+  bot.heldItem = { name: 'diamond_spear' }
+  bot._ndUse = { cur: { hand: 0, name: 'diamond_spear', confirmed: true } }
+  bot.deactivateItem = () => { sent.push('release'); bot._ndUse.cur = null }
+  ally.position.z = 3
+  spear.install(bot)
+  bot._client.write('position', { x: 0, y: 100, z: 0 })
+  bot.entity.position.x = 10
+  ally.position.z = 0
+  assert.equal(spear.teamSafe(bot), true, 'the local predicted body is already beyond this ally')
+  if (packet === 'physicTick') bot.emit(packet)
+  else bot._client.write(packet, { x: 0, y: 100, z: 0, yaw: 270, pitch: 0 })
+  assert.equal(sent[1], 'release', 'release before the server receives the unsafe ray, even without new XYZ')
+  assert.equal(bot._ndUse.cur, null)
+  bot.emit('end')
+})
+
+for (const reset of ['position', 'respawn']) test(`a native ${reset} resets the held spear's previous transmitted origin`, () => {
+  const { bot, ally } = scene(), sent: string[] = []
+  bot._client = new EventEmitter(); bot._client.write = name => { sent.push(name) }
+  bot.heldItem = { name: 'diamond_spear' }
+  bot._ndUse = { cur: { hand: 0, name: 'diamond_spear', confirmed: true } }
+  bot.deactivateItem = () => { sent.push('release') }
+  ally.position.z = 3
+  spear.install(bot)
+  bot._client.write('position', { x: 0, y: 100, z: 0 })
+  bot.entity.position.x = 10; ally.position.z = 0
+  if (reset === 'position') bot._client.emit(reset, { x: 10, y: 100, z: 0 })
+  else bot.emit(reset)
+  bot._client.write('look', { yaw: 270, pitch: 0 })
+  assert.deepEqual(sent, ['position', 'look'], 'do not release for a stale location from the previous life or correction')
+  bot.emit('end')
+})
+
+test('an unsent local position waits for the actual movement packet before releasing a safe native charge', () => {
+  const { bot, ally } = scene(), sent: string[] = []
+  bot._client = new EventEmitter(); bot._client.write = name => { sent.push(name) }
+  bot.heldItem = { name: 'diamond_spear' }
+  bot._ndUse = { cur: { hand: 0, name: 'diamond_spear', confirmed: true } }
+  bot.deactivateItem = () => { sent.push('release'); bot._ndUse.cur = null }
+  ally.position.x = 6
+  spear.install(bot)
+  bot._client.write('position', { x: 0, y: 100, z: 0 })
+  bot.entity.position.x = 2
+  assert.equal(spear.teamSafe(bot), false, 'the future local position would hit our ally')
+  bot.emit('physicTick')
+  assert.deepEqual(sent, ['position'], 'the server still holds the safe previous position')
+  bot._client.write('position', { x: 2, y: 100, z: 0 })
+  assert.deepEqual(sent, ['position', 'release', 'position'], 'release exactly before making the unsafe origin native')
+  bot.emit('end')
+})
+
 function observedStrafe(ally, age: number, z = 0) {
   ally.position = new Vec3(4, 100, z)
   ally._ndPositionReceipts = [
@@ -125,6 +180,25 @@ test('an aged ally whose observed body and entire forecast stay outside the spea
   observedStrafe(ally, 4, 3)
   assert.equal(allyAt(bot, ally, 0).z, 5)
   assert.equal(spear.teamSafe(bot), true)
+})
+
+test('a held spear covers the ally moving first while our next movement packet is pending', () => {
+  const { bot, ally } = scene()
+  bot.entity.onGround = false; bot.entity.elytraFlying = true
+  bot.entity.velocity.z = .6
+  Object.assign(ally, { position: new Vec3(4, 100, -.6), onGround: false, elytraFlying: true, height: .6,
+    _ndPositionReceipts: [
+      { x: 4, y: 100, z: -1.2, t: 950, grounded: false, kind: 'rel_entity_move' },
+      { x: 4, y: 100, z: -.6, t: 1000, grounded: false, kind: 'rel_entity_move' }
+    ], _ndObservationNow: () => 1000 })
+  assert(allyAt(bot, ally, 1).z > -.425, 'the observed ally will cross the held ray before our next move')
+  assert.equal(spear.teamSafe(bot), false, 'equal sideways motion cannot erase the interval before our packet is applied')
+  bot.entity.velocity.z = 0
+  assert.equal(spear.teamSafe(bot), false, 'a stationary holder already sees the same crossing')
+  ally.position.z = -3
+  ally._ndPositionReceipts[0].z = -3.6; ally._ndPositionReceipts[1].z = -3
+  bot.entity.velocity.z = .6
+  assert.equal(spear.teamSafe(bot), true, 'a parallel teammate outside both poses must not interrupt the charge')
 })
 
 test('spear safety never reads the known-hidden ally position or motion', () => {

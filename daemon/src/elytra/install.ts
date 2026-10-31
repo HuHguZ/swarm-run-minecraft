@@ -1,6 +1,8 @@
 'use strict'
 // Элитры (elytra.ts): установка на бота (руль, чёрный ящик), руль, раскрыть элитры, фейерверк, стены вокруг.
 const gameClock: typeof import('../game-clock') = require('../game-clock')
+const { AsyncLocalStorage }: typeof import('node:async_hooks') = require('node:async_hooks')
+const steering = new AsyncLocalStorage<object>()
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 const { BODY_H, ROCKET_MAX_TICKS, GUARD, r2 }: typeof import('./consts') = require('./consts')
 const { lookVec, worldOf, rollout, headroom }: typeof import('./physics') = require('./physics')
@@ -42,7 +44,7 @@ function install (bot) {
         try {
           if (bot.entity && bot.entity.elytraFlying) {
             const who = tag()
-            if ((S.driving > 0 || S.boundaryReturn) && !S.steering) {
+            if ((S.driving > 0 || S.boundaryReturn || S.collisionAvoidance) && !S.steering && steering.getStore() !== bot) {
               S.blockedLooks = (S.blockedLooks || 0) + 1
               S.blockedBy[who] = (S.blockedBy[who] || 0) + 1
               if (LOCK) return Promise.resolve()
@@ -61,6 +63,7 @@ function install (bot) {
     try {
       const b = bot.entity
       if (!b) return
+      S.collisionAvoidance = false
       // Земля: ящик чистится не сразу — урон падения (damage_event) приходит от сервера после касания, а без ящика
       // смерть «fell from a high place» не попадала в crashes (s7d-n-30: 2 такие смерти без записи).
       if (b.onGround && !b.elytraFlying) { S.wasFlying = false; if (++S.groundT > 10 && !S.boxHold) { S.box.length = 0; S.phase = null } return }
@@ -95,7 +98,11 @@ function install (bot) {
           const h = Math.hypot(b.velocity.x, b.velocity.z) > 0.2 ? Math.atan2(-b.velocity.x, -b.velocity.z) : b.yaw
           const L = lookVec(h, 0)
           const pl = choose(W, st, { kind: 'point', at: new Vec3(b.position.x + L.x * 12, b.position.y + 2, b.position.z + L.z * 12), gap: 3, speedMin: 0.3, arena: S.arenaBounds }) || (S.arenaBounds ? returnInside(W, st, S.arenaBounds) : null)
-          if (pl) { steer(bot, pl.yaw, pl.pitch); S.guardSaves = (S.guardSaves || 0) + 1; S.phase = S.phase || 'рефлекс' }
+          if (pl) {
+            // A resumed ground action must not undo this tick's safe flight look.
+            S.collisionAvoidance = true
+            steer(bot, pl.yaw, pl.pitch); S.guardSaves = (S.guardSaves || 0) + 1; S.phase = S.phase || 'рефлекс'
+          }
         }
       }
       // Диагностика S7d: план рулевого этого тика (цена, событие прогона, тик события) и стена по ходу — по кэшу
@@ -200,12 +207,14 @@ function install (bot) {
 function steer (bot, yaw, pitch) {
   const S = bot._ndElytra
   if (S) S.steering = true
-  try { return bot.look(yaw, pitch, true).catch(() => {}) } finally { if (S) S.steering = false }
+  // Hand guards may defer the actual look beyond this synchronous steering flag.
+  try { return steering.run(bot, () => bot.look(yaw, pitch, true).catch(() => {})) } finally { if (S) S.steering = false }
 }
 
 function startGlide (bot) {
   const b = bot.entity
   if (!b || b.onGround || b.isInWater || !wearingElytra(bot)) return false
+  if (b.elytraFlying) return true // A repeated START_FALL_FLYING makes the server stop an active glide.
   try {
     bot._client.write('entity_action', { entityId: b.id, actionId: bot.supportFeature('entityActionUsesStringMapper') ? 'start_elytra_flying' : 8, jumpBoost: 0 })
   } catch { return false }

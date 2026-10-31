@@ -3,9 +3,12 @@ import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 import { choose } from '../src/elytra/control'
 import { rollout } from '../src/elytra/physics'
+import { wall } from '../src/game-clock'
 
 // RED research test: a conservative movement estimate, not exact server fallDistance.
-test('landing from 22 blocks clears accumulated downward movement before touchdown', () => {
+for (const delayed of [false, true]) test('landing from 22 blocks clears accumulated downward movement before touchdown' + (delayed ? ' despite an exhausted compute window' : ''), t => {
+  let elapsed = 0
+  if (delayed) t.mock.method(wall, 'monotonic', () => (elapsed += 50))
   const floor = 120
   const solid = (x, y, z) => y < floor || Math.abs(x - 600) > 30 || Math.abs(z - 600) > 30
   const W: any = {

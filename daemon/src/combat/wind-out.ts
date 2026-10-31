@@ -61,6 +61,44 @@ export function windOutCandidates(bot: any, arena: WindArena) {
     .sort((a, b) => edgeRoom(arena, a.position) - edgeRoom(arena, b.position))
 }
 
+// Отвод таранщика (29.10): враг на элитрах в виду, ближе RANGE_AIR, летит на меня или своего (сближение ≥ 0.7 его скорости, ≤ 30 бл.).
+// Своих — глаза меня и союзников в 10 бл. (расчёт дорогой — бросает тот, кто рядом): порыв должен увести его тело от них дальше, чем достаёт копьё (CONTACT).
+const CONTACT = 3.5
+function deflectTargets(bot: any) {
+  const own = bot.entity?.position, sky: typeof import('../elytra/track') = require('../elytra/track')
+  if (!own || bot.entity.elytraFlying) return []
+  const guard = [own, ...(Object.values(bot.entities || {}) as any[]).filter(e => e?.position && e !== bot.entity && e.username && isAlly(bot, e) &&
+    !sky.gliding(e) && e.position.distanceTo(own) <= 10).map(e => e.position)].map(p => p.offset(0, 1.62, 0))
+  const out = []
+  for (const e of (Object.values(bot.players || {}) as any[]).map(pl => pl?.entity)) {
+    if (!e?.position || e === bot.entity || !e.username || isAlly(bot, e) || !sky.gliding(e)) continue
+    if (e.position.distanceTo(own) > RANGE_AIR) { trace('deflect:far'); continue }
+    if (!seesPlayer(bot, e)) { trace('deflect:los'); continue }
+    const v = seenV(e), sp = Math.hypot(v.x, v.y, v.z)
+    const target = guard.find(q => { const d = q.distanceTo(e.position) || 1; return d <= 30 && sp > .5 && ((q.x - e.position.x) * v.x + (q.y - e.position.y) * v.y + (q.z - e.position.z) * v.z) / d >= .7 * sp })
+    if (target) out.push({ foe: e, protect: guard }); else trace('deflect:not_at_us')
+  }
+  return out
+}
+export function deflectDecide(bot: any, own: WindReport, arena: WindArena, lag = 0, deadline?: number) {
+  const now = worldTick(bot)
+  if (now === null) return null
+  for (const { foe, protect } of deflectTargets(bot).slice(0, 1)) {
+    const allies = alliesNear(bot, foe, now)
+    const plan = planEnemyWind(bot, foe, [own], { arena, startTick: now, maxShots: 1, allies, delays: [lag], reactAfterHit: true, protect, deadline })
+    trace(!plan ? 'deflect:no_plan' : plan.baseline.clear >= CONTACT ? 'deflect:miss_anyway' : plan.nominal.clear < CONTACT ? 'deflect:weak' : 'deflect:planned')
+    // Частичный отвод — тоже цена: в худшем исходе удар откладывается на время подъёма щита (5 т., BlocksAttacks 0.25 с) и зазор
+    // растёт хотя бы на блок — шаг, щит и встречное копьё успевают.
+    const full = !!plan && plan.worst.clear >= CONTACT
+    const partial = !!plan && !full && plan.worst.reach - plan.baseline.reach >= 5 && plan.worst.clear >= plan.baseline.clear + 1
+    if (plan && plan.shots[0].fireDelay !== lag) trace('deflect:late')
+    else if (plan && plan.baseline.clear < CONTACT && !full && !partial) trace('deflect:worst_close')
+    if (!plan || plan.shots[0].fireDelay !== lag || plan.baseline.clear >= CONTACT || !full && !partial) continue
+    return { kind: full ? 'deflect' : 'deflect~', plan, foe, allies, shot: plan.shots[0] }
+  }
+  return null
+}
+
 /** Allies that a burst near this foe could move: sight is checked only for the few close to him (cost: 30 LOS rays per ally). */
 function alliesNear(bot: any, foe: any, now: number): WindReport[] {
   return (Object.values(bot.entities || {}) as any[]).filter(e => e?.position && e !== bot.entity && e.username && isAlly(bot, e) &&
@@ -98,14 +136,33 @@ export function windOutDecide(bot: any, own: WindReport, arena: WindArena, lag =
     const volley = !foe.onGround && edgeRoom(arena, foe.position) <= EDGE_AIR && (heightAbove(bot, foe.position) >= HIGH || (foe.velocity?.y || 0) > .3 ||
       (Object.values(bot.entities || {}) as any[]).some(c => c?.position && /wind_charge$/.test(c.name || '') && c.position.distanceTo(foe.position) < 6))
     const juggle = !foe.onGround && plan.nominal.air >= plan.baseline.air + JUGGLE_AIR && plan.nominal.progress >= .3
-    const kind = outward(plan.worst) ? 'out' : outside ? null : outward(plan.nominal) ? 'out?' :
-      !foe.onGround && plan.nominal.progress >= (volley ? VOLLEY_PROGRESS : CHAIN_PROGRESS) ? (volley ? 'volley' : 'chain') : juggle ? 'juggle' : null
+    // Серия (chain) — только у края, как volley: порыв сносит на 1–3 бл., с поля дальше EDGE_AIR серия не выносит (cl38–40: 737 из
+    // 753 серий — дальше 12 бл. от края, 2–6 смертей после них за раунд; заряды кончались к 150-й с — 20–22 из 28 пустых, а отвод ждал).
+    const nearEdge = edgeRoom(arena, foe.position) <= EDGE_AIR
+    const gliding = (require('../elytra/track') as typeof import('../elytra/track')).gliding(foe)
+    const kind = windKind({ worstOut: outward(plan.worst), nominalOut: outward(plan.nominal), outside, onGround: !!foe.onGround, volley, nearEdge, progress: plan.nominal.progress, juggle, gliding })
     if (outside && !kind) trace('outside')
     trace(kind ? 'kind:' + kind : `weak:${foe.onGround ? 'ground' : 'air'}`)
+    // Запас на отвод (29.10, cl35: 1098 тиков «заряд не готов/нет» при подлёте таранщика — заряды ушли на серии и подбросы): пока
+    // в воздухе враг на элитрах, последние два заряда — только на верный вынос или отвод тарана, не на серию/подброс/«вылетит?».
+    if (kind && kind !== 'out' && (require('../mace/hands') as typeof import('../mace/hands')).windCount(bot) <= RESERVE && rammersUp(bot)) { trace('reserve'); continue }
+    // Летящего на элитрах «держать в воздухе» (juggle) и серией с поля не вынести — он и так летит; по нему — только отвод тарана (cl41: после ограничения серий 257–335 juggle за раунд, к 150-й с пусты 22–27 из 28).
+    // И «вынос» летящего — тоже нет: он не падает, а планирует назад (cl42: 118–172 «out» за раунд, 3–5 смертей после ветра).
+    if (!kind && gliding) trace('glider_skip')
     if (kind) return { kind, plan, foe, allies, shot: plan.shots[0] }
   }
   return null
 }
+const RESERVE = 2
+// Вид броска по исходу плана (чистая функция — правила под тестом). Правила 29.10 (cl38–43): серия (chain) — только у края, как volley;
+// по летящему на элитрах — ничего (он не падает: вынос, серия и подброс его не выносят; против него — отвод, deflectDecide).
+export function windKind (o: { worstOut: boolean, nominalOut: boolean, outside: boolean, onGround: boolean, volley: boolean, nearEdge: boolean, progress: number, juggle: boolean, gliding: boolean }) {
+  if (o.gliding) return null
+  return o.worstOut ? 'out' : o.outside ? null : o.nominalOut ? 'out?' :
+    !o.onGround && (o.volley || o.nearEdge) && o.progress >= (o.volley ? VOLLEY_PROGRESS : CHAIN_PROGRESS) ? (o.volley ? 'volley' : 'chain') : o.juggle ? 'juggle' : null
+}
+const rammersUp = (bot: any) => { const sky: typeof import('../elytra/track') = require('../elytra/track'), me = bot.entity?.position
+  return !!me && (Object.values(bot.players || {}) as any[]).some(pl => pl?.entity?.position && pl.entity !== bot.entity && !isAlly(bot, pl.entity) && sky.gliding(pl.entity) && pl.entity.position.distanceTo(me) <= RANGE_AIR) }
 
 // Батут и волейбол (пользователь 24.10): союзник с булавой только что подпрыгнул к врагу — заряд в пол ему под ноги к тику
 // прилёта, его подбрасывает (взрыв от центра к глазам, ServerExplosion), падает он булавой (бонус от fallDistance, MaceItem).
@@ -262,13 +319,16 @@ export function installWindOut(session: any) {
     if (cfg?.arena && bot.entity && bot.health > 0 && smashShield()) return
     if (cfg?.arena && bot.entity && bot.health > 0) tryDescend()
     if (busy || !cfg?.arena || (++tick & 1) || !bot.entity || !(bot.health > 0) || process.env.ND_WIND_OUT === '0') return
-    if (!hands.windReady(bot) || bot.usingHeldItem) return
+    if (!hands.windReady(bot) || bot.usingHeldItem) {
+      if (process.env.ND_WIND_TRACE === '1' && bot.entity && deflectTargets(bot).length) trace(!hands.windReady(bot) ? ((require('../mace/hands') as typeof import('../mace/hands')).windCount(bot) ? 'deflect:gate_cooldown' : 'deflect:gate_empty') : 'deflect:gate_using:' + (bot.heldItem?.name || '?'))
+      return
+    }
     const arena: WindArena = { ...cfg.arena, killY: Number.isFinite(cfg.killY) ? cfg.killY : undefined }
     if (process.env.ND_WIND_TRACE === '1' && tick % 200 === 0 && Object.keys(windTrace).length) {
       const pt = (require('./enemy-wind') as typeof import('./enemy-wind')).planTraceCounts
       console.log('[wind-trace]', JSON.stringify(windTrace), JSON.stringify(pt)); for (const k of Object.keys(windTrace)) delete windTrace[k]; for (const k of Object.keys(pt)) delete pt[k]
     }
-    if (!windOutCandidates(bot, arena).length) {
+    if (!windOutCandidates(bot, arena).length && !deflectTargets(bot).length) {
       if (process.env.ND_WIND_TRACE === '1' && tick % 10 === 0) for (const e of (Object.values(bot.players || {}) as any[]).map(pl => pl?.entity)) {
         if (!e?.position || e === bot.entity || isAlly(bot, e) || bot.players[e.username]?.gamemode !== 0) continue
         const d = e.position.distanceTo(bot.entity.position)
@@ -294,7 +354,8 @@ export function installWindOut(session: any) {
     // тиков): досчитанный позже план всё равно не бросается.
     const deadline = t0 + ((lag + 1) * 50 + 25) * 20 / (nativeClock?.observationRate?.() || 20)
     const frame = worldTick(bot)
-    const pick = windOutDecide(bot, report.report, arena, lag, deadline)
+    // Сначала — отвод таранщика с линии на своих (жизнь своего дороже выноса), потом вынос за край.
+    const pick = deflectDecide(bot, report.report, arena, lag, deadline) ?? windOutDecide(bot, report.report, arena, lag, deadline)
     const planMs = Math.round(clock.wall.monotonic() - t0)
     planEma = planEma * .8 + planMs * .2
     if (!pick) { if (clock.wall.monotonic() > deadline) staleTick = frame; return }
@@ -335,12 +396,18 @@ export function installWindOut(session: any) {
       const onBoom = (pk: any) => { if (pk?.center && tw().windGust(pk) && Math.hypot(pk.center.x - pick.shot.burst.x, pk.center.y - pick.shot.burst.y, pk.center.z - pick.shot.burst.z) <= 1.5 + spread) entry.burst = true }
       bot._client.on('explosion', onBoom)
       let left = pick.shot.ticks + 3
+      // Отвод: «заход сорван» — за окно он ко мне ближе удара копья не подошёл и меня не ранил (своих рядом журнал не судит).
+      const hp0 = bot.health, deflect = /^deflect/.test(pick.kind)
+      let near = Infinity
       const wait = () => {
+        const q0 = deflect && bot.players?.[pick.foe.username]?.entity?.position
+        if (q0) near = Math.min(near, q0.distanceTo(bot.entity.position.offset(0, .9, 0)))
         if (left === 3) { const q = bot.players?.[pick.foe.username]?.entity?.position; entry.dbg += `, на деле ${r2(q)}` }
         if (--left > -8) return // ещё 8 тиков после окна взрыва — куда его унесло
         bot.removeListener('physicsTick', wait); bot._client.removeListener('explosion', onBoom)
         const p = bot.players?.[pick.foe.username]?.entity?.position
         if (p) { entry.edgeAfter = +edgeRoom(arena, p).toFixed(1); entry.yAfter = +p.y.toFixed(1) }
+        if (deflect) { entry.foiled = bot.health >= hp0 && near > CONTACT; entry.passed = Number.isFinite(near) ? +near.toFixed(1) : null }
         // Промах — по смещению цели, а не по факту взрыва: порыв рядом (свой или чужой) без сдвига его не сносит (Kimi AUDIT 27.10:
         // «взрыв виден», до края 7.2 → 7.2 и повтор с того же места). Порог — тот же, что у проверки повтора выше.
         lastMiss = p && p.distanceTo(foeAt) < .5 ? { me: meAt, foe: foeAt } : null

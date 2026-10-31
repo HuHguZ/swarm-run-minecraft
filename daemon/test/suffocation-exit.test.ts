@@ -126,6 +126,16 @@ test('gravel over gravel at the head: a side step before digging into the fallin
   assert.ok(f.bot.entity.position.x >= 1)
 })
 
+test('a glider under a ceiling is not buried; standing and actual flying-body intrusions remain buried', () => {
+  const f = fixture({ head: 'stone' })
+  f.bot.entity.type = 'player'
+  assert.equal(f.auto.buriedBy(f.bot)?.name, 'stone')
+  f.bot.entity.elytraFlying = true
+  assert.equal(f.auto.buriedBy(f.bot), null, 'the ceiling above the 0.6m flying body is not burial')
+  f.bot.entity.position.y = 64.65
+  assert.equal(f.auto.buriedBy(f.bot)?.name, 'stone', 'the actual gliding eye/body inside stone still needs rescue')
+})
+
 test('a side escape clears the whole eye footprint before reporting arrival', async () => {
   const f = fixture()
   const escaped = await f.run(() => f.auto.stepOutOfWall(f.bot, { ctl: f.ctl, maxMs: 2000 }))

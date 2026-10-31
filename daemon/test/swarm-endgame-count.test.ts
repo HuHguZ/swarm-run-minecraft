@@ -113,3 +113,14 @@ test('sight loss keeps hunting only the last observed place, with no invented li
   assert.ok(plan.every(t => t.kind === 'goto' && t.data.search && t.data.hunt && t.data.finishing))
   assert.ok(plan.every(t => t.data.enemyPosition.x === 20 && t.data.enemyPosition.y === 64 && t.data.enemyPosition.z === 0))
 })
+
+// Цикл 23 (cl86): в хвосте еды в запасе нет ни у кого, голод 7–17 — регенерации нет, «recover» не лечил минутами.
+test('wound recovery needs a way to heal: no food, hunger below 18 and no potion keeps the fight', () => {
+  const f = battle(3, 7, true, 4)
+  for (const m of f.team) { m.inventory = { iron_sword: 1 }; m.food = 10 }
+  assert.ok(f.plan().every(t => t.kind === 'fight' && t.data.finishing), 'nothing to heal with — fight on')
+  for (const m of f.team) m.food = 19
+  assert.ok(f.plan().every(t => t.kind === 'recover'), 'hunger 18+ regenerates — recover')
+  for (const m of f.team) { m.food = 10; m.inventory = { iron_sword: 1, bread: 3 } }
+  assert.ok(f.plan().every(t => t.kind === 'recover'), 'food in the bag — recover and eat')
+})

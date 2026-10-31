@@ -10,7 +10,7 @@ import * as projectiles from '../throw'
 import bow = require('../bow')
 import * as ranged from '../ranged'
 import { fallStep, reachFromBox } from '../elytra/physics'
-import { EYE, BODY_H, REACH, TICK_MS } from '../elytra/consts'
+import { EYE, BODY_H, REACH, TICK_MS, RESCUE_ROCKETS } from '../elytra/consts'
 import { flightControl } from '../elytra/install'
 import { rocketForecast } from '../elytra/rocket-forecast'
 import { usingOf } from '../pvp/combat-observe'
@@ -98,8 +98,9 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
     return evaluateAerial({
       self: actor(bot.entity), target: target?.position ? actor(target, ctx.vel?.() ?? target.velocity) : null,
       health: bot.health ?? 20, interrupted: ctl.aborted, safeLanding: safeLanding(target), corridorClear: corridor(target),
-      rangedReady: clock.now() - rangedAt >= 1500,
-      equipment: { elytra: equipment.elytra, rockets: equipment.rockets,
+      rangedReady: clock.now() - rangedAt >= 1500 && !!target?.position && bow.hasObservedVelocity(target),
+      // A new takeoff cannot spend the reserve kept by its executor.
+      equipment: { elytra: equipment.elytra, rockets: Math.max(0, equipment.rockets - (operations.gliding(bot.entity) ? 0 : RESCUE_ROCKETS)),
         chestplate: equipment.chest, mace: equipment.mace, spear: !!spearItem,
         ranged: inventory.some((item: any) => item.name === 'bow') && inventory.some((item: any) => /arrow$/.test(item.name)) || ranged.crossbows(bot).some((entry: any) => entry.info.loaded),
         pearls: clock.now() - pearlAt > 5000 ? inventory.filter((item: any) => item.name === 'ender_pearl').reduce((n: number, item: any) => n + item.count, 0) : 0 },
@@ -197,11 +198,13 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
       ? await ranged.fire(bot, target, crossbow.item, { velFn: ctx.vel, shouldStop: stop, onHit })
       : await bow.shoot(bot, target, { velFn: ctx.vel, shouldStop: stop, onHit, follow: false })
     if (shot.fired || shot.shot) { stats.airArrows = (stats.airArrows ?? 0) + 1; operations.used('midair-' + (crossbow ? 'crossbow' : 'bow')) }
-    return { ok: !!(shot.fired || shot.shot), ...shot, node: 'RangedVolley' }
+    return { ok: !!(shot.fired || shot.shot), ...shot, node: 'RangedVolley',
+      note: shot.fired || shot.shot ? undefined : 'воздушный залп: ' + (shot.why || 'выстрел не подтверждён') }
   }
   const run = async (ctl: FlightControl, ctx: any = {}) => {
     const target = enemy()
     if (!target?.position || !valid(ctl, target.id)) return { ok: false, note: 'aerial target lost' }
+    if (!operations.gliding(bot.entity) && !decide(ctl, ctx).selected) return { ok: false, note: 'воздушный бой: взлёт недоступен' }
     operations.allow()
     if (!operations.gliding(bot.entity)) {
       const launch = await operations.takeoff(bot, ctl, { pitch: 0.45, stats })

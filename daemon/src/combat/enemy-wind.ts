@@ -15,7 +15,7 @@ export interface EnemyWindShot {
   thrower: string; fireDelay: number; ticks: number; from: Vec3; aim: Vec3; yaw: number; pitch: number
   velocity: Vec3; burst: Vec3; feet: Vec3; fireTick?: number; arrivalTick?: number
 }
-export interface EnemyWindOptions { arena: WindArena; startTick?: number; maxShots?: number; allies?: WindReport[]; delays?: number[]; reactAfterHit?: boolean; juggle?: boolean; deadline?: number }
+export interface EnemyWindOptions { arena: WindArena; startTick?: number; maxShots?: number; allies?: WindReport[]; delays?: number[]; reactAfterHit?: boolean; juggle?: boolean; deadline?: number; protect?: Array<{ x: number, y: number, z: number }> }
 
 // Blast Protection has a separate attribute from netherite's ordinary knockback resistance; glint hides its level.
 export function windResistance(foe: any): { lo: number; hi: number } {
@@ -25,9 +25,11 @@ export function windResistance(foe: any): { lo: number; hi: number } {
 }
 
 function bodyState(bot: any, body: WindReport | any) {
-  const entity = { position: vec(body.position), velocity: vec(body.velocity), onGround: !!body.onGround,
-    yaw: body.yaw || 0, pitch: 0, effects: body.effects || {}, attributes: body.attributes || {}, _ndPoseHeight: body.height || 1.8 }
-  return edges.stateOf({ ...bot, entity, food: 20, inventory: { slots: [], items: () => [] },
+  // Летящий на элитрах — полётом по его взгляду (prismarine elytraFlying, элитры в слоте 6), а не падающим телом (29.10).
+  const entity = { position: vec(body.position), velocity: vec(body.velocity), onGround: !!body.onGround, elytraFlying: !!body.gliding,
+    yaw: body.yaw || 0, pitch: body.gliding ? body.pitch || 0 : 0, effects: body.effects || {}, attributes: body.attributes || {}, _ndPoseHeight: body.gliding ? .6 : body.height || 1.8 }
+  const slots: any[] = []; if (body.gliding) slots[6] = { name: 'elytra' }
+  return edges.stateOf({ ...bot, entity, food: 20, inventory: { slots, items: () => [] },
     jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0 }, { ...edges.IDLE, ...body.control })
 }
 
@@ -161,11 +163,13 @@ function rollout(bot: any, foe: any, shots: EnemyWindShot[], arena: WindArena, r
   const done = new Set<number>(), meleeResist = edges.resistOf(bot, foe)
   const impacts: Array<{ fireDelay: number; ticks: number; burst: Vec3 }> = []
   const initial = Math.max(Math.abs(state.pos.x - arena.x), Math.abs(state.pos.z - arena.z))
-  let progress = 0, out = false, outTick = null, lastHurt = -Infinity, air = 0, landed = false
+  let progress = 0, out = false, outTick = null, lastHurt = -Infinity, air = 0, landed = false, clear = Infinity, reach = Infinity
   for (let tick = 1; tick <= 65; tick++) {
     // The victim can steer back towards the arena: do not price an AFK trajectory as an unavoidable kill.
     // reactAfterHit: he cannot see the charge coming — until the first burst he keeps his own (unknown → no) input.
-    if (!foe.reactAfterHit || impacts.length) {
+    // Летящий правит взглядом, а не бегом к центру: держит свой курс (взгляд в прогнозе не меняем).
+    if (foe.gliding) state.control = { ...edges.IDLE }
+    else if (!foe.reactAfterHit || impacts.length) {
       state.yaw = Math.atan2(state.pos.x - arena.x, state.pos.z - arena.z)
       state.control = { ...edges.IDLE, forward: true, sprint: true }
     } else if (foe.run) { state.yaw = foe.run.yaw; state.control = { ...edges.IDLE, forward: true, sprint: true } }
@@ -186,6 +190,12 @@ function rollout(bot: any, foe: any, shots: EnemyWindShot[], arena: WindArena, r
       state.vel = state.vel.plus(windImpulse(bot, state.pos, hit.burst, { resistance, height: foe.height || 1.8 }))
     }
     frames.push({ pos: state.pos.clone(), vel: state.vel.clone(), onGround: state.onGround })
+    // Отвод таранщика (foe.protect — глаза своих): ближе всего его тело к своим за 20 т. — достанет ли копьё.
+    if (foe.protect && tick <= 20) for (const q of foe.protect) {
+      const d = state.pos.offset(0, .3, 0).distanceTo(q); clear = Math.min(clear, d)
+      // Первый тик, когда его копьё достаёт (wind-out CONTACT = 3.5): отложенный удар — время на щит (5 т.) и встречное копьё.
+      if (d < 3.5 && reach === Infinity) reach = tick
+    }
     // Air time until the first landing: how long the swarm can keep juggling him.
     if (!landed && state.onGround) landed = true; else if (!landed) air++
     progress = Math.max(progress, Math.max(Math.abs(state.pos.x - arena.x), Math.abs(state.pos.z - arena.z)) - initial)
@@ -193,7 +203,7 @@ function rollout(bot: any, foe: any, shots: EnemyWindShot[], arena: WindArena, r
     // Below the arena's death line (dug hole, off the outer wall onto the far terrain) is the same result as leaving the square.
     if (state.pos.y < (arena.killY ?? -64) - 1) { if (!out) { out = true; outTick = tick } break }
   }
-  return { frames, impacts, progress, out, ticks: outTick, position: state.pos.clone(), air }
+  return { frames, impacts, progress, out, ticks: outTick, position: state.pos.clone(), air, clear, reach }
 }
 
 function bounds(bot: any, foe: any, shots: EnemyWindShot[], arena: WindArena, resistance: number, team?: WindReport[], tracks?: Map<WindReport, Frame[]>) {
@@ -202,7 +212,7 @@ function bounds(bot: any, foe: any, shots: EnemyWindShot[], arena: WindArena, re
   for (let mask = 1; mask < 1 << shots.length; mask++) {
     const run = rollout(bot, foe, shots, arena, resistance, mask)
     if (team && !windTeamSafe(bot, team, run.impacts, arena, tracks)) return null
-    if (Number(run.out) < Number(worst.out) || run.out === worst.out && run.progress < worst.progress) worst = run
+    if (foe.protect ? run.clear < worst.clear : Number(run.out) < Number(worst.out) || run.out === worst.out && run.progress < worst.progress) worst = run
   }
   return worst
 }
@@ -223,6 +233,7 @@ function enemyView(bot: any, raw: any) {
   const effects = run && raw.onGround && amp >= 0 && speedId != null ? { [speedId]: { id: speedId, amplifier: amp, duration: 200 } } : {}
   return { id: raw.id, username: raw.username, position: vec(raw.position), velocity, run, effects,
     onGround: !!raw.onGround, width: raw.width || .6, height: raw.height || 1.8, yaw: raw.yaw, metadata,
+    gliding: (require('../elytra/track') as typeof import('../elytra/track')).gliding(raw), pitch: raw.pitch || 0,
     equipment: (gear?.equipment || raw.equipment || []).map(visiblePlayerItem), _ndUnknownArmorSlots: gear?.unknownArmorSlots ?? raw._ndUnknownArmorSlots ?? 0 }
 }
 
@@ -244,6 +255,7 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
   if (now === null || !arena || !raw?.position || !seesPlayer(bot, raw)) return null
   const foe: any = enemyView(bot, raw)
   foe.reactAfterHit = !!options.reactAfterHit
+  if (options.protect?.length) foe.protect = options.protect.map(vec)
   // A synchronous plan revisits the same raw LOS cells from many observed-cell rays; keep full Blocks, including unknowns, only for this call.
   const rawWorld = edges.worldOf(bot)
   const resistance = windResistance(foe), observed = observedCollision(bot, p => rawWorld.getBlock(p)), world = edges.worldOf(observed)
@@ -277,7 +289,8 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
         const run = bounds(snapshot, foe, trial, arena, resistance.lo, team, allyTracks)
         if (!run) { planTrace('shot:ally_unsafe'); continue }
         // juggle: keeping him airborne longer is worth as much as a little outward progress — the next ally throws again.
-        const value = (r: ReturnType<typeof rollout>) => Number(r.out) * 1000 + r.progress + (options.juggle ? .05 * r.air : 0)
+        // Отвод (options.protect): чем дальше его тело проходит от своих, тем лучше; до 6 бл. — дальше копьё не достаёт с запасом.
+        const value = (r: ReturnType<typeof rollout>) => Number(r.out) * 1000 + (options.protect ? Math.min(r.clear, 6) : r.progress + (options.juggle ? .05 * r.air : 0))
         const score = value(run)
         if (!(score > value(nominal) + .01)) planTrace('shot:no_gain')
         if (score > value(nominal) + .01 && (!best || score > best.score)) best = { shot, run, score }
@@ -290,7 +303,7 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
   if (!shots.length || late()) return null
   const worst = bounds(snapshot, foe, shots, arena, resistance.hi, team, allyTracks)
   if (!worst) return null
-  const outcome = (r: ReturnType<typeof rollout>) => ({ out: r.out, progress: r.progress, ticks: r.ticks, position: r.position, air: r.air })
+  const outcome = (r: ReturnType<typeof rollout>) => ({ out: r.out, progress: r.progress, ticks: r.ticks, position: r.position, air: r.air, clear: r.clear, reach: r.reach })
   return { target: foe.username || String(foe.id), targetAt: foe.position, gameTick: now, resistance, tried,
     shots: shots.map(s => ({ ...s, fireTick: now + s.fireDelay, arrivalTick: now + s.fireDelay + s.ticks })),
     baseline: outcome(baseline), nominal: outcome(nominal), worst: outcome(worst) }

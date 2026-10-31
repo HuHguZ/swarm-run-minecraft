@@ -49,6 +49,15 @@ export function assignFighters(S: PvpPlan): void {
   // на сброс (стенд 25.10: Tester в незерите в 1 бл. от края гребня, у всех по 128 зарядов — «бой 0, сброс 0, лут/укрытие 8»,
   // 18 раз «проигрываем — прячусь»; пользователь: «не выкидывают с колизея ветром»).
   const edgeWind = (m: SwarmMember, foe?: SharedEnemy) => !!foe && !!S.edgeAt(foe) && shoveOf(foe) >= shoveFloor(m, foe) && count(m.inventory, 'wind_charge') >= 2 && distance(m.position, foe.position) <= 48
+  // Цена бросить начатый бой, в блоках пути (как targetCost): перепрокладка — 4; урон, уже нанесённый цели (оценка хп по своим
+  // попаданиям, board), пропадает, если её не добить: 0.8 бл. на каждое снятое хп (полцели ≈ 8 бл. ≈ 1.4 с бега); вплотную в бою —
+  // ещё замах и перезапуск боя ~1.5 с ≈ 8 бл. (цикл 20, cl74–76: почти все смены цели — «новая ближе на 4+ бл.»).
+  const abandonCost = (m: SwarmMember, prev: SharedEnemy) => {
+    const was = board.tasks().find(t => t.id === `pvp:${m.id}`)
+    if (!was || was.data?.target !== prev.id || !/^(fight|goto)$/.test(was.kind)) return 4
+    const hurt = Math.max(0, 20 - (prev.hpEstimate ?? 20)) * 0.8
+    return 4 + hurt + (was.kind === 'fight' && distance(m.position, prev.position) <= 4.5 ? 8 : 0)
+  }
   for (const m of [...team].sort((a, b) => b.strength - a.strength || a.id.localeCompare(b.id))) {
     const covering = S.endgame && plan.get(m.id)?.kind === 'fight' && plan.get(m.id)?.data?.cover ? plan.get(m.id) : undefined
     if (S.endgame) {
@@ -73,7 +82,7 @@ export function assignFighters(S: PvpPlan): void {
     const prevId = board.tasks().find(t => t.id === `pvp:${m.id}`)?.data?.target
     const prev = prevId && best && prevId !== best.id ? enemies.find(e => e.id === prevId && !untouchable.has(e.id)) : undefined
     const covered = covering && enemies.find(e => e.id === covering.data?.target)
-    const foe = covered || (hunting(m) && !untouchable.has(prey!.id) ? prey! : prev && targetCost(m, prev) <= targetCost(m, best!) + 4 ? prev : best)
+    const foe = covered || (hunting(m) && !untouchable.has(prey!.id) ? prey! : prev && targetCost(m, prev) <= targetCost(m, best!) + abandonCost(m, prev) ? prev : best)
     // Ушёл от летящей цели, которую нечем достать, — запомнить (возврат к ней только в досягаемости); вернулся к ней или её нет — забыть.
     const leftAerial = S.state.leftAerial ??= new Map()
     const prevFoe = prevId ? enemies.find(e => e.id === prevId) : undefined

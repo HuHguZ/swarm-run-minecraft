@@ -9,9 +9,12 @@ export async function wingOrbit (session, ctl, p: any = {}) {
   const sky = require('../elytra')
   const { Vec3 }: typeof import('vec3') = require('vec3')
   const foe = () => bot.players?.[p.target]?.entity
+  const glidingFoe = () => sky.gliding(foe()) && (require('../pvp/last-seen') as typeof import('../pvp/last-seen')).seesPlayer(bot, foe())
   if (!foe()) return { ok: false, why: 'цели не видно' }
+  if (glidingFoe()) return { ok: false, why: 'цель на элитрах — нужен перехват' }
   const k = sky.kit(bot)
   if (!k.elytra || k.rockets < 2 + sky.RESCUE_ROCKETS) return { ok: false, why: 'нет элитр или ракет' }
+  const fired = session._windOut?.fired
   const R = p.radius ?? 8, floorY = Number.isFinite(p.floorY) ? p.floorY : (p.arena?.y ?? -64)
   const high = () => { const e = foe(); return !!e && (!e.onGround || e.position.y - floorY > 6) }
   if (!high()) return { ok: false, why: 'он не в воздухе' }
@@ -45,11 +48,23 @@ export async function wingOrbit (session, ctl, p: any = {}) {
       return { kind: 'point', at: new Vec3(f.x + Math.cos(a) * R, f.y + (sky.gliding(e) ? 0 : 3), f.z + Math.sin(a) * R), minY: f.y - 2, maxY: f.y + 12, gap: 3, speedMin: .4 }
     },
     rocketIf: s => { const e = foe(); return !!e && (s.p.y < e.position.y + 1 || Math.hypot(s.v.x, s.v.z) < .6) },
-    until: () => !windCount(bot) ? 'заряды закончились' : !high() ? 'он внизу' : null
+    until: () => !windCount(bot) ? 'заряды закончились' : glidingFoe() ? 'цель на элитрах' : !high() ? 'он внизу' : null
   })
   const e = foe()
   let landed: any = { ok: !!bot.entity.onGround }
-  if (sky.gliding(bot.entity)) landed = await sky.land(bot, ctl, { away: e ? e.position : null, arena: p.arena })
-  try { if (bot.entity.onGround && sky.wearingElytra(bot)) await sky.chestDown(bot, ctl, { arena: p.arena }) } catch {}
-  return { ok: true, why: flight.why, ms: gameClock.now() - t0, nearTicks: near, closest: Number.isFinite(closest) ? Math.round(closest * 10) / 10 : null, landed: !!landed.ok, at: bot.entity.position.floored() }
+  let combat: any = null
+  try {
+    const left = (p.seconds ?? 12) * 1000 - (gameClock.now() - t0)
+    // Keep the same owner until combat finishes; returning airborne lets unmanaged rescue steal the approach.
+    if (flight.why === 'цель на элитрах' && !ctl.aborted && sky.gliding(bot.entity) && glidingFoe() && left > 0) {
+      session.updateMovements()
+      combat = await require('../combat').fight(session, ctl, { target: p.target, allowPlayer: true, allowRanged: true,
+        timeoutSeconds: left / 1000, retreatAtHealth: 3, arena: p.arena })
+    }
+  } finally {
+    if (sky.gliding(bot.entity)) landed = await sky.land(bot, ctl, { away: e ? e.position : null, arena: p.arena })
+    try { if (bot.entity.onGround && sky.wearingElytra(bot)) await sky.chestDown(bot, ctl, { arena: p.arena }) } catch {}
+  }
+  const windShots = Number.isFinite(fired) && Number.isFinite(session._windOut?.fired) ? Math.max(0, session._windOut.fired - fired) : null
+  return { ok: true, why: flight.why, combat, ms: gameClock.now() - t0, windShots, nearTicks: near, closest: Number.isFinite(closest) ? Math.round(closest * 10) / 10 : null, landed: !!landed.ok, at: bot.entity.position.floored() }
 }

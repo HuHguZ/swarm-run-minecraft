@@ -6,7 +6,7 @@
 import * as gameClock from '../game-clock'
 import * as pick from '../pick'
 import { sleep } from '../movement'
-import { DRAW_MS, SPEED, GRAVITY, aim, blockedAt } from './ballistics'
+import { DRAW_MS, SPEED, GRAVITY, aim, aimMoving, blockedAt } from './ballistics'
 import { observeCharge } from './charge'
 import { leadTarget, traceTarget, observedVelocity } from './track'
 import type { ShotState } from './shot-state'
@@ -64,11 +64,15 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
   const eye = () => pick.eyeOf(bot).offset(0, -.1, 0)
   // Путь закрыт ещё до натяжения — не тратить секунду: вызывающий должен
   // сменить позицию (или идти в ближний бой).
-  const pre = aim(eye(), targetNow(), speed, GRAVITY, steep)
+  // До натяжения — текущая скорость; при спуске всё равно проверяется измеренное смещение.
+  const motion = mode === 'compensate' && bot.entity.velocity || { x: 0, y: 0, z: 0 }
+  const pre = mode === 'compensate'
+    ? aimMoving(eye(), targetNow(), motion, !bot.entity.onGround, speed, GRAVITY, steep)
+    : aim(eye(), targetNow(), speed, GRAVITY, steep)
   if (!pre) return { shot: false, why: 'не долетит' }
   // peek — выстрел из-за укрытия в прыжке (peek_shot): сейчас стенка закрывает, откроется на вершине прыжка; закрыто ли
   // в миг спуска — проверка при выстреле (release) та же.
-  const wall = peek ? null : blockedAt(bot, eye(), pre, undefined, speed)
+  const wall = peek ? null : blockedAt(bot, eye(), pre, motion, speed)
   if (wall) return { shot: false, blocked: true, why: `на линии стрельбы блок ${wall.x},${wall.y},${wall.z}` }
   if (!bot.heldItem || bot.heldItem.name !== 'bow') await bot.equip(bow, 'hand')
   const charge = observeCharge(bot)

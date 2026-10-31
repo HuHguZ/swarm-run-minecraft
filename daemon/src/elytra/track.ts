@@ -65,7 +65,11 @@ function track (bot, { enemy, listen = true, clip = null }: any) {
       while (his.hist.length > 2 && now - his.hist[0].t > 160) his.hist.shift()
       const a = his.hist[0]; const bb = his.hist[his.hist.length - 1]
       const dt = (bb.t - a.t) / 50
-      if (dt > 0.6) his.vel = { x: (bb.x - a.x) / dt, y: (bb.y - a.y) / dt, z: (bb.z - a.z) / dt }
+      if (e._ndVisible === true && (receipt?.kind === 'rel_entity_move' || receipt?.kind === 'entity_move_look')) {
+        // Visible packet observations survive a slow flight tick; reacquisition still resets the shared tracker.
+        const v = (require('../bow/track') as typeof import('../bow/track')).observedVelocity(e)
+        his.vel = v.ageTicks <= 160 / TICK_MS ? { x: v.x, y: v.y, z: v.z } : { x: 0, y: 0, z: 0 }
+      } else if (dt > 0.6) his.vel = { x: (bb.x - a.x) / dt, y: (bb.y - a.y) / dt, z: (bb.z - a.z) / dt }
       const fl = gliding(e)
       if (fl && !his.flying) { his.since = now; st.seen++ }
       if (!fl && his.flying) st.airMs += now - his.since
@@ -105,9 +109,12 @@ function track (bot, { enemy, listen = true, clip = null }: any) {
       if (!best || d < best.d) best = { d, t, q }
     }
     const sp = Math.hypot(his.vel.x, his.vel.y, his.vel.z)
-    if (contact || (best && best.d < 3.5 && best.t <= 20 && sp > 0.5)) {
+    const diving = best && best.d < 3.5 && best.t <= 20 && sp > 0.5
+    // A flyer can brake or orbit instead of keeping myV*t; a charged close pass can turn into that manoeuvre.
+    const turningLance = diving && gliding(bot.entity) && lance && now + best.t * TICK_MS >= his.readyAt && lance.lanceDamage(held, look, his.vel, myV).dmg > 0
+    if (contact || diving) {
       const miss = best?.d ?? contact.q.offset(0, .3, 0).distanceTo(me)
-      const out = { kind: contact ? 'lance' : 'dive', eta: (contact || best).t, miss: r2(miss), at: (contact || best).q, speed: r2(sp), mace: held === 'mace' }
+      const out = { kind: contact || turningLance ? 'lance' : 'dive', eta: (contact || best).t, miss: r2(miss), at: (contact || best).q, speed: r2(sp), mace: held === 'mace' }
       if (!active) st.dives++
       active = active ? Object.assign(active, out) : out
       return active

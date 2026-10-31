@@ -6,6 +6,7 @@ import { LAN, rcon } from './server'
 import * as fs from 'fs'
 import path = require('path')
 import * as net from 'net'
+const DIAG = path.join(ROOT, 'farm', 'diag')
 import { spawn, execFile } from 'child_process'
 import * as os from 'os'
 import { randomBytes, createHash } from 'crypto'
@@ -135,8 +136,13 @@ export async function up (i, n) {
     if (viewerOpen || ports.has(s.viewer)) throw new Error(`${s.name}: viewer-порт ${s.viewer} уже занят`)
     fs.mkdirSync(s.mem, { recursive: true })
     const out = fs.openSync(path.join(ROOT, 'farm', `daemon-ffa-${s.name}.out.log`), 'w')
-    const env = { ...process.env, ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(LAN || 25600 + i), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem }
+    const env = { ...process.env, ND_WS_PORT: String(s.ws), MC_USERNAME: s.name, MC_PORT: String(LAN || 25600 + i), ND_VIEWER_PORT: String(s.viewer), ND_MEMORY_DIR: s.mem,
+      // При падении от нехватки памяти — отчёт Node и один снимок кучи (что заняло память; стека JS в отчёте OOM нет) в farm/diag:
+      // демон стенда 29 упал за 155 с без следа (29.10, 4 ГБ — синхронный разгон). Предел 2 ГБ (обычно куча ≤ 0.6 ГБ) — снимок
+      // вдвое меньше. Свой NODE_OPTIONS вызывающего идёт последним и перекрывает.
+      NODE_OPTIONS: `--report-on-fatalerror --report-directory=${DIAG} --heapsnapshot-near-heap-limit=1 --diagnostic-dir=${DIAG} --max-old-space-size=2048 ${process.env.NODE_OPTIONS || ''}`.trim() }
     const title = `nd-fleet-${i}-${s.name}-${s.ws}-${randomBytes(16).toString('hex')}`
+    fs.mkdirSync(DIAG, { recursive: true })
     const p = spawn(process.execPath, [`--title=${title}`, path.join(cwd, 'src', 'index.js')], { cwd, env, detached: true, stdio: ['ignore', out, out], windowsHide: true })
     await new Promise<void>((resolve, reject) => { p.once('spawn', resolve); p.once('error', reject) })
     p.unref()

@@ -226,8 +226,10 @@ function softTransform (chunk, enc, cb) {
       return cb()
     }
     let offset = 0
-    let r = readVarIntSoft(this.buffer, offset)
-    if (r) {
+    const drain = () => {
+      const deadline = gameClock.wall.monotonic() + 8
+      let r = readVarIntSoft(this.buffer, offset)
+      if (r) {
       while (this.buffer.length >= offset + r.size + r.value) {
         try {
           this.push(this.buffer.slice(offset + r.size, offset + r.size + r.value))
@@ -238,10 +240,20 @@ function softTransform (chunk, enc, cb) {
         offset += r.size + r.value
         r = readVarIntSoft(this.buffer, offset)
         if (!r) break
+        // Dispatch can run sight/aim listeners; a network backlog must leave turns for physics and RPC.
+        if (this.buffer.length >= offset + r.size + r.value && gameClock.wall.monotonic() >= deadline) {
+          gameClock.wall.setImmediate(() => {
+            if (this.destroyed) return cb()
+            try { drain() } catch (error) { cb(error) }
+          })
+          return
+        }
       }
+      }
+      this.buffer = this.buffer.slice(offset)
+      return cb()
     }
-    this.buffer = this.buffer.slice(offset)
-    return cb()
+    return drain()
 }
 function patchSplitter (client) {
   const sp = client && client.splitter

@@ -137,7 +137,6 @@ class Eyes {
   declare bot: any
   declare mem: Map<string, Map<string, any>> // измерение → клетка → запись
   declare cache: Map<string, any> // 'cx,cz,sy' → { data, cells }
-  declare tried: Map<string, any>
   declare stats: any
   declare opts: any
   declare shapes: any
@@ -152,7 +151,6 @@ class Eyes {
     this.bot = bot
     this.mem = new Map()
     this.cache = new Map()
-    this.tried = new Map()
     this.opts = {
       every: opts.every ?? env('ND_EYES_EVERY', 10),
       rays: opts.rays ?? env('ND_EYES_RAYS', 48),
@@ -172,7 +170,7 @@ class Eyes {
   // Смена измерения: кеш секций и «не видно отсюда» — заново (память увиденного — по измерениям, остаётся).
   syncDim () {
     const dim = dimOf(this.bot)
-    if (dim !== this.dim) { this.dim = dim; this.cache.clear(); this.tried.clear(); this.want.clear(); this.count.clear() }
+    if (dim !== this.dim) { this.dim = dim; this.cache.clear(); this.want.clear(); this.count.clear() }
     return dim
   }
 
@@ -223,7 +221,6 @@ class Eyes {
     const k = keyOf(x, y, z)
     const r = m.get(k)
     if (r && r.name !== newName) { m.delete(k); this.stats.forgot++; this.count.set(r.name, (this.count.get(r.name) || 1) - 1) }
-    this.tried.delete(k)
   }
 
   dropSection (cx, cz, sy) { this.cache.delete(`${cx},${cz},${sy}`) }
@@ -347,7 +344,6 @@ class Eyes {
       if (counter.rays >= rays || nowMs() - t0 > maxMs) break
       if (seesCell(read, this.shapes, o, c, counter)) { c.seen = true; this.saw(c.name, c.x, c.y, c.z) } else { c.tx = o.x; c.ty = o.y; c.tz = o.z }
     }
-    if (this.tried.size > 50000) this.tried.clear()
     const ms = nowMs() - t0
     this.stats.sweeps++
     this.stats.rays += counter.rays
@@ -379,8 +375,6 @@ class Eyes {
       if ((p.z & 15) === 15) this.dropSection(cx, cz + 1, sy)
       if (((p.y - minY) & 15) === 0) this.dropSection(cx, cz, sy - 1)
       if (((p.y - minY) & 15) === 15) this.dropSection(cx, cz, sy + 1)
-      // Соседи клетки могли открыться (выкопал камень — руда за ним теперь с открытой гранью).
-      for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) this.tried.delete(keyOf(p.x + dx, p.y + dy, p.z + dz))
     }
     const onLoad = corner => {
       if (!corner) return

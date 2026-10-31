@@ -5,7 +5,7 @@ import { G, HALF, SAFE_FALL, TICK_MS, wrap } from './consts'
 // The world belongs to one bot. Recheck the remaining route against fresh geometry each tick.
 const routes = new WeakMap<object, any>()
 
-export function landingPlan (W, st, goal, price, H = 18) {
+export function landingPlan (W, st, goal, price, H = 18, looks?: { yaws: Iterable<number>; pitches: Iterable<number> }) {
   let work = 0
   // В явно оплаченном спуске допустим урон; касание прогноза чуть входит в пол, итог считает landingDamage.
   const safeLimit = SAFE_FALL + (goal.maxFallDamage > 0 ? goal.maxFallDamage + 1 - 1e-6 : 0)
@@ -23,10 +23,15 @@ export function landingPlan (W, st, goal, price, H = 18) {
       boostMin: s.boostMin === undefined ? undefined : Math.max(0, s.boostMin - 1),
       boostMax: s.boostMax === undefined ? undefined : Math.max(0, s.boostMax - 1) }
   }
-  const evaluate = (path, boost = st.boost) => {
+  const evaluate = (path, boost = st.boost, traced = null) => {
     let s: any = { p: st.p, v: st.v, boost, fd: st.fd }
     for (let i = 0; i < path.length; i++) {
-      s = advance(s, path[i])
+      // Keep the search budget when reusing the complete nominal path just traced below.
+      if (traced) {
+        spend()
+        if (i + 1 < path.length) continue
+        s = traced
+      } else s = advance(s, path[i])
       if (s.kind) {
         if (s.kind !== 'floor' || !accepts(s.fd)) return null
         const r = { ...s, t: i + 1 }
@@ -36,22 +41,33 @@ export function landingPlan (W, st, goal, price, H = 18) {
     }
     return null
   }
-  const certify = path => {
+  const certify = (path, traced = null) => {
     // shortcut: check mean and expiry bounds only; intermediate expiry can follow a different curved trajectory.
-    const nominal = evaluate(path)
+    const nominal = evaluate(path, st.boost, traced)
     if (!nominal) return null
-    let c = nominal.c
+    let c = nominal.c, length = nominal.path.length
     const checked = new Set([st.boost])
     for (const boost of [st.boostMin, st.boostMax]) {
+      // Further expiry checks can only raise this price above an already certified winner.
+      if (best && c >= best.c) return null
       if (!(boost >= 0) || checked.has(boost)) continue
       checked.add(boost)
-      const bound = evaluate(nominal.path, boost)
+      const bound = evaluate(path, boost)
       if (!bound) return null
       c = Math.max(c, bound.c)
+      length = Math.max(length, bound.path.length)
     }
-    return { ...nominal, c }
+    return { ...nominal, c, path: path.slice(0, length) }
   }
   let best = null
+  const compareShort = () => {
+    const pending = looks
+    looks = undefined
+    if (pending) for (const yaw of pending.yaws) for (const pitch of pending.pitches) {
+      const result = certify(Array.from({ length: H }, () => ({ yaw, pitch })))
+      if (result && (!best || result.c < best.c)) best = { yaw, pitch, ...result }
+    }
+  }
   const search = () => {
     const remembered = routes.get(W)
     if (remembered?.key === key && remembered.path.length) {
@@ -73,53 +89,65 @@ export function landingPlan (W, st, goal, price, H = 18) {
     const heading = Math.atan2(-st.v.x, -st.v.z)
     const curves = [0, .9 / H, -.9 / H, 1.35 / H, -1.35 / H, 2 / H, -2 / H]
     const maxTicks = Math.min(12000 / TICK_MS, Math.ceil(Math.max(SAFE_FALL, st.p.y - goal.at.y) / SAFE_FALL) * H * 2)
-    for (const dive of [-1.3, -1, -.75, -.55, -.38, 0]) for (const flare of [.28, .45, .7, .95]) for (const curve of curves) {
-      const path = []
-      let s: any = { p: st.p, v: st.v, boost: st.boost, fd: st.fd }
-      let recovering = false
-      const commandAt = (t, pitch) => ({ yaw: wrap(heading + curve * t), pitch })
-      // This client-style fall channel only prunes the search to retain S7d descent control.
-      // Final acceptance uses independent movement fd and the complete collision-checked path.
-      const canRecover = (from, t) => {
-        if (from.kind) return from.kind === 'floor' && accepts(from.fd)
-        const p = { ...from.p }; const v = { ...from.v }
-        let fd = from.fd; let clientFd = from.clientFd ?? fd; let boost = from.boost
-        for (let j = 0; j < H; j++) {
-          spend()
-          const oldY = p.y
-          if (v.y > -0.5 && clientFd > 1) clientFd = 1
-          const command = commandAt(t + j, flare)
-          glideStep(p, v, command.yaw, command.pitch, boost > 0)
-          boost--
-          fd = p.y > oldY ? 0 : fd + Math.max(0, oldY - p.y)
-          clientFd += Math.max(0, oldY - p.y)
-          if (!accepts(clientFd)) return false
-          if (p.y > oldY) return true
-          if (p.y <= goal.at.y && accepts(fd)) return true
-        }
-        return false
-      }
-      for (let t = 0; t < maxTicks; t++) {
-        if (!recovering) {
-          const trial = advance(s, commandAt(t, dive))
-          if (!canRecover(trial, t + 1)) recovering = true
-        }
-        const command = commandAt(t, recovering ? flare : dive)
-        path.push(command)
-        const before = s.p.y
-        s = advance(s, command)
-        if (s.kind) {
-          if (s.kind === 'floor' && accepts(s.fd)) {
-            const result = certify(path)
-            if (result) {
-              if (!best || result.c < best.c) best = { ...path[0], ...result }
-            }
+    for (const dive of [-1.3, -1, -.75, -.55, -.38, 0]) {
+      const prefixes = new Map<number, any[]>()
+      for (const flare of [.28, .45, .7, .95]) for (const curve of curves) {
+        if (!prefixes.has(curve)) prefixes.set(curve, [])
+        let prefix = prefixes.get(curve)
+        const path = []
+        let s: any = { p: st.p, v: st.v, boost: st.boost, fd: st.fd }
+        let recovering = false
+        const commandAt = (t, pitch) => ({ yaw: wrap(heading + curve * t), pitch })
+        // This client-style fall channel only prunes the search to retain S7d descent control.
+        // Final acceptance uses independent movement fd and the complete collision-checked path.
+        const canRecover = (from, t) => {
+          if (from.kind) return from.kind === 'floor' && accepts(from.fd)
+          const p = { ...from.p }; const v = { ...from.v }
+          let fd = from.fd; let clientFd = from.clientFd ?? fd; let boost = from.boost
+          for (let j = 0; j < H; j++) {
+            spend()
+            const oldY = p.y
+            if (v.y > -0.5 && clientFd > 1) clientFd = 1
+            const command = commandAt(t + j, flare)
+            glideStep(p, v, command.yaw, command.pitch, boost > 0)
+            boost--
+            fd = p.y > oldY ? 0 : fd + Math.max(0, oldY - p.y)
+            clientFd += Math.max(0, oldY - p.y)
+            if (!accepts(clientFd)) return false
+            if (p.y > oldY) return true
+            if (p.y <= goal.at.y && accepts(fd)) return true
           }
-          break
+          return false
         }
-        if (s.p.y > before) recovering = false
+        for (let t = 0; t < maxTicks; t++) {
+          let trial
+          if (!recovering) {
+            // Flare alternatives have the same trajectory until their first recovery.
+            if (prefix?.[t]) { spend(); trial = prefix[t] }
+            else { trial = advance(s, commandAt(t, dive)); if (prefix) prefix[t] = trial }
+            if (!canRecover(trial, t + 1)) recovering = true
+          }
+          const command = commandAt(t, recovering ? flare : dive)
+          path.push(command)
+          const before = s.p.y
+          // Reuse the accepted dive; retain the search budget and candidate order.
+          if (!recovering) { spend(); s = trial } else { prefix = null; s = advance(s, command) }
+          if (s.kind) {
+            if (s.kind === 'floor' && accepts(s.fd)) {
+              const result = certify(path, s)
+              if (result) {
+                if (!best || result.c < best.c) best = { ...path[0], ...result }
+                // Keep a certified landing before spending the remaining budget on short alternatives.
+                if (path.length <= H) compareShort()
+              }
+            }
+            break
+          }
+          if (s.p.y > before) recovering = false
+        }
       }
     }
+    compareShort()
     return best
   }
   let plan = null

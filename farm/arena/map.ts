@@ -82,8 +82,9 @@ export async function setupArmsMap (ctx: ArenaContext) {
   // вершинах (модель постройки: опора, над ней 2 воздуха; 11+ над полем). Туда бросает жемчуг тот, кому не убежать.
   if (COLOS_MAP) {
     const g = require(path.join(DIST_ROOT, 'daemon', 'arena', 'build-colosseum')).plan({ X, Y, Z, R: 24, ceilH: 16 }).m.g
+    const blocks = (require('../../daemon/node_modules/minecraft-data') as typeof import('../../daemon/node_modules/minecraft-data'))('1.21.11').blocksByName
     const pal = (x, y, z) => (x < g.x0 || x > g.x1 || y < g.y0 || y > g.y1 || z < g.z0 || z > g.z1) ? 'air' : (g.pal[g.data[g.i(x, y, z)]] || 'air')
-    const solid = (x, y, z) => { const n = pal(x, y, z); return n !== 'air' && !/air|slab|stairs|fence|wall|pane|bars|torch|lantern/.test(n) }
+    const solid = (x, y, z) => { const n = pal(x, y, z); return blocks[n.split('[')[0]]?.boundingBox === 'block' && !/air|slab|stairs|fence|wall|pane|bars|torch|lantern/.test(n) }
     for (let x = g.x0; x <= g.x1; x += 2) for (let z = g.z0; z <= g.z1; z += 2) for (let y = g.y1; y >= 11; y--) {
       if (!solid(x, y, z)) continue
       if (pal(x, y + 1, z) === 'air' && pal(x, y + 2, z) === 'air') perches.push({ x: X + x + 0.5, y: Y + y + 1, z: Z + z + 0.5 })
@@ -117,7 +118,8 @@ export function guardFalls (ctx: ArenaContext) {
   // (стенд 15.10, 31ad на x 370: «точка подъёма вне арены» по кругу).
   const fallT = arms ? setInterval(() => {
     if (ctx.between) return
-    rcon(i, `kill @a[gamemode=survival,x=${X - 200},z=${Z - 200},dx=400,dz=400,y=-64,dy=${Y + L.y0 - 3 + 64}]`).catch(() => {})
+    // EntitySelectorParser includes dy + 1: keep the upper face at the advertised killY.
+    rcon(i, `kill @a[gamemode=survival,x=${X - 200},z=${Z - 200},dx=400,dz=400,y=-64,dy=${Y + L.y0 - 3 + 64 - 1}]`).catch(() => {})
     for (const b of bots) {
       const m = ctx.pos?.[b.name], p = m?.p
       // Упал под Колизей (пользователь 25.10: «падают в обрыв — умирают, а можно на элитрах улететь») — с чем падал и откуда.

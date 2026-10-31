@@ -48,6 +48,51 @@ function botFor (version = '1.21.11') {
       isCollidedVertically: false, elytraFlying: false, yaw: 0, pitch: 0, effects: {} as Record<string, any>, attributes: {} as Record<string, any> }
   }
 }
+
+test('fall flying uses the jar .6 body through a one-block-high tunnel, then restores standing height', () => {
+  const scoped = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
+  const bot = botFor(), data = bot.registry
+  const Block = require('prismarine-block')(data)
+  const world = { getBlock(p) {
+    const q = p.floored(), solid = q.y < 64 || q.y === 65 && q.z < 0
+    const b = Block.fromStateId((solid ? data.blocksByName.stone : data.blocksByName.air).defaultState, 0)
+    b.position = q; return b
+  } }
+  bot.entity.position.set(.5, 64.3, .5)
+  bot.entity.velocity.set(0, 0, -1)
+  bot.entity.onGround = false; bot.entity.elytraFlying = true
+  bot.inventory.slots[6] = { name: 'elytra' }
+  bot.fireworkRocketDuration = 20
+  const physics = scoped.Physics(data, world), state = new scoped.PlayerState(bot, { ...IDLE })
+  for (let tick = 0; tick < 8; tick++) {
+    physics.simulatePlayer(state, world)
+    assert.equal(state.ndPoseHeight, .6)
+    assert.equal(state.isCollidedHorizontally, false)
+  }
+  assert(state.pos.z < -5, 'flying body advances below the roof')
+  state.pos.set(.5, 64.3, 2.5); state.vel.set(0, 0, 0)
+  state.elytraFlying = false; state.fireworkRocketDuration = 0
+  physics.simulatePlayer(state, world)
+  assert.equal(state.ndPoseHeight, 1.8)
+  assert.equal(physics.playerHeight, 1.8, 'flight height belongs to the state, not the shared Physics instance')
+})
+
+test('elytra rollout uses the flying body while landing clearance still requires a standing body', () => {
+  const { worldOf, rollout }: typeof import('../src/elytra/physics') = require('../src/elytra/physics')
+  const bot: any = botFor(), data = bot.registry, Block = require('prismarine-block')(data)
+  bot.on = () => {}
+  bot.blockAt = p => {
+    const q = p.floored(), solid = q.y < 64 || q.y === 65 && q.z < 0
+    const b = Block.fromStateId((solid ? data.blocksByName.stone : data.blocksByName.air).defaultState, 0)
+    b.position = q; return b
+  }
+  const W = worldOf(bot)
+  const r = rollout(W, new Vec3(.5, 64.3, .5), new Vec3(0, 0, -1), 0, 0, 20, 8)
+  assert.equal(r.kind, null)
+  assert(r.p.z < -5)
+  assert.equal(rollout(W, new Vec3(.5, 64.3, -5), new Vec3(0, .1, -1), 0, 1, 20, 8).kind, 'ceil', 'an actual ceiling still clips the flying body')
+  assert.equal(W.boxHit(.5, 64, -5), true, 'landing clearance still uses the standing body')
+})
 // Scoped pose/swimming inputs are asserted explicitly; compare every native output below.
 const plain = ({ ndInPowderSnow, ndLeatherBoots, ndSwimming, ...state }) => ({ ...state, pos: { ...state.pos }, vel: { ...state.vel }, control: { ...state.control } })
 const boots = level => ({ nbt: { type: 'compound', value: { Enchantments: { type: 'list', value: { type: 'compound', value: [{ id: { type: 'string', value: 'minecraft:depth_strider' }, lvl: { type: 'short', value: level } }] } } } } })

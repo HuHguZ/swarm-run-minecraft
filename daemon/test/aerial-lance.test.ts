@@ -144,19 +144,25 @@ test('таран: чистый выход выигрывает у удара в 
   assert.equal(pl.exit, null)
 })
 
-test('заход тарана: ракета проверяется с ускорением; в открытом мире остаётся', async t => {
+test('заход тарана: ракета проверяется с ускорением; чужое встречное копьё передаёт руль выходу', async t => {
   const flight = require('../src/elytra/flight') as typeof import('../src/elytra/flight')
   const install = require('../src/elytra/install') as typeof import('../src/elytra/install')
   const Vec3: typeof import('vec3').Vec3 = require('vec3')
-  t.mock.method(flight, 'fly', async () => ({ why: 'разбег' }))
+  const flights: any[] = []
+  t.mock.method(flight, 'fly', async (_bot, _ctl, opts) => { flights.push(opts); return { why: 'разбег' } })
   t.mock.method(flight, 'chestDown', async () => ({ ok: true }))
+  let incoming = null
+  t.mock.method(require('../src/threats'), 'incomingGliders', (bot, scope) => {
+    assert.deepEqual(scope.foes, bot._ndFoes)
+    return incoming ? [{ id: 99, kind: incoming, ticks: 4 }] : []
+  })
   let fired = 0
   t.mock.method(install, 'fireRocket', () => { fired++; return { ok: true, hand: 'off' } })
-  for (const [wallX, expected] of [[7, 0], [Infinity, 1]]) {
+  for (const [wallX, expected, threat] of [[7, 0, null], [Infinity, 1, null], [Infinity, 0, 'lance'], [Infinity, 1, 'dive']] as const) {
     const bot: any = new EventEmitter()
     const item = { name: 'iron_spear', count: 1 }, rocket = { name: 'firework_rocket', count: 8 }
     bot.entity = { id: 1, position: new Vec3(.5, 103, .5), velocity: new Vec3(.2, -.1, 0), elytraFlying: true, onGround: false }
-    bot.health = 20; bot.heldItem = item
+    bot.health = 20; bot.heldItem = item; bot._ndFoes = ['foe', 'third']
     bot.inventory = { items: () => [item, rocket], slots: [] }
     bot.inventory.slots[6] = { name: 'elytra' }; bot.inventory.slots[45] = rocket
     bot._client = new EventEmitter(); bot._ndElytra = { driving: 0, fd: 0, startedAt: 0 }
@@ -168,7 +174,7 @@ test('заход тарана: ракета проверяется с ускор
     }
     const enemy = { id: 2, type: 'player', username: 'foe', position: new Vec3(5, 100, .5), onGround: true, isValid: true }
     const ctl = { aborted: false }, stats: any = {}
-    fired = 0
+    fired = 0; incoming = threat; flights.length = 0
     const done = L.lance(bot, ctl, enemy, { passes: 1, telemetryHp: () => null, stats })
     try {
       for (let n = 0; n < 20 && !stats.lancePasses; n++) await new Promise<void>(resolve => setImmediate(resolve))
@@ -176,11 +182,55 @@ test('заход тарана: ракета проверяется с ускор
       bot.emit('physicsTick')
       await new Promise<void>(resolve => setImmediate(resolve))
       assert.equal(fired, expected, `стена x=${wallX}`)
+      if (threat === 'lance') {
+        assert.equal(stats.lanceEvasions, 1)
+        const exit = flights.find(f => f.phase === 'таран: выход')
+        assert.ok(exit, 'the existing flight takes steering from the approach')
+        assert.equal(exit.noRocket(), false, 'an emergency transverse exit can use the priced rocket')
+        assert.equal(exit.until(), null, 'already being above the chosen target cannot end an exit while another lance still threatens')
+        incoming = null
+        assert.equal(exit.until(), 'вышел', 'the same exit completes as soon as the threat has cleared')
+      }
     } finally {
       ctl.aborted = true; bot.entity.elytraFlying = false; bot.entity.onGround = true
       bot.emit('physicsTick')
       await done
     }
+  }
+})
+
+test('a timed-out lance approach reconsiders the existing priced follow-up before another run-up', async t => {
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const flight = require('../src/elytra/flight') as typeof import('../src/elytra/flight')
+  const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  let now = 1000, followUps = 0
+  t.mock.method(clock, 'now', () => now)
+  t.mock.method(clock, 'sleep', async () => {})
+  t.mock.method(flight, 'fly', async () => ({ why: 'разбег' }))
+  t.mock.method(flight, 'chestDown', async () => ({ ok: true }))
+  const bot: any = new EventEmitter(), item = { name: 'iron_spear', count: 1 }, rocket = { name: 'firework_rocket', count: 8 }
+  bot.entity = { id: 1, position: new Vec3(.5, 107, .5), velocity: new Vec3(.2, -.1, 0), elytraFlying: true, onGround: false }
+  bot.health = 20; bot.heldItem = item; bot.inventory = { items: () => [item, rocket], slots: [] }
+  bot.inventory.slots[6] = { name: 'elytra' }; bot.inventory.slots[45] = rocket
+  bot._client = new EventEmitter(); bot._ndElytra = { driving: 0, fd: 0, startedAt: 0 }
+  bot.look = async () => {}; bot.activateItem = () => {}; bot.deactivateItem = () => {}
+  bot.blockAt = p => ({ name: p.y < 100 ? 'stone' : 'air', boundingBox: p.y < 100 ? 'block' : 'empty' })
+  const enemy = { id: 2, type: 'player', username: 'foe', position: new Vec3(5, 100, .5), onGround: true, isValid: true }
+  const ctl = { aborted: false }, stats: any = {}
+  const done = L.lance(bot, ctl, enemy, { stats, telemetryHp: () => null, afterPass: async () => {
+    followUps++; bot.entity.elytraFlying = false; bot.entity.onGround = true
+    return { hit: true }
+  } })
+  try {
+    for (let i = 0; i < 20 && !stats.lancePasses; i++) await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(stats.lancePasses, 1)
+    now += 4600; bot.emit('physicsTick')
+    for (let i = 0; i < 20 && !followUps && stats.lancePasses < 2; i++) await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(followUps, 1, 'a completed empty approach must offer the priced combo instead of immediately repeating it')
+    assert.equal(stats.lancePasses, 1)
+    assert.equal((await done).maceHits, 1)
+  } finally {
+    ctl.aborted = true; bot.entity.elytraFlying = false; bot.entity.onGround = true; bot.emit('physicsTick'); await done
   }
 })
 

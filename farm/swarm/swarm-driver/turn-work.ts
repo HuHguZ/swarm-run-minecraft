@@ -197,9 +197,8 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     const aim = { x: foe.position.x + fv.x * lead, y: foe.position.y, z: foe.position.z + fv.z * lead }
     const slotAt = stand || (task.data.slot !== undefined ? { x: aim.x + Math.cos(task.data.slot * Math.PI / 4) * ringR, y: aim.y, z: aim.z + Math.sin(task.data.slot * Math.PI / 4) * ringR } : lead ? aim : foe.position)
     // Он на элитрах (swarm-senses: elytraFlying → threat aerial). Столб, шаг и прокоп к летуну пусты: пока строишь, он уже
-    // в другом месте; кольцо и место вокруг точки в воздухе — тоже. В виду и ближе 48 — сразу бой: тело стреляет по летуну,
-    // бежит под него или идёт на таран со своими элитрами (turn-air). Не видно или дальше — бег по земле под точку, где он
-    // будет через секунду (пользователь 21.10: «преследования игроков, которые убегают элитрами»).
+    // в другом месте; кольцо и место вокруг точки в воздухе — тоже. Дальше 48 стрелять нельзя, но со своими элитрами и
+    // ракетами тело ещё может выбрать перехват. Без набора или свежего наблюдения — бег под прогноз на секунду.
     const flyer = foe.threat === 'aerial'
     const under = { x: foe.position.x + fv.x * 20, y: undefined, z: foe.position.z + fv.z * 20 }
     // Цель выше 3+ бл. — подъём (видно её или нет: снизу крышу не видно, лезть к последнему месту).
@@ -239,7 +238,8 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
       if (breached) { b.noReach = 0; return }
     }
     if (!currentTurn(sw, b, round)) return
-    const flyerAway = flyer && (stale || reachGap > 48)
+    const canFly = (m.inv.elytra || m.armor?.torso === 'elytra') && m.inv.firework_rocket > 3
+    const flyerAway = flyer && (stale || reachGap > 48 && !canFly)
     if (flyerAway || stale || !task.data.committed || far && !flyer) {
       await go(b, flyerAway && task.data.committed ? under : stale ? foe.position : task.data.committed && far ? slotAt : task.position, 3)
       return

@@ -2,7 +2,8 @@
 // Элитры (elytra.ts): физика полёта и падения, мир (твёрдость клеток), прогон полёта, потолок, досягаемость.
 const gameClock: typeof import('../game-clock') = require('../game-clock')
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
-const { G, HALF, BODY_H, ROCKET_BOOST, clamp }: typeof import('./consts') = require('./consts')
+const teamWind: typeof import('../combat/team-wind') = require('../combat/team-wind')
+const { G, HALF, BODY_H, FLY_H, ROCKET_BOOST, clamp }: typeof import('./consts') = require('./consts')
 
 // ---------------------------------------------------------------- физика
 
@@ -16,6 +17,9 @@ function lookVec (yaw, pitch) {
 // Один тик полёта (порядок prismarine-physics: толчок фейерверка, потом
 // элитры, потом ход). p, v — {x,y,z}, меняются на месте.
 function glideStep (p, v, yaw, pitch, boost, g = G) {
+  // LivingEntity.aiStep 1.21.11 and the live integrator discard tiny vertical motion before flight forces.
+  if (Math.abs(v.y) < 0.003) v.y = 0
+  // shortcut: horizontal deadzones differ in the jar and client; align the client before changing them here.
   const L = lookVec(yaw, pitch)
   if (boost) {
     v.x += L.x * 0.1 + (L.x * ROCKET_BOOST - v.x) * 0.5
@@ -63,57 +67,97 @@ function worldOf (bot, { observed = false }: any = {}) {
   // Сырые чтения — общие для всех лучей одного синхронного прохода (cl28g, 28.10: прогноз полёта — 68% остановок цикла событий,
   // девять лучей каждой клетки заново читали те же блоки); проход кончился (микрозадача) — мир читается заново.
   const raw = new Map()
+  const blocks = observed ? (require('../fastblocks') as typeof import('../fastblocks')).install(bot) : null
   let rawArmed = false
   const rawAt = (p: import('vec3').Vec3) => {
     if (!rawArmed) { rawArmed = true; queueMicrotask(() => { raw.clear(); rawArmed = false }) }
     const k = key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))
     if (raw.has(k)) return raw.get(k)
-    const b = bot.blockAt(p, false)
+    const b = blocks ? blocks.block(p.x, p.y, p.z) : bot.blockAt(p, false)
+    // Match FastBlocks' capacity: microtasks cannot release Blocks during a synchronous forecast.
+    if (raw.size >= 120000) raw.clear()
     raw.set(k, b)
     return b
   }
-  const source = observed ? (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot, rawAt) : bot
+  const source = observed ? (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot, rawAt, true) : bot
   const cells = new Map()
+  const shaped = new Map()
+  const unknown = new Set<number>()
+  let observedAt = -Infinity
   let clearedAt = gameClock.now()
-  const at = (x, y, z) => {
-    if (cells.size > 250000 || gameClock.now() - clearedAt > 20000) { cells.clear(); clearedAt = gameClock.now() }
+  const read = (x, y, z, now) => {
+    if (observedAt !== now) { unknown.clear(); observedAt = now }
+    if (cells.size + unknown.size > 250000 || now - clearedAt > 20000) { cells.clear(); shaped.clear(); unknown.clear(); clearedAt = now }
     const k = key(x, y, z)
     let v = cells.get(k)
     if (v === undefined) {
+      // observedCollision already keeps these negative observations for this tick; avoid repeating its Vec3/ray lookup.
+      if (unknown.has(k)) return 1
       let b = null
       try { b = source.blockAt(new Vec3(x, y, z), false) } catch {}
-      if (!b) v = 1
+      if (!b) { v = 1; if (observed) unknown.add(k) }
       else if (b.boundingBox === 'block') v = 1
       else if (b.name === 'lava') v = 2
       else if (b.name === 'water' || b.name === 'bubble_column') v = 3
       else v = 0
       // Unknown cells block flight, but never become remembered landing supports.
-      if (b) cells.set(k, v)
+      if (b) {
+        cells.set(k, v)
+        const shapes = b.shapes || []
+        // Partial blocks must not become phantom ceilings around a glider beside their shape.
+        if (v === 1 && shapes.length && (shapes.length !== 1 || shapes[0].some((n, i) => n !== (i < 3 ? 0 : 1)))) shaped.set(k, shapes)
+      }
     }
     return v
   }
+  const at = (x, y, z) => read(x, y, z, gameClock.now())
   bot.on('blockUpdate', (o, n) => {
     const b = n || o
-    if (b && b.position) cells.delete(key(b.position.x, b.position.y, b.position.z))
+    if (b && b.position) {
+      const k = key(b.position.x, b.position.y, b.position.z)
+      cells.delete(k); shaped.delete(k); unknown.delete(k)
+    }
   })
+  // Partial blocks occupy only their shape, including fences/walls above their cell.
+  const intersects = (shapes, X, Y, Z, x, y, z, h) => shapes.some(s =>
+    x + HALF > X + s[0] && x - HALF < X + s[3] && y + h > Y + s[1] && y < Y + s[4] && z + HALF > Z + s[2] && z - HALF < Z + s[5])
   const W = {
     at,
     airborneInertia: bot.physics?.airborneInertia ?? 0.91,
     solid: (x, y, z) => at(x, y, z) === 1,
     // Рамка (полуширина HALF, высота h) в точке задевает твёрдое или жидкость.
     boxHit (x, y, z, h = BODY_H) {
+      // One synchronous box query shares a clock stamp, not a new clock lookup per cell.
+      const now = gameClock.now()
       const x0 = Math.floor(x - HALF); const x1 = Math.floor(x + HALF - 1e-9)
       const y0 = Math.floor(y); const y1 = Math.floor(y + h - 1e-9)
       const z0 = Math.floor(z - HALF); const z1 = Math.floor(z + HALF - 1e-9)
-      for (let X = x0; X <= x1; X++) for (let Y = y0; Y <= y1; Y++) for (let Z = z0; Z <= z1; Z++) if (at(X, Y, Z) !== 0) return true
+      for (let X = x0; X <= x1; X++) for (let Y = y0; Y <= y1; Y++) for (let Z = z0; Z <= z1; Z++) if (read(X, Y, Z, now) !== 0) {
+        const tall = shaped.get(key(X, Y, Z))
+        if (!tall || intersects(tall, X, Y, Z, x, y, z, h)) return true
+      }
+      // 1.21.11 fences/walls extend up to half a block above the cell beneath our feet.
+      if (y - y0 < .5) for (let X = x0; X <= x1; X++) for (let Z = z0; Z <= z1; Z++) {
+        read(X, y0 - 1, Z, now)
+        const tall = shaped.get(key(X, y0 - 1, Z))
+        if (tall && intersects(tall, X, y0 - 1, Z, x, y, z, h)) return true
+      }
       return false
     },
     // Верх опоры под точкой (колонка под центром), не глубже depth; null — пустота.
     floorBelow (x, y, z, depth = 40) {
+      const now = gameClock.now()
       const X = Math.floor(x); const Z = Math.floor(z)
       for (let Y = Math.floor(y); Y >= Math.floor(y) - depth; Y--) {
-        const v = at(X, Y, Z)
-        if (v === 1) return cells.has(key(X, Y, Z)) ? { top: Y + 1 } : null
+        const v = read(X, Y, Z, now)
+        if (v === 1) {
+          const k = key(X, Y, Z)
+          if (!cells.has(k)) return null
+          const tall = shaped.get(k)
+          if (!tall) return { top: Y + 1 }
+          const supports = tall.filter(s => x >= X + s[0] && x <= X + s[3] && z >= Z + s[2] && z <= Z + s[5])
+          if (supports.length) return { top: Y + Math.max(...supports.map(s => s[4])) }
+        }
         if (v === 2) return { top: Y + 1, lava: true }
         if (v === 3) return { top: Y + 1, water: true }
       }
@@ -142,7 +186,7 @@ function worldOf (bot, { observed = false }: any = {}) {
         : /^(slime_block|slime)$/.test(b.name) ? 0.8 : bot.physics?.defaultSlipperiness ?? 0.6
       return slip * air
     },
-    clear: () => cells.clear()
+    clear: () => { cells.clear(); shaped.clear(); unknown.clear() }
   }
   bot[cacheProperty] = W
   return W
@@ -151,43 +195,57 @@ function worldOf (bot, { observed = false }: any = {}) {
 // Прогон полёта: взгляд держим n тиков. boost — сколько тиков ещё тянет
 // фейерверк. Событие — первое касание: 'floor' (сели), 'ceil', 'wall' с уроном
 // о стену; fd — высота падения по правилам сервера на конце.
-function rollout (W, p0, v0, yaw, pitch, boost, n, { fd = 0, keepPath = false, arena = null }: any = {}) {
+function rollout (W, p0, v0, yaw, pitch, boost, n, { fd = 0, keepPath = false, arena = null, movementFall = false, floorDepth = 12 }: any = {}) {
   const p = { x: p0.x, y: p0.y, z: p0.z }
   const v = { x: v0.x, y: v0.y, z: v0.z }
   const path = keepPath ? [] : null
   let minFloorGap = Infinity
-  const inside = q => !arena || (require('../combat/team-wind') as typeof import('../combat/team-wind')).windInside(q, arena, HALF)
+  let firstCeiling = null
+  const inside = q => !arena || teamWind.windInside(q, arena, HALF)
   if (!inside(p)) return { t: 0, kind: 'outside', p, v, fd, path, minFloorGap }
   for (let t = 0; t < n; t++) {
-    const px = p.x; const py = p.y; const pz = p.z
+    const px = p.x; const py = p.y; const pz = p.z; const previousFd = fd
     // Высота падения: сервер держит ≤ 1, пока v.y > −0.5 (до хода этого тика).
-    if (v.y > -0.5 && fd > 1) fd = 1
+    if (!movementFall && v.y > -0.5 && fd > 1) fd = 1
     glideStep(p, v, yaw, pitch, boost > t)
-    if (p.y < py) fd += py - p.y
-    // Ход тика — отрезком, а не концом (S7d, корень ударов о стену): под ракетой 1.6 б/т рамка 0.6 «перепрыгивает»
-    // стену в 1 блок между концами соседних тиков (путь 176.3 → 174.7 мимо клетки 175) — прогноз не видел стекло
-    // арены, и рулевой вёл прямо в него. Сервер и prismarine-physics двигают с упором (по осям) — тело упиралось.
-    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(p.x - px), Math.abs(p.y - py), Math.abs(p.z - pz)) / 0.45))
-    for (let k = 1; k <= steps; k++) if (!inside({ x: px + (p.x - px) * k / steps, y: py + (p.y - py) * k / steps, z: pz + (p.z - pz) * k / steps })) return { t, kind: 'outside', p, v, fd, path, minFloorGap }
-    let hitAt = 0
-    for (let k = 1; k <= steps && !hitAt; k++) if (W.boxHit(px + (p.x - px) * k / steps, py + (p.y - py) * k / steps, pz + (p.z - pz) * k / steps)) hitAt = k
-    if (hitAt) {
-      const endX = p.x; const endZ = p.z
-      if (hitAt < steps) { p.x = px + (p.x - px) * hitAt / steps; p.y = py + (p.y - py) * hitAt / steps; p.z = pz + (p.z - pz) * hitAt / steps }
-      const vert = W.boxHit(px, p.y, pz)
-      const hs = Math.hypot(v.x, v.z)
-      if (vert && p.y < py) return { t, kind: 'floor', p, v, fd, vyHit: v.y, remainingMove: { x: endX - p.x, z: endZ - p.z }, path, minFloorGap: 0 }
-      if (vert && p.y > py) return { t, kind: 'ceil', p, v, fd, path, minFloorGap }
-      return { t, kind: 'wall', p, v, fd, dmg: Math.max(0, hs * 10 - 3), path, minFloorGap }
+    // Player movement packets clear fallDistance on an accepted rise, not on the client's shallow velocity.
+    if (movementFall && p.y > py) fd = 0
+    else if (p.y < py) fd += py - p.y
+    // Entity.collideWithShapes / Direction.axisStepOrder 1.21.11: the diagonal can clear a corner hit by the axis path.
+    const endX = p.x, endY = p.y, endZ = p.z
+    p.x = px; p.y = py; p.z = pz
+    let ceiling = false
+    for (const axis of Math.abs(v.x) < Math.abs(v.z) ? 'yzx' : 'yxz') {
+      const start = p[axis], end = axis === 'x' ? endX : axis === 'y' ? endY : endZ, delta = end - start
+      if (!delta) continue
+      const steps = Math.max(1, Math.ceil(Math.abs(delta) / .45))
+      for (let k = 1; k <= steps; k++) {
+        p[axis] = start + delta * k / steps
+        if (!inside(p)) return { t, kind: 'outside', p, v, fd, path, minFloorGap }
+        if (!W.boxHit(p.x, p.y, p.z, FLY_H)) continue
+        if (axis === 'y' && delta < 0) return { t, kind: 'floor', p, v, fd, vyHit: v.y, remainingMove: { x: endX - p.x, z: endZ - p.z }, path, minFloorGap: 0 }
+        if (axis === 'y') {
+          // worldOf uses full cells: clip the head below their bottom, then finish X/Z as Entity.move does.
+          p.y = Math.max(py, Math.floor(p.y + FLY_H - 1e-9) - FLY_H)
+          if (W.boxHit(p.x, p.y, p.z, FLY_H)) return { t, kind: 'ceil', p, v, fd, path, minFloorGap }
+          if (movementFall && p.y === py) fd = previousFd
+          v.y = 0; ceiling = true
+          break
+        }
+        return { t, kind: 'wall', p, v, fd, dmg: Math.max(0, Math.hypot(v.x, v.z) * 10 - 3), path, minFloorGap }
+      }
+      if (axis !== 'y' || !ceiling) p[axis] = end
     }
+    // A ceiling leaves horizontal momentum alive: look for later impacts before pricing this first contact.
+    if (ceiling && !firstCeiling) firstCeiling = { t, kind: 'ceil', p: { ...p }, v: { ...v }, fd, path: path?.slice() ?? null, minFloorGap }
     if (keepPath) path.push({ x: p.x, y: p.y, z: p.z, vx: v.x, vy: v.y, vz: v.z, fd })
     if ((t & 3) === 3) {
-      const f = W.floorBelow(p.x, p.y, p.z, 12)
+      const f = W.floorBelow(p.x, p.y, p.z, floorDepth)
       const gap = f ? p.y - f.top : 12
       if (gap < minFloorGap) minFloorGap = gap
     }
   }
-  return { t: n, kind: null, p, v, fd, path, minFloorGap }
+  return firstCeiling || { t: n, kind: null, p, v, fd, path, minFloorGap }
 }
 
 // Потолок над точкой: сколько блоков воздуха над головой (до n).

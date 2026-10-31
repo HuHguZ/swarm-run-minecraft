@@ -3,6 +3,22 @@ import { strict as assert } from 'node:assert'
 import { Vec3 } from 'vec3'
 import { swarmSightings, placementPoses } from '../src/swarm-senses'
 
+test('swarm shares visible glide state, distinguishes worn elytra and omits hidden glide packets', () => {
+  let wall = false
+  const enemy: any = { id: 2, username: 'Foe', type: 'player', position: new Vec3(3, 64, 0),
+    metadata: { 0: 0 }, equipment: [null, null, null, null, { name: 'elytra' }] }
+  const bot = { entity: { id: 1, position: new Vec3(0, 64, 0) }, entities: { 2: enemy }, blockAt(p) {
+    return wall && p.x === 1 ? { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : { name: 'air', boundingBox: 'empty' }
+  } }
+  assert.equal(swarmSightings(bot)[0].gliding, false, 'wearing elytra alone is not flight')
+  enemy.metadata[0] = 0x80
+  assert.equal(swarmSightings(bot)[0].gliding, true)
+  wall = true
+  const hidden = swarmSightings(bot)[0]
+  assert.equal(hidden.visible, false)
+  assert.equal('gliding' in hidden, false, 'a nametag does not expose the hidden flight flag')
+})
+
 test('swarm sight uses duel rays, never enemy health, inventory or enchantment levels', () => {
   const metadata = []
   Object.defineProperty(metadata, 9, { get() { throw new Error('enemy health read') } })

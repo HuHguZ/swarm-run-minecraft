@@ -191,6 +191,8 @@ function requestFightGuard (session, p: any = {}) {
 }
 
 async function fight (session, ctl, opts: any = {}) {
+  // Between commands, a defensive flight still belongs to the currently configured arena.
+  opts = { ...opts, arena: opts.arena ?? session.current?.params?.arena ?? session._rescue?.arena }
   // Бой с игроком — без сторожа по времени: в углу под мечом он бросал бой вместо ответа (пользователь 25.10: «правила на время
   // — выпиливать»). Выход из такого боя решают отход тела и драйвер по состоянию.
   const w = opts.allowPlayer ? { ctl, close: () => {} } : watchFight(session.bot, ctl)

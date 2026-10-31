@@ -280,6 +280,7 @@ export function installSight (ctx: ArenaContext) {
 export function watchStatus (ctx: ArenaContext) {
   const { teams, arms, bots, names, pos, busy, out, deadNow, labNeed, deathAt, rel, humans, X, Y, Z, L, STOPF, HUMAN_TEAM, teamOf, log } = ctx
   const mobInfo: Record<string, any> = {}
+  let tailTraceAt = 0
   const panicStops = new WeakMap<object, { round: number, action: any }>()
   const spreading = new WeakMap<object, { round: number, holder: string, mate: string, action: any }>()
   // Мобы глазами бойцов — раз в секунду (только с мобами на арене: ARMS_MOBS).
@@ -398,9 +399,51 @@ export function watchStatus (ctx: ArenaContext) {
     ctx.readDeaths()
     if (fs.existsSync(STOPF)) ctx.stop = true
     // Ход — по смещению за секунду (б/т); «ранен» — его хп упало (вспышка удара, видна глазами), в решения хп не идёт.
+    // ND_TAIL_TRACE: хвост раунда (у стороны ≤ 2 живых) — раз в 10 с состояние каждого живого: дело, вызов и его возраст, хп, высота,
+    // ближний враг доски (дистанция, сколько не видели). Разбор «почему не сходятся» (29.10). ponytail: снять после разбора.
+    if (process.env.ND_TAIL_TRACE && ctx.arms && Date.now() - tailTraceAt >= 10000) {
+      const live = bots.filter(o => ctx.alive(o.name) && !out.has(o.name))
+      if (Math.min(live.filter(o => o.team === 'red').length, live.filter(o => o.team === 'blue').length) <= 2) {
+        tailTraceAt = Date.now()
+        log('🔎 хвост: ' + live.map(o => {
+          const p = pos[o.name]?.p, foes = p ? (ctx.swarmDriver.enemies?.(o) || []) : []
+          const near = foes.map(e => ({ e, d: Math.hypot(e.position.x - p.x, e.position.y - p.y, e.position.z - p.z) })).sort((x, y) => x.d - y.d)[0]
+          return `${o.name.replace('NeuroFarm29', '') || '#'}(${o.team[0]}) ${o.swarmTask?.kind || '-'}→${o.swarmTask?.data?.target?.replace('NeuroFarm29', '') ?? '-'} ` +
+            `${o.last?.m || '-'}${o.last?.pending ? '…' + Math.round((Date.now() - o.last.at) / 1000) + 'с' : ''} хп ${pos[o.name]?.hp ?? '?'} y ${p ? p.y.toFixed(0) : '?'}` +
+            ` лук${pos[o.name]?.inv?.bow || 0}/арб${pos[o.name]?.inv?.crossbow || 0}/стр${pos[o.name]?.inv?.arrow || 0}/рак${pos[o.name]?.inv?.firework_rocket || 0} ед ${pos[o.name]?.food ?? "?"}/${Object.entries(pos[o.name]?.inv || {}).filter(([n]) => /^(bread|cooked_.*|golden_apple|enchanted_golden_apple|apple|baked_potato|golden_carrot|carrot|melon_slice|.*_stew)$/.test(n)).reduce((a, [, c]: any) => a + c, 0)}` +
+            (near ? ` враг ${near.e.id.replace('NeuroFarm29', '') || '#'} ${near.d.toFixed(0)} бл. ${((Date.now() - near.e.seenAt) / 1000).toFixed(0)}с` : ' врагов нет') +
+            // Цель дела: что знает доска (место, возраст, угроза) и где она на деле (телеметрия, только для разбора).
+            (() => {
+              const id = o.swarmTask?.data?.target, e = id && foes.find(f => f.id === id), q = id && pos[id]?.p
+              if (!id || !p) return ''
+              const dist = (a: any) => Math.hypot(a.x - p.x, a.y - p.y, a.z - p.z).toFixed(0)
+              return ` | цель ${e ? `доска y ${e.position.y.toFixed(0)} ${dist(e.position)} бл. ${((Date.now() - e.seenAt) / 1000).toFixed(0)}с ${e.threat || '-'}` : 'нет на доске'}` +
+                (q ? ` на деле y ${q.y.toFixed(0)} ${pos[id].gliding ? "летит" : "не летит"} ${dist(q)} бл. сдвиг ${e ? Math.hypot(q.x - e.position.x, q.z - e.position.z).toFixed(0) : '?'}` : '')
+            })()
+        }).join('; '))
+      }
+    }
     for (const b of bots) {
+      // Демон молчит ≥ 20 с (cl53onD1: упал по нехватке памяти) — спросить сервер, держит ли он игрока: нет — выбыл, как погибший
+      // (иначе его числили живым по старому месту, последний красный «жил» 6 мин и раунд кончался по времени). В игре — ждём.
+      if (ctx.arms && b.silentSince && Date.now() - b.silentSince >= 20000 && !b.onlineCheck && !out.has(b.name) && !deadNow.has(b.name)) {
+        b.onlineCheck = true
+        const silenceAt = b.silentSince = Date.now()
+        Promise.resolve(ctx.rcon(ctx.i, 'list')).then(r => {
+          if (ctx.between || ctx.round !== observedRound || b.silentSince !== silenceAt || out.has(b.name) || deadNow.has(b.name)) return
+          const list = /^There are (\d+) of a max of \d+ players online:\s*(.*)$/s.exec(String(r || '').trim())
+          if (!list) return
+          const online = list[2].split(',').map(n => n.trim()).filter(Boolean)
+          if (online.length !== Number(list[1])) return
+          if (!online.includes(b.name)) {
+            // Из живых — сразу: цикл бойца ещё ждёт зависший вызов (стенд 29: 👻 через 2 мин после отказа), зритель и 👻 — им же.
+            log(`🔌☠ ${b.name}: демон молчит, на сервере нет — выбыл`); deadNow.add(b.name); out.add(b.name); ctx.swarmDriver?.release?.(b); ctx.endRound?.()?.catch?.(() => {})
+          }
+        }).catch(() => {}).finally(() => { b.onlineCheck = false })
+      }
       if (statusPolling.has(b.name)) continue
       statusPolling.add(b.name)
+      b.silentSince ||= Date.now()
       // Наблюдение не старше запроса: демон снимает его, когда отвечает, — время приёма делало его свежее, чем оно есть
       // (под нагрузкой ответ идёт сотни мс; ревью 14.10).
       const asked = Date.now()
@@ -408,6 +451,7 @@ export function watchStatus (ctx: ArenaContext) {
       swarm: true, dangers: arms,
       swarmAllies: teams ? bots.filter(o => o.team === b.team).map(o => o.name) : []
     }).then(s => {
+      if (s) b.silentSince = 0
       // Ответил без тела (выкинут сервером: «Invalid move player packet») — забыть старое место: иначе рой водил его по
       // стухшей позиции до конца раунда (бой роя 24.10, NeuroFarm30u), а цикл бойца ждёт pos и переподключает.
       if (s && !s.state?.pos && !ctx.between) delete pos[b.name]
@@ -464,7 +508,7 @@ export function watchStatus (ctx: ArenaContext) {
       }
       const now = Date.now(), frame = s.state.physicsTicks ?? tick, clockId = s.state.clock?.id
       const frameAt = was?.frame === frame && was?.clockId === clockId ? (was.frameAt ?? now) : now
-      pos[b.name] = { p, v, hp: s.state.health, gliding: !!s.state.gliding, rescuing: !!s.detail?.rescuing, combo: s.detail?.combo || null, lance: s.state.lance || null, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: withOffHand(s.state.inventory, s.state.offHand), attackArrows: s.state.attackArrows, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
+      pos[b.name] = { p, v, hp: s.state.health, food: s.state.food, gliding: !!s.state.gliding, rescuing: !!s.detail?.rescuing, combo: s.detail?.combo || null, lance: s.state.lance || null, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: withOffHand(s.state.inventory, s.state.offHand), attackArrows: s.state.attackArrows, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
       pos[b.name].antidote = s.state.antidote ? { ...s.state.antidote, receivedAt: now } : undefined
       if (dz && !pos[b.name].rescuing) b.c.onDanger?.({ pos: p, dangers: dz, observedAt: asked, status: true })
       // Реактивный сброс ветром (тело: combat/wind-out): попытки — в журнал, бросок — метка на цели для учёта смерти.
@@ -472,7 +516,7 @@ export function watchStatus (ctx: ArenaContext) {
         if (w.kind === 'shield') { log(`🛡⬇ ${b.name}: ${w.target} падает с булавой (через ${w.ticks} т.) — щит к нему`); continue }
         if (w.kind === 'descend') { log(`🔨 ${b.name}: подброшен с булавой — удар сверху по ${w.target}: ${w.hit ? 'попал' : 'мимо'}`); continue }
         if (w.ally) { log(`🤸 ${b.name} → ${w.ally}: ${w.kind === 'volley' ? 'волейбол' : 'батут'} на ${w.target}, подброс ${w.kick} бл./т — ${w.fired ? (w.hit ? 'бросил, враг ранен в 2 с' : 'бросил, враг не ранен') : 'не бросил'}`); continue }
-        log(`🌬↗ ${b.name} → ${w.target}: ${w.kind}, до края ${w.edge} бл.${w.air ? ', в воздухе' : ''}, прогноз +${w.progress} бл.${w.airGain ? `, в воздухе +${w.airGain} т.` : ''} — ${w.fired ? 'бросил' + (w.burst ? ', взрыв виден' : '') + (w.edgeAfter !== undefined ? `, через 8 т. до края ${w.edgeAfter} бл., y ${w.yAfter}` : '') : 'отказ: ' + (w.why || '?')} (план ${w.planMs} мс), я: до края ${L?.ellipse ? require('../../daemon/src/combat/team-wind').arenaRoom({ x: X + .5, z: Z + .5, r: 0, ellipse: L.ellipse }, p).toFixed(1) : '?'} бл., y ${p.y.toFixed(1)}${w.dbg ? ' | ' + w.dbg : ''}`)
+        log(`🌬↗ ${b.name} → ${w.target}: ${w.kind}, до края ${w.edge} бл.${w.air ? ', в воздухе' : ''}, прогноз +${w.progress} бл.${w.airGain ? `, в воздухе +${w.airGain} т.` : ''} — ${w.fired ? 'бросил' + (w.burst ? ', взрыв виден' : '') + (w.edgeAfter !== undefined ? `, через 8 т. до края ${w.edgeAfter} бл., y ${w.yAfter}` : '') + (w.foiled !== undefined ? (w.foiled ? `, заход сорван (прошёл в ${w.passed} бл.)` : `, заход не сорван (${w.passed} бл.)`) : '') : 'отказ: ' + (w.why || '?')} (план ${w.planMs} мс), я: до края ${L?.ellipse ? require('../../daemon/src/combat/team-wind').arenaRoom({ x: X + .5, z: Z + .5, r: 0, ellipse: L.ellipse }, p).toFixed(1) : '?'} бл., y ${p.y.toFixed(1)}${w.dbg ? ' | ' + w.dbg : ''}`)
         if (w.fired) (ctx.windOutAt ||= {})[w.target] = { by: b.name, at: Date.now(), kind: w.kind }
       }
       if (s.detail?.pearls?.length) ctx.swarmDriver.pearlObserve?.(b, s.detail.pearls)

@@ -188,8 +188,9 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     if (blocks >= needBlocks) return false
     if ((cooldown.get(`dig:${b.name}`) || 0) > now() || blocked(b, `dig:${b.name}`)) return false
     cooldown.set(`dig:${b.name}`, now() + 3000) // частота опроса, не неудача
-    const r = detail(await b.c.call('mine', { block: 'sand,red_sand,dirt,grass_block,coarse_dirt', count: Math.min(32, Math.ceil(dy) + 6), radius: 32, timeoutSeconds: 20 }).catch(e => ({ why: e.message })))
-    log(`🏖 ${b.name}: блоков на подъём нет — копаю руками (${foe.id} на +${Math.round(dy)}): ${r.dug ?? 0} шт.${r.why ? ` (${String(r.why).slice(0, 60)})` : ''}`)
+    const raw = await b.c.call('mine', { block: 'sand,red_sand,dirt,grass_block,coarse_dirt', count: Math.min(32, Math.ceil(dy) + 6), radius: 32, timeoutSeconds: 20 }).catch(e => ({ why: e.message }))
+    const r = detail(raw)
+    log(`🏖 ${b.name}: блоков на подъём нет — копаю руками (${foe.id} на +${Math.round(dy)}): ${r.dug ?? 0} шт.${r.why ? ` (${String(r.why).slice(0, 60)})` : ''}${r.dug ? '' : ` [${raw?.status || '-'}${r.stopped ? ' ' + r.stopped : ''}${r.problems ? ' ' + String(r.problems.at(-1)).slice(0, 50) : ''}${raw?.error ? ' ' + String(raw.error).slice(0, 50) : ''}]`}`)
     if (!r.dug) { failed(b, `dig:${b.name}`); if (sandSpot && distance(m.p, sandSpot) > 12) { await go(b, sandSpot, 6, 8); return true } }
     return (r.dug || 0) > 0
   }

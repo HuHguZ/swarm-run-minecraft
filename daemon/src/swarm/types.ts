@@ -12,6 +12,8 @@ export interface SwarmMember {
   position: SwarmPosition
   health: number
   maxHealth?: number
+  /** Свой голод (0–20): естественная регенерация — только с 18 (FoodData, 1.21.11). */
+  food?: number
   strength: number
   role: SwarmRole
   canHeal?: boolean

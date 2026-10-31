@@ -6,6 +6,31 @@ import { createLastSeen } from '../src/pvp/last-seen'
 import bow = require('../src/bow')
 import pick = require('../src/pick')
 
+test('one body shares player observations while consumer close stays independent and idempotent', () => {
+  const f = scene(), a = createLastSeen(f.bot), b = createLastSeen(f.bot)
+  try {
+    const av = a.observe(f.raw), bv = b.observe(f.raw)
+    assert.equal(f.bot.listenerCount('physicsTick'), 1)
+    assert.equal(f.raw.listenerCount('ndPositionObserved'), 1)
+    assert.equal(av, bv)
+    a.close(); a.close()
+    assert.equal(f.bot.listenerCount('physicsTick'), 1, 'one consumer cannot close another')
+    f.move(3.5)
+    assert.equal(bv.position.x, 3.5)
+    f.wall(true)
+    assert.equal(b.visible(bv), false, 'new occlusion is still checked')
+    f.wall(false)
+    assert.equal(b.visible(bv), true)
+    const other = scene(), c = createLastSeen(other.bot)
+    try { assert.notEqual(c.observe(other.raw), bv, 'different observers never share eyesight') } finally { c.close() }
+    b.close()
+    assert.equal(f.bot.listenerCount('physicsTick'), 0)
+    assert.equal(f.raw.listenerCount('ndPositionObserved'), 0)
+    const next = createLastSeen(f.bot)
+    try { assert.notEqual(next.observe(f.raw), bv, 'the last close discards old state') } finally { next.close() }
+  } finally { a.close(); b.close() }
+})
+
 function scene () {
   let now = 1000
   let wall = false
