@@ -254,7 +254,12 @@ function aerialMethods ({ session }: RpcContext) {
     ledge_to: async (p: any = {}) => session.runIntent('ledge_to', ctl => require('../navigation/parkour').ledgeTo(session, ctl, p), { timeoutMs: Math.max(1, Math.min(20, p.timeoutSeconds ?? 8)) * 1000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     wind_receive: async (p: any = {}) => session.runIntent('wind_receive', ctl => require('../combat/team-wind').windReceive(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     wind_boost: async (p: any = {}) => session.runIntent('wind_boost', ctl => require('../combat/team-wind').windBoost(session, ctl, p), { timeoutMs: 10000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
-    wind_report: async (p: any = {}) => ({ status: 'done', detail: p.pairProgress ? await require('../combat/team-wind').windPairProgress(session, p) : require('../combat/enemy-wind-execute').enemyWindReport(session, p), events: [], state: session.state() }),
+    wind_report: async (p: any = {}) => ({
+      status: 'done',
+      detail: p.pairProgress ? await require('../combat/team-wind').windPairProgress(session, p) : require('../combat/enemy-wind-execute').enemyWindReport(session, p),
+      events: [],
+      state: p.coordination === undefined ? session.state() : undefined
+    }),
     enemy_wind_plan: async (p: any = {}) => ({ status: 'done', detail: await require('../combat/enemy-wind-execute').enemyWindPlan(session, p), events: [], state: session.state() }),
     // Засада на жемчуг врага (combat/pearl-ambush): к точке приземления любым способом и взлёт булавой к его появлению.
     pearl_ambush: async (p: any = {}) => session.runIntent('pearl_ambush', ctl => require('../combat/pearl-ambush').pearlAmbush(session, ctl, p), { timeoutMs: 9000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
@@ -355,15 +360,12 @@ function aerialMethods ({ session }: RpcContext) {
     wind_push: async (p: any = {}) => session.runIntent('wind_push', async ctl => {
       const bot = session.require(), sight = require('../pvp/last-seen').createLastSeen(bot)
       try {
+        if (p.allies != null && (!Array.isArray(p.allies) || p.allies.some(n => typeof n !== 'string' || !n))) return { ok: false, fired: false, why: 'нужен список имён союзников' }
         const e = sight.observe(bot.players?.[p.target]?.entity)
         if (!e || !sight.visible(e)) return { ok: false, fired: false, why: 'цель не видна' }
-        // Принудительный толчок команды тоже бессмыслен в паутине (q8): её сперва разбирают.
-        if ([0, 1].some(dy => bot.blockAt(e.position.offset(0, dy, 0).floored())?.name === 'cobweb')) return { ok: false, fired: false, why: 'цель в паутине' }
-        // Всплеск — 2.4 бл. от точки у его ног: свой рядом с целью улетит вместе с ней (DeepSeek, разбор сброса 21.10).
-        if ((p.allies || []).some((n: string) => { const a = bot.players?.[n]?.entity; return a && a.position.distanceTo(e.position) < 3 })) return { ok: false, fired: false, why: 'свой у цели' }
         const mace = require('../mace')
         if (!p.force && !mace.pushPlan(bot, e, { sees: true, theyUp: e.position.y > bot.entity.position.y + 2 })) return { ok: false, fired: false, why: 'толкать сейчас невыгодно' }
-        const result = await mace.windPush(bot, e, { vel: () => sight.observe(e)?.velocity || { x: 0, y: 0, z: 0 } })
+        const result = await mace.windPush(bot, e, { vel: () => sight.observe(e)?.velocity || { x: 0, y: 0, z: 0 }, allies: p.allies || [] })
         return { ...result, ok: !!result.fired }
       } finally { sight.close() }
     }, { timeoutMs: 3000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),

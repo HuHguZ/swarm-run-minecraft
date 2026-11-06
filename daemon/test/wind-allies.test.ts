@@ -6,7 +6,7 @@ import * as edges from '../src/edges'
 import { fireWind } from '../src/mace/hands'
 import { allyOnSegment } from '../src/combat/ally-safety'
 import { windReleaseSafe } from '../src/combat/wind-safety'
-import { windTeamSafe } from '../src/combat/enemy-wind'
+import { enemyWindShot, windTeamSafe } from '../src/combat/enemy-wind'
 const registry = require('prismarine-registry')('1.21.11')
 const Block = require('prismarine-block')(registry)
 const native = require('../src/tick-plugins').getPhysics()
@@ -63,6 +63,63 @@ test('wind release: harmless nearby splash is allowed with unknown allied HP', a
   const result = await fireWind(f.bot, () => ({ yaw: 0, pitch: -Math.PI / 2 }), { immediate: true })
   assert.equal(result.fired, true)
   assert.equal(f.shots.length, 1)
+})
+
+test('wind release: a safe native wall impact beyond thirty ticks is not an artificial range veto', () => {
+  const f = fixture(); f.ally(new Vec3(.5, 1, 5.5))
+  const blockAt = f.bot.blockAt
+  f.bot.blockAt = (p: Vec3) => {
+    if (p.x < 50) return blockAt(p)
+    const b = Block.fromStateId(registry.blocksByName.stone.defaultState)
+    b.position = p.floored(); return b
+  }
+  assert.equal(windReleaseSafe(f.bot, { yaw: -Math.PI / 2, pitch: 0 }, new Vec3(0, 0, 0)), true)
+  f.ally(new Vec3(40.5, 1, .5))
+  assert.equal(windReleaseSafe(f.bot, { yaw: -Math.PI / 2, pitch: 0 }, new Vec3(0, 0, 0)), false, 'a distant allied body still forbids the same native trajectory')
+})
+
+test('wind release: explicit visible allies retain native safety without changing membership', () => {
+  const f = fixture(true); f.ally(new Vec3(1.65, 1, .5)); f.bot._ndSwarmAllies = []
+  const aim = { yaw: 0, pitch: -Math.PI / 2 }, still = new Vec3(0, 0, 0)
+  assert.equal(windReleaseSafe(f.bot, aim, still), true, 'an unconfigured name is not silently assumed to be a teammate')
+  assert.equal(windReleaseSafe(f.bot, aim, still, undefined, ['B', 'B']), false, 'explicit teammate cannot be pushed into the void')
+  assert.deepEqual(f.bot._ndSwarmAllies, [], 'request-local identities never mutate global team membership')
+  const safe = fixture(); safe.ally(new Vec3(1.65, 1, .5)); safe.bot._ndSwarmAllies = []
+  assert.equal(windReleaseSafe(safe.bot, aim, still, undefined, ['B']), true, 'nearby harmless native splash remains legal')
+})
+
+test('wind release: explicit ally identity keeps receiver and fair visibility exclusions', () => {
+  const f = fixture(); const ally = f.ally(new Vec3(2.5, 1, .5)); f.bot._ndSwarmAllies = []
+  const aim = { yaw: -Math.PI / 2, pitch: 0 }, still = new Vec3(0, 0, 0)
+  assert.equal(windReleaseSafe(f.bot, aim, still, undefined, ['B']), false)
+  assert.equal(windReleaseSafe(f.bot, aim, still, 'B', ['B']), true)
+  ally._ndVisible = false
+  assert.equal(windReleaseSafe(f.bot, aim, still, undefined, ['B']), true, 'name alone does not reveal a hidden body')
+  ally._ndVisible = true; f.bot.players = { B: { gamemode: 3 } }
+  assert.equal(windReleaseSafe(f.bot, aim, still, undefined, ['B']), true, 'spectators have no colliding teammate body')
+})
+
+test('wind release: native world-ceiling removal checks its actual explosion instead of an imagined distant ray', () => {
+  const f = fixture(); f.bot.entity.position.y = 349; f.bot.entity.onGround = false
+  f.ally(new Vec3(.5, 349, 5.5))
+  const aim = { yaw: -Math.PI / 2, pitch: 0 }, still = new Vec3(0, 0, 0)
+  assert.equal(windReleaseSafe(f.bot, aim, still), true, 'the native immediate explosion misses this ally')
+  f.ally(new Vec3(1.65, 349, .5))
+  assert.equal(windReleaseSafe(f.bot, aim, still), false, 'the same native explosion cannot spend an airborne ally safety')
+})
+
+test('wind release: a visible gliding ally keeps its native flight through a future wall splash', () => {
+  const f = fixture(); f.bot.entity.position.y = 31; f.bot.entity.onGround = false
+  const ally: any = f.ally(new Vec3(38, 34, 2.2), new Vec3(-1.4, -.2, 0))
+  ally.onGround = false; ally.elytraFlying = true; ally.metadata[0] = 128
+  ally.height = .6; ally.yaw = Math.PI / 2; ally.pitch = 0
+  const blockAt = f.bot.blockAt
+  f.bot.blockAt = (p: Vec3) => {
+    if (Math.floor(p.x) !== 20 || Math.floor(p.z) !== 0) return blockAt(p)
+    const b = Block.fromStateId(registry.blocksByName.stone.defaultState); b.position = p.floored(); return b
+  }
+  assert.equal(windReleaseSafe(f.bot, { yaw: -Math.PI / 2, pitch: 0 }, new Vec3(0, 0, 0)), false,
+    'the flyer is still beside the later burst, and an affected safe landing is not known')
 })
 
 test('wind release: moving allied bodies are checked at projectile arrival', async () => {
@@ -131,4 +188,26 @@ test('wind release: hidden Blast Protection may turn a safe long jump into a voi
   [{ ticks: 2, burst: new Vec3(.5, 1.25, .5) }], undefined, new Map(), true))
   assert.deepEqual(safe, [true, false, true], 'both interval endpoints are safe; its middle falls into the real one-block gap')
   assert.equal(windReleaseSafe(f.bot, { yaw: 0, pitch: -Math.PI / 2 }, new Vec3(0, 0, 0)), false)
+})
+
+test('wind enemy shot: a moving allied glider can intercept at the muzzle between native phases', () => {
+  const { bot } = fixture()
+  const position = new Vec3(558.6483875898844, 137.08280404168002, 606.9868680089414)
+  const velocity = new Vec3(-1.424350938583181, .4934868067938324, .18091654138187296)
+  Object.assign(bot.entity, { position, velocity, onGround: false, elytraFlying: true, height: .6 })
+  const gameTick = 15781146
+  bot.ndClock = { age: BigInt(gameTick), ticks: 0, serverTicks: 0 }
+  const own = { id: 'A', position, velocity, launchMovement: velocity, gliding: true, onGround: false, eyeHeight: .4,
+    gameTick, yaw: 1.2855342160617995, pitch: .33689696106835587 }
+  const foe = { id: 3, username: 'Red', type: 'player', position: new Vec3(545.2128, 140.8817, 605.7942), width: .6, height: 1.8 }
+  const frames = Array.from({ length: 10 }, () => ({ pos: foe.position.clone(), vel: new Vec3(0, 0, 0), onGround: false }))
+  const ally = { id: 'B', position: new Vec3(559.5904010759807, 136.52864256501198, 606.5931156718041),
+    velocity: new Vec3(-1.237060546875, .611572265625, .277099609375), gliding: true, onGround: false,
+    gameTick, yaw: 1.6718714155573715, pitch: .2799873417611347, eyeHeight: .4 }
+  const shot = (report = ally) => enemyWindShot(bot, foe, own, frames, { height: 1.6, allies: [report] })
+
+  assert.equal(shot(), null, 'the next simulated glider overlaps the muzzle, but the preceding native phase may enter it')
+  assert.equal(shot({ ...ally, position: ally.position.offset(0, 0, .75) })?.ticks, 5, 'a clear neighboring lane is unchanged')
+  assert.equal(shot({ ...ally, position: ally.position.offset(0, -.32, 0) })?.ticks, 5, 'the muzzle is above the native .6-tall gliding collider')
+  assert.equal(shot({ ...ally, velocity: new Vec3(0, 0, 0) })?.ticks, 5, 'a glider behind the muzzle does not veto the shot')
 })

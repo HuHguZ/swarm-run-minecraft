@@ -1,10 +1,12 @@
 // Караул жемчуга (пользователь 24.10: «враг бросил жемчуг — бот видит снаряд, считает точку и тик приземления»). Тело видит
-// летящий ender_pearl глазами (луч до снаряда без стен), хозяин — ближайший к нему враг при первом взгляде; полёт —
+// летящий ender_pearl глазами. Видимый пакет броска даёт скорость, владельца и начало отсчёта; полёт —
 // ThrowableProjectile.tick 1.21.11 (jar): тяжесть 0.03 → инерция ×0.99 (в воде ×0.8) → ход и первый блок на отрезке.
 // Встречу в точке появления ставит драйвер (рой), тело только сообщает.
 import { Vec3 } from 'vec3'
 import * as pick from '../pick'
 import { isAlly } from './ally-safety'
+import { observationNow } from '../game-clock'
+import { worldTick } from './team-wind'
 
 const GRAVITY = .03, DRAG = .99
 
@@ -32,12 +34,14 @@ const owners = new WeakMap<object, string>()
 export function enemyPearls(bot: any) {
   const own = bot.entity
   if (!own?.position) return []
-  const eye = pick.eyeOf(bot), out: any[] = []
+  const eye = pick.eyeOf(bot), out: any[] = [], gameTick = worldTick(bot)
   for (const e of Object.values(bot.entities || {}) as any[]) {
-    if (e?.name !== 'ender_pearl' || !e.position || !e.velocity) continue
+    if (e?.name !== 'ender_pearl' || !e.position) continue
     const d = e.position.minus(eye), len = d.norm()
     if (len > 64 || len > 1e-6 && pick.blockOnRay(bot, eye, d.scaled(1 / len), len)) continue
-    let owner = owners.get(e)
+    const seen = bot._ndThrown?.get(e.id), birth = seen?.name === 'ender_pearl' ? seen : null
+    if (birth?.own || !birth && !e.velocity) continue
+    let owner = birth?.owner && bot.entities[birth.owner]?.username || owners.get(e)
     if (owner === undefined) {
       const thrower = (Object.values(bot.players || {}) as any[]).map(pl => pl?.entity)
         .filter(p => p?.position && p !== own && p.username && p.position.offset(0, 1.62, 0).distanceTo(e.position) <= 3)
@@ -47,8 +51,13 @@ export function enemyPearls(bot: any) {
       if (owner) owners.set(e, owner)
     }
     if (!owner || owner === bot.username || isAlly(bot, owner)) continue
-    const land = pearlLanding({ blockAt: p => bot.blockAt(p, false) }, e.position, e.velocity)
-    if (land) out.push({ id: e.id, owner, at: { x: +land.at.x.toFixed(2), y: +land.at.y.toFixed(2), z: +land.at.z.toFixed(2) }, eta: land.tick,
+    const age = !birth ? 0 : gameTick !== null && Number.isSafeInteger(birth.gameTick) ? gameTick - birth.gameTick
+      : Math.floor((observationNow() - birth.observedAt) / 50)
+    if (!Number.isSafeInteger(age) || age < 0 || age >= 120) continue
+    const land = pearlLanding({ blockAt: p => bot.blockAt(p, false) }, birth ? new Vec3(birth.p.x, birth.p.y, birth.p.z) : e.position,
+      birth ? new Vec3(birth.v.x, birth.v.y, birth.v.z) : e.velocity)
+    if (land && land.tick > age) out.push({ id: e.id, owner, at: { x: +land.at.x.toFixed(2), y: +land.at.y.toFixed(2), z: +land.at.z.toFixed(2) }, eta: land.tick - age,
+      ...(gameTick === null ? {} : { gameTick }),
       contact: { x: +land.contact.x.toFixed(2), y: +land.contact.y.toFixed(2), z: +land.contact.z.toFixed(2) }, block: { x: land.block.x, y: land.block.y, z: land.block.z },
       stasis: pearlStasis({ x: land.contact.x, y: land.contact.y + 2.99, z: land.contact.z }, land.velocity, 3).caught })
   }

@@ -44,6 +44,24 @@ test('only a visible hostile pearl is reported, with its thrower guessed from th
   assert.equal(enemyPearls(ally).length, 0, 'a teammate pearl is not an ambush target')
 })
 
+test('visible native pearl birth owns the arrival position and its original server deadline', () => {
+  const { enemyPearls, pearlLanding } = require('../src/combat/pearl-watch')
+  const red = { id: 2, username: 'Red', type: 'player', position: new Vec3(6, 1, 0) }
+  const pearl = { id: 9, name: 'ender_pearl', position: new Vec3(9, 4, 0), velocity: new Vec3(0, .9, 0) }
+  const p = new Vec3(6, 3, 0), v = new Vec3(1, .22, 0), expected = pearlLanding(floor, p, v)
+  assert.ok(expected && expected.tick > 5)
+  const bot: any = { username: 'Blue', entity: { id: 1, position: new Vec3(0, 1, 0), height: 1.8 },
+    ndClock: { age: 500n, serverTicks: 0, ticks: 0 }, blockAt: (q: Vec3) => floor.blockAt(q),
+    entities: { 2: red, 9: pearl }, players: { Red: { entity: red } },
+    _ndThrown: new Map([[pearl.id, { name: pearl.name, owner: red.id, p, v, gameTick: 495 }]]) }
+  const [report] = enemyPearls(bot)
+  assert.deepEqual(report.at, Object.fromEntries(['x', 'y', 'z'].map(k => [k, +expected.at[k].toFixed(2)])))
+  assert.equal(report.gameTick, 500)
+  assert.equal(report.eta, expected.tick - 5)
+  bot.ndClock.ticks = expected.tick
+  assert.deepEqual(enemyPearls(bot), [], 'a still-rendered but already arrived projectile cannot extend its own deadline')
+})
+
 test('stasis trap: a near-vertical pearl is held by a 3-deep bubble column; a 45° pearl and a 1-deep column are not', () => {
   const { pearlStasis } = require('../src/combat/pearl-watch')
   const entry = { x: 10.5, y: 63.9, z: 10.5 }

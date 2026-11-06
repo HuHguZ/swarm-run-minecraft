@@ -40,6 +40,7 @@ test('an explicit empty enemy list skips allied player getters and never registe
 test('enemy-list scopes preserve legacy defaults and stable arrays, then release obsolete player observations', t => {
   const f = scene(t), ally = player(f.bot, 2, 'Ally'), foe = player(f.bot, 3, 'Foe')
   assert.equal(threats.dangers(f.bot).aims.length, 2, 'omitted list retains legacy behavior')
+  const cleanups = f.bot.listeners('end')
   assert.deepEqual(threats.dangers(f.bot, { foes: ['Foe'] }).aims.map(e => e.name), ['Foe'])
   assert.equal(ally.listenerCount('ndPositionObserved'), 0)
   assert.equal(foe.listenerCount('ndPositionObserved'), 1)
@@ -48,7 +49,7 @@ test('enemy-list scopes preserve legacy defaults and stable arrays, then release
   f.timer.advanceTicks(1); foe.position.x = 4
   threats.dangers(f.bot, { foes: ['Foe', 'Foe'] })
   assert.equal(foe.listeners('ndPositionObserved')[0], update, 'same names keep the original motion observer')
-  assert.equal(f.bot.listenerCount('end'), 1, 'scope changes do not accumulate cleanup listeners')
+  assert.deepEqual(f.bot.listeners('end'), cleanups, 'scope changes retain the same player-vision and projectile cleanup callbacks')
   let reads = 0
   Object.defineProperty(ally, 'position', { get() { reads++; throw new Error('obsolete ally pose') } })
   f.bot.emit('physicsTick')
@@ -56,19 +57,26 @@ test('enemy-list scopes preserve legacy defaults and stable arrays, then release
   threats.dangers(f.bot, { foes: [] })
   assert.equal(f.bot.listenerCount('physicsTick'), 0)
   assert.equal(foe.listenerCount('ndPositionObserved'), 0)
-  assert.equal(f.bot.listenerCount('end'), 1)
+  assert.deepEqual(f.bot.listeners('end'), cleanups)
+  assert.equal(f.bot.listenerCount('entitySpawn'), 1)
+  assert.equal(f.bot._client.listenerCount('sync_entity_position'), 1)
+  f.bot.emit('end')
+  assert.equal(f.bot.listenerCount('entitySpawn'), 0, 'disconnect removes the projectile spawn hook')
+  assert.equal(f.bot._client.listenerCount('sync_entity_position'), 0, 'disconnect removes the native motion hook')
+  assert.equal(f.bot.listenerCount('end'), 0)
 })
 
 test('reordered equal enemy lists retain the same observed motion callbacks', t => {
   const f = scene(t), a = player(f.bot, 2, 'A'), b = player(f.bot, 3, 'B')
   threats.dangers(f.bot, { foes: ['A', 'B'] })
+  const cleanups = f.bot.listeners('end')
   const observedA = a.listeners('ndPositionObserved')[0], observedB = b.listeners('ndPositionObserved')[0]
   f.timer.advanceTicks(1); a.position.x -= .2; b.position.x -= .1
-  threats.dangers(f.bot, { foes: ['B', 'A', 'B'] })
+  for (let i = 0; i < 10; i++) threats.dangers(f.bot, { foes: i & 1 ? ['A', 'B'] : ['B', 'A', 'B'] })
   assert.equal(a.listeners('ndPositionObserved')[0], observedA)
   assert.equal(b.listeners('ndPositionObserved')[0], observedB)
   assert.equal(f.bot.listenerCount('physicsTick'), 1)
-  assert.equal(f.bot.listenerCount('end'), 1)
+  assert.deepEqual(f.bot.listeners('end'), cleanups, 'repeated reordered polls cannot accumulate cleanup callbacks')
 })
 
 test('29-allied-player danger polling removes both immediate and persistent observation work', t => {

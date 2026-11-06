@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 import { maceDefenseTurn } from '../src/pvp/turn-mace'
 import * as gameClock from '../src/game-clock'
+import pick = require('../src/pick')
 
 // Он летит мимо нас справа налево: бежать надо за край будущей досягаемости, а не за текущую спину.
 test('mace escape faces away from the moving landing before sprinting, including a wind bounce', async () => {
@@ -50,4 +51,22 @@ test('mace escape faces away from the moving landing before sprinting, including
   ctx.session.current = { name: 'fight', ctl: { aborted: false } }
   await maceDefenseTurn(ctx, { hp: 20, now: 0, r: 99 } as any)
   assert.equal(bot._ndMaceDefense, marker, 'a late continuation cannot acquire a newer intent')
+})
+
+test('a mace defence counter requires a held weapon and a live fight', async t => {
+  t.mock.method(pick, 'canHit', () => true)
+  for (const [item, aborted, expected] of [[undefined, false, 0], ['wind_charge', false, 0], ['iron_sword', true, 0], ['iron_sword', false, 1]] as const) {
+    let attacks = 0
+    const bot: any = { entity: { position: new Vec3(.5, 64, .5), yaw: 0, metadata: [] },
+      heldItem: item ? { name: item } : null, inventory: { slots: Array(46).fill(null), items: () => [] },
+      entities: {}, food: 20, attack() { attacks++ }, async look(yaw: number) { this.entity.yaw = yaw },
+      blockAt(p: Vec3) { return { name: p.y < 64 ? 'stone' : 'air', boundingBox: p.y < 64 ? 'block' : 'empty' } } }
+    const ctx: any = { bot, entity: { username: 'Foe', position: new Vec3(1.5, 66, .5) }, ctl: { aborted },
+      prof: { player: true }, maceTotem: true, mc: { threat: () => ({ kind: 'air', eta: 2, dh: 1, webTried: true }), st: { dodges: 0, counterHits: 0 } },
+      track: { vel: () => ({ x: 0, y: -.6, z: 0 }) }, pvpSkills: {}, set() {}, used() {}, ready: () => false,
+      st: { swings: 0 }, nextReady: 0, sleep: async () => {} }
+    await maceDefenseTurn(ctx, { hp: 20, now: 1000, r: 2 } as any)
+    assert.equal(attacks, expected, item || 'air')
+    assert.equal(ctx.mc.st.counterHits, expected)
+  }
 })

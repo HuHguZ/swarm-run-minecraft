@@ -24,6 +24,7 @@ import { observedCollision } from '../pvp/search'
 import { ROCKET_MAX_TICKS } from '../elytra/consts'
 import { rocketForecast } from '../elytra/rocket-forecast'
 import { damageTypeName } from '../gamedata'
+import { isAlly } from './ally-safety'
 
 const EYE_FLY = 0.4
 const MIN_R = 2.0
@@ -107,7 +108,7 @@ const PITCHES = [-1.0, -0.8, -0.62, -0.48, -0.36, -0.26, -0.17, -0.09, 0, 0.09, 
 // копья, и после касания есть выход вверх без пола/стены. foot(t) — его ноги через t тиков, h — его рамка.
 // hitT — тики до касания: 0 — следующий отправленный шаг (сервер проверяет копьё в позиции после хода с новым взглядом;
 // c40–c41: отсчёт «от текущего, уже отправленного» давал ложное «касание сейчас» — попаданий на заход 0.42 → 0.17).
-export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number }, foot: (t: number) => V, { h = 1.8, hisV = { x: 0, y: 0, z: 0 }, name = 'iron_spear', H = 16, readyIn = 0, arena = null, clip = null }: any = {}) {
+export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number }, foot: (t: number) => V, { h = 1.8, hisV = { x: 0, y: 0, z: 0 }, name = 'iron_spear', H = 16, readyIn = 0, arena = null, clip = null, velocityAt = null, safeReady = false, deadline = Infinity, accept = null }: any = {}) {
   const feet = Array.from({ length: H + 1 }, (_, t) => foot(t))
   const f0 = feet[0]
   const bearing = yawTo(st.p, f0)
@@ -132,6 +133,7 @@ export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number
   let best: any = null
   for (const [yaw, pitches] of looks) {
     for (const pitch of pitches) {
+      if (deadline !== Infinity && clock.wall.monotonic() > deadline) return null
       const r = sky.rollout(W, st.p, st.v, yaw, pitch, st.boost, H, { fd: st.fd, keepPath: true, arena })
       const L = sky.lookVec(yaw, pitch)
       const path = r.path || []
@@ -143,7 +145,7 @@ export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number
         if (!lanceHits({ x: q.x, y: q.y + EYE_FLY, z: q.z }, L, v, feet[t + 1], h)) continue
         const a = feet[t], b = feet[t + 1]
         // Его скорость в миг касания — по тому же прогнозу (у летуна постоянная hisV давала планы без урона).
-        const hitV = pair ? { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z } : hisV
+        const hitV = velocityAt ? velocityAt(t + 1) : pair ? { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z } : hisV
         const dm = lanceDamage(name, L, v, hitV)
         if (dm.dmg > 0) {
           if (clip && !lanceHits({ x: q.x, y: q.y + EYE_FLY, z: q.z }, L, v, feet[t + 1], h, .6, clip)) continue
@@ -153,12 +155,12 @@ export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number
         }
       }
       if (!hit) hit = early
-      if (!hit) continue
+      if (!hit || safeReady && hit.t + 1 < readyIn) continue
       // Столкнулись раньше касания — не годится.
       if (r.kind && r.t <= hit.t) continue
       // Выход: с точки касания тянуть вверх (pitch 0.6) 12 тиков — без стены и без жёсткого пола.
       const out = sky.rollout(W, hit.q, { x: hit.q.vx, y: hit.q.vy, z: hit.q.vz }, yaw, 0.6, Math.max(0, st.boost - hit.t - 1), 12, { fd: hit.q.fd, arena })
-      if (out.kind === 'outside') continue
+      if (out.kind === 'outside' || safeReady && out.kind) continue
       // Выход в стену или в пол — цена, а не запрет (S7d, «гибкость вместо правил»): урон себе на выходе
       // (о стену 10·Δv − 3, падение fd − 3) весит вдвое больше урона ему; такой заход берётся, только если иначе
       // нечем (страховка «опасно» по 6 тикам вперёд в заходе остаётся).
@@ -170,10 +172,129 @@ export function chooseLance (W: any, st: { p: V; v: V; boost: number; fd: number
       let c = hit.t - Math.min(40, hit.dmg) * 0.15 + Math.abs(pitch) * 0.3 + exitSelf * 2 + Math.max(0, readyIn - (hit.t + 1)) * 3
       if (out.kind === 'floor') c += 8
       if (out.kind === 'ceil') c += 60 + (12 - out.t) * 3
-      if (!best || c < best.c) best = { c, yaw, pitch, hitT: hit.t, dmg: ready ? hit.dmg : 0, rel: hit.rel, ready, exit: out.kind || null }
+      const choice = { c, yaw, pitch, hitT: hit.t, dmg: ready ? hit.dmg : 0, rel: hit.rel, ready, exit: out.kind || null }
+      if (accept) {
+        if (accept(yaw, pitch)) return choice
+      } else if (!best || c < best.c) best = choice
     }
   }
   return best
+}
+
+interface WindLanceWindow {
+  ticks: number
+  frames: ReadonlyArray<{ pos: V; vel: V }>
+}
+type WindLanceRead = (deadline: number) => WindLanceWindow | null
+const windLanceDelay = (name: string) => Math.round(spear.SPEARS[name].delay * 20) + 1
+function windLanceLook(bot, e, window: WindLanceWindow, name, readyIn, arena, deadline, W?, clip?) {
+  const H = Math.min(16, window.ticks - 1, window.frames.length - 1)
+  if (H < 1 || H < readyIn) return null
+  const b = bot.entity, st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: bot._ndElytra?.fd || 0 }
+  // A timed finish needs one fully checked course within the current tick.
+  return chooseLance(W ?? sky.worldOf(bot, { observed: true }), st, t => window.frames[t].pos, {
+    h: hitboxOf(bot, e).h, name, H, readyIn, arena, clip: clip ?? lanceCollider(observedCollision(bot)),
+    deadline, safeReady: true, velocityAt: t => window.frames[t].vel,
+    accept: (yaw: number, pitch: number) => spear.teamSafe(bot, yaw, pitch) && clock.wall.monotonic() <= deadline
+  })
+}
+
+export function windLancePlan(bot, e, window: WindLanceWindow, arena, deadline) {
+  const item = spear.spearOf(bot)?.item
+  if (!item || !sky.gliding(bot.entity) || bot.usingHeldItem || bot.health < 6) return null
+  const readyIn = windLanceDelay(item.name) + (bot.heldItem?.name === item.name ? 0 : 1)
+  return windLanceLook(bot, e, window, item.name, readyIn, arena, deadline) ? item : null
+}
+
+/** A certified short contact inherits the current flight owner and uses the native kinetic pass. */
+export async function finishWindLance(bot, ctl, e, item, read: WindLanceRead, arena, deadline) {
+  let window: WindLanceWindow | null = null
+  const ln = lanceContext(bot, ctl, e, { arena, deadline, maxMs: Infinity, passes: 1, stats: {}, used: () => {}, telemetryHp: () => null, observed: true,
+    vel: () => window?.frames[0]?.vel })
+  const canStart = () => ln.valid() && sky.gliding(bot.entity) && !bot.usingHeldItem && bot.health >= 6
+  if (!canStart()) return null
+  try { if (bot.heldItem?.name !== item.name) await bot.equip(item, 'hand') } catch { return null }
+  if (!canStart() || bot.heldItem?.name !== item.name) return null
+  const spec = spear.SPEARS[item.name], lease = { target: e.username }
+  Object.assign(ln, { name: item.name, spec, delayMs: spec.delay * 1000, windFinish: d => window = read(d) })
+  ln.S.lance = lease
+  const client = bot._client, body = bot.entity, nativeClock = bot.ndClock, target = bot.players?.[e.username]?.entity || e
+  const slot = bot.quickBarSlot
+  const sameBody = () => bot._client === client && bot.entity === body && bot.ndClock === nativeClock
+  const samePass = () => ln.valid() && ln.S.lance === lease && sameBody() &&
+    !nativeClock?.frozen && !nativeClock?.disposed && (bot.players?.[e.username]?.entity || e) === target
+  const itemChanged = () => bot.quickBarSlot !== slot || bot.heldItem?.name !== item.name
+  const useChanged = () => !!ln.windContact && (bot._ndUse?.cur !== ln.windContact.use || itemChanged())
+  const stopContact = () => {
+    if (useChanged() || !sameBody()) ln.using = false
+    ln.stopUse()
+  }
+  let wake: (() => void) | undefined
+  let kept = false, cut = false
+  const receiptChanged = () => cut
+    ? bot._ndUse?.cur !== null || bot._ndUse?.stats?.uses !== ln.windContact?.uses || itemChanged()
+    : useChanged()
+  const onHurt = pk => {
+    if (!ln.confirmWindHit) { ln.onHurt(pk); return }
+    if (samePass() && ownSpearHit(pk, body.id, e.id)) {
+      if (kept && (!wake || receiptChanged())) { wake?.(); return }
+      ln.hitAt = clock.now()
+      wake?.()
+    }
+  }
+  try {
+    client.on('damage_event', onHurt)
+    const result = await lanceApproach(ln)
+    if (ln.confirmWindHit && !ln.hitAt && samePass()) {
+      // Keep the one approved movement armed while Paper can consume it.
+      kept = !!ln.windContact && !useChanged() && bot.players?.[e.username]?.entity === target &&
+        sky.gliding(body) && spear.teamSafe(bot)
+      if (!kept) stopContact()
+      const aborters: (() => void)[] | undefined = (ln.ctl as any).onAbort
+      const receipt = new Promise<void>(resolve => {
+        wake = () => {
+          if (!wake) return
+          wake = undefined
+          if (kept) stopContact()
+          resolve()
+        }
+      })
+      const done = wake!
+      // Stop before the next movement or an unsafe ally ray. The earlier
+      // contact receipt can still arrive within the original watchdog.
+      const cutoff = () => {
+        if (!wake || cut) return
+        if (!samePass() || useChanged()) { done(); return }
+        cut = true
+        stopContact()
+      }
+      const moved = entity => {
+        if (!samePass() || receiptChanged()) done()
+        else if (!cut && isAlly(bot, entity) && !spear.teamSafe(bot)) cutoff()
+      }
+      const gone = entity => { if (entity === target) done() }
+      const held = () => { if (receiptChanged()) done() }
+      const listeners = [['physicsTick', cutoff], ['entityMoved', moved], ['entitySpawn', moved], ['entityUpdate', moved],
+        ['entityGone', gone], ['heldItemChanged', held], ['end', done]] as const
+      if (kept) for (const [event, fn] of listeners) bot.on(event, fn)
+      aborters?.push(done)
+      const timer = clock.wall.setTimeout(done, 1000 / (nativeClock?.observationRate?.() || 20))
+      try { await receipt } finally {
+        clock.wall.clearTimeout(timer)
+        if (kept) for (const [event, fn] of listeners) bot.removeListener(event, fn)
+        const index = aborters?.indexOf(done) ?? -1
+        if (index >= 0) aborters!.splice(index, 1)
+        wake = undefined
+      }
+    }
+    if (ln.confirmWindHit && ln.hitAt) result.why = 'попал'
+    if (result.why === 'попал' && ln.valid() && (!ln.confirmWindHit || samePass()) && sky.gliding(bot.entity)) await lanceExit(ln, result)
+    return { hit: result.why === 'попал', why: result.why }
+  } finally {
+    if (ln.S.lance === lease) delete ln.S.lance
+    stopContact()
+    client.removeListener('damage_event', onHurt)
+  }
 }
 
 // Касание тарана — только damage_event цели, причина которого — я (sourceCauseId = id + 1; 0 — без причины).
@@ -326,6 +447,9 @@ interface LanceCtx {
   valid: () => any; sp: any; name: string; spec: any; delayMs: number
   foe: () => any; hisH: () => number; hv: () => any; footAt: (t: number) => any; ceilY: () => number; cruiseY: () => number
   using: boolean; useAt: number; hitAt: number; onHurt: (pk: any) => void; stopUse: () => void; clip: LanceClip
+  windFinish?: WindLanceRead
+  confirmWindHit?: boolean
+  windContact?: { use: object; uses?: number }
 }
 
 function syncLanceUse (ln: LanceCtx) {
@@ -335,8 +459,8 @@ function syncLanceUse (ln: LanceCtx) {
   ln.useAt = ln.using ? use.since : 0
 }
 
-function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats, used, allow, maxMs, deadline, passes, arena, telemetryHp }: any): LanceCtx {
-  const W = sky.worldOf(bot)
+function lanceContext (bot: any, ctl: { aborted: boolean }, e: any, { vel, stats, used, allow, maxMs, deadline, passes, arena, telemetryHp, observed = false }: any): LanceCtx {
+  const W = sky.worldOf(bot, { observed })
   const S = sky.install(bot)
   ctl = sky.flightControl(bot, ctl)
   const t0 = clock.now()
@@ -457,7 +581,7 @@ async function lanceRunUp (ln: LanceCtx) {
 
 // Заход до касания или отказа и его разбор: попадание, снятое хп, след захода (lanceTrace).
 async function lanceApproach (ln: LanceCtx) {
-  const { bot, e, stats, used, allow, arena, telemetryHp, W, S, out, valid, name, spec, delayMs, foe, hisH, hv, footAt, stopUse } = ln
+  const { bot, e, stats, used, allow, arena, telemetryHp, W, S, out, valid, name, spec, delayMs, foe, hisH, hv, footAt, stopUse, windFinish } = ln
   // 2) Заход: к нему (ракета, если медленно), затем «использовать» копьё; взгляд — chooseLance.
   out.passes++
   stats.lancePasses = (stats.lancePasses || 0) + 1
@@ -466,7 +590,7 @@ async function lanceApproach (ln: LanceCtx) {
   S.phase = 'таран: заход'
   const res: any = await new Promise<any>(resolve => {
     let done = false
-    let rocket = (!ln.using && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 1.1 && sky.rocketCount(bot) > 1 && !(bot.fireworkRocketDuration > 0)) ? 'нужна' : 'нет'
+    let rocket = (!windFinish && !ln.using && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 1.1 && sky.rocketCount(bot) > 1 && !(bot.fireworkRocketDuration > 0)) ? 'нужна' : 'нет'
     let minD = Infinity; let growing = 0
     let prevF: any = null
     const tR = clock.now()
@@ -474,7 +598,20 @@ async function lanceApproach (ln: LanceCtx) {
     let close: any = null
     let planned = 0
     S.driving = (S.driving || 0) + 1
-    const fin = (why: string) => { if (done) return; done = true; S.driving = Math.max(0, (S.driving || 1) - 1); bot.removeListener('physicsTick', onT); resolve({ why, best, close, planned }) }
+    const aborters: (() => void)[] | undefined = windFinish ? (ln.ctl as any).onAbort : undefined
+    const abort = () => fin(ln.hitAt ? 'попал' : 'прервали')
+    const fin = (why: string) => {
+      if (done) return
+      if (windFinish && why === 'окно тарана закрыто' && best?.ready && ln.using && clock.now() - ln.useAt >= delayMs) ln.confirmWindHit = true
+      done = true
+      S.driving = Math.max(0, (S.driving || 1) - 1)
+      bot.removeListener('physicsTick', onT)
+      if (aborters) queueMicrotask(() => {
+        const i = aborters.indexOf(abort)
+        if (i >= 0) aborters.splice(i, 1)
+      })
+      resolve({ why, best, close, planned })
+    }
     const onT = () => {
       if (done) return
       try {
@@ -485,6 +622,9 @@ async function lanceApproach (ln: LanceCtx) {
         if (b.onGround) return fin('сел')
         if (!b.elytraFlying && clock.now() - S.startedAt > 400) return fin('полёт кончился')
         syncLanceUse(ln)
+        const deadline = windFinish ? clock.wall.monotonic() + 1000 / (bot.ndClock?.observationRate?.() || 20) : Infinity
+        const window = windFinish?.(deadline)
+        if (windFinish && (!window || !b.elytraFlying || bot.heldItem?.name !== name || !ln.using && bot.usingHeldItem)) return fin('окно тарана закрыто')
         if (allow) allow()
         if (clock.now() - tR > 4500) return fin('долго')
         // The approach owns steering, so the ground overlay cannot see or evade a third player's lance.
@@ -518,7 +658,16 @@ async function lanceApproach (ln: LanceCtx) {
         }
         const st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: S.fd }
         const readyIn = ln.using ? Math.max(0, Math.round(spec.delay * 20) + 1 - Math.round((clock.now() - ln.useAt) / 50)) : Math.round(spec.delay * 20) + 1
-        const pl = chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name, readyIn, arena, clip: ln.clip })
+        const pl = window ? windLanceLook(bot, e, window, name, readyIn, arena, deadline, W, ln.clip) :
+          chooseLance(W, st, footAt, { h: hisH(), hisV: hv(), name, readyIn, arena, clip: ln.clip })
+        if (windFinish && !pl) {
+          const use = bot._ndUse?.cur, dir = sky.lookVec(b.yaw, b.pitch)
+          if (best?.hitT === 0 && ln.using && use?.confirmed && clock.now() - ln.useAt >= delayMs &&
+              window.frames.slice(0, 2).some(f => lanceHits(eye, dir, b.velocity, f.pos, hisH(), .6, ln.clip) &&
+                lanceDamage(name, dir, b.velocity, f.vel).dmg > 0) && clock.wall.monotonic() <= deadline)
+            ln.windContact = { use, uses: bot._ndUse.stats?.uses }
+          return fin('окно тарана закрыто')
+        }
         if (closest) Object.assign(close, {
           plan: pl?.hitT ?? null, ready: pl?.ready ?? null, prel: pl?.rel ?? null,
           readyIn, planAt: sampleAt, planHitAt: pl ? sampleAt + pl.hitT * 50 : null,
@@ -582,8 +731,9 @@ async function lanceApproach (ln: LanceCtx) {
       } catch (err: any) { fin('ошибка: ' + err.message) }
     }
     bot.on('physicsTick', onT)
+    aborters?.push(abort)
   })
-  stopUse()
+  if (!ln.windContact) stopUse()
   if (res.why === 'попал') {
     out.hits++
     stats.lanceHits = (stats.lanceHits || 0) + 1
@@ -593,7 +743,7 @@ async function lanceApproach (ln: LanceCtx) {
     // Убил (сущность снята — с do_immediate_respawn раньше метаданных с хп 0) — снял всё, что было (hp1);
     // раньше hpMin оставался равен hp1 и убийство писалось «снял 0» (замечание проверки S7b в).
     const onH = () => { const h = telemetryHp(e); if (h != null && (hpMin == null || h < hpMin)) hpMin = h; if (clock.now() - tH > 500 || e.isValid === false) { bot.removeListener('physicsTick', onH); const dealt = e.isValid === false && hp1 != null ? hp1 : (hp1 != null && hpMin != null ? Math.max(0, hp1 - hpMin) : null); if (dealt != null) { out.dealt += dealt; (stats.lanceDealt = stats.lanceDealt || []).push(r2(dealt)) } } }
-    bot.on('physicsTick', onH)
+    if (!windFinish) bot.on('physicsTick', onH)
     used(`элитры: таран копьём — попал${res.best ? ` (план ${res.best.dmg}, ${res.best.rel} бл/с)` : ''}`)
   } else used(`элитры: таран — ${res.why}`)
   // Разбор захода (s7b): ближе всего (до его середины), высота над ним, скорость б/т, тиков «использования»

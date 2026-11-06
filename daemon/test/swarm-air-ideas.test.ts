@@ -45,6 +45,41 @@ test('wind launches an actual charge without reading enemy HP', async () => {
   assert.equal((await air.windAt(f.bot, f.target)).fired, true)
   assert.deepEqual(f.uses, ['wind_charge'])
 })
+
+test('wind can throw its only offhand charge while retaining the held weapon', async () => {
+  const f = fixture([]), charge = item('wind_charge', 45); charge.count = 1
+  f.bot.inventory.slots[45] = charge
+  f.bot.heldItem = item('netherite_sword')
+  f.bot.equip = async () => { throw Error('offhand charge does not require a main-hand swap') }
+  f.bot.activateItem = off => { assert.equal(off, true); f.uses.push(f.bot.inventory.slots[45].name) }
+  assert.equal((await air.windAt(f.bot, f.target)).fired, true)
+  assert.equal(f.bot.heldItem.name, 'netherite_sword')
+  assert.deepEqual(f.uses, ['wind_charge'])
+})
+
+test('offhand wind rechecks the actual hand before release', async () => {
+  const f = fixture([]), charge = item('wind_charge', 45); charge.count = 1
+  f.bot.inventory.slots[45] = charge
+  const look = f.bot.look
+  f.bot.look = async (yaw, pitch) => { await look(yaw, pitch); f.bot.inventory.slots[45] = item('shield', 45) }
+  assert.equal((await air.windAt(f.bot, f.target)).fired, false)
+  assert.equal(f.uses.length, 0)
+})
+
+test('wind uses its last charge past 32m while ordinary Punch keeps its existing range', async () => {
+  const charge = item('wind_charge'); charge.count = 1
+  const f = fixture([charge]); f.target.position.x = 33
+  assert.equal((await air.windAt(f.bot, f.target)).fired, true)
+  assert.deepEqual(f.uses, ['wind_charge'])
+  const blocked = fixture([charge]); blocked.target.position.x = 33; blocked.wall()
+  assert.equal((await air.windAt(blocked.bot, blocked.target)).fired, false)
+  assert.equal(blocked.uses.length, 0)
+  const unknown = fixture([charge]); unknown.target.position.x = 33; unknown.bot.blockAt = () => null
+  assert.equal((await air.windAt(unknown.bot, unknown.target)).fired, false, 'an unknown corridor is not visible')
+  assert.equal(unknown.uses.length, 0)
+  const archer = fixture([item('bow', 36, { punch: 2 }), item('arrow', 37)]); archer.target.position.x = 33
+  assert.equal((await air.punchAt(archer.bot, archer.target)).fired, false)
+})
 test('wind telemetry separates the used aim from movement observed before release', async () => {
   const f = fixture(), look = f.bot.look
   let observationNow = 1010, aimedYaw = 0, aimedPitch = 0

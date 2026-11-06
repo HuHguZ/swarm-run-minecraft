@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { choose, cost } from '../src/elytra/control'
+import { choose, cost, PITCHES, YAW_OFF } from '../src/elytra/control'
+import { wrap, yawTo } from '../src/elytra/consts'
 import { rollout } from '../src/elytra/physics'
 import * as physics from '../src/elytra/physics'
 import { landingPlan } from '../src/elytra/landing'
@@ -56,8 +57,24 @@ for (const rocketNow of [false, true]) test(`point search measures the needed cl
   assert.equal(plan.c, cost(W, st, goal, () => goal.at, full, plan.yaw, plan.pitch))
 })
 
+function fullPoint(W, st, goal, { H = 18, rocketNow = false } = {}) {
+  const at = typeof goal.at === 'function' ? goal.at : () => goal.at
+  const bearing = yawTo(st.p, at(0)), hs = Math.hypot(st.v.x, st.v.z)
+  const heading = hs > .2 ? Math.atan2(-st.v.x, -st.v.z) : bearing
+  const yaws = new Set(YAW_OFF.flatMap(o => [wrap(bearing + o), ...(Math.abs(o) <= .9 ? [wrap(heading + o)] : [])]))
+  let best = null
+  for (const yaw of yaws) for (const pitch of goal.pitches || PITCHES) {
+    const r = rollout(W, st.p, st.v, yaw, pitch, (st.boost || 0) + (rocketNow ? 26 : 0), H,
+      { fd: st.fd, keepPath: !!goal.reach, arena: goal.arena })
+    if (r.kind === 'outside') continue
+    const c = cost(W, st, goal, at, r, yaw, pitch)
+    if (!best || c < best.c) best = { c, yaw, pitch, r }
+  }
+  return best
+}
+
 for (const obstacle of ['open', 'wall', 'ceiling', 'floor']) for (const rocketNow of [false, true]) {
-  test(`a static point prunes losing geometry checks without changing the full moving-point result: ${obstacle}, rocket=${rocketNow}`, () => {
+  test(`static and moving points prune losing geometry checks with the same complete winner: ${obstacle}, rocket=${rocketNow}`, () => {
     let checks = 0
     const W = { boxHit: (x, y, z) => {
       checks++
@@ -66,13 +83,36 @@ for (const obstacle of ['open', 'wall', 'ceiling', 'floor']) for (const rocketNo
     const st = { p: { x: 0, y: 64, z: 0 }, v: { x: .2, y: 0, z: -.3 }, boost: 0, fd: 0 }
     const goal = { kind: 'point', at: { x: 3, y: 68, z: -20 }, gap: 3,
       arena: { x: 0, y: 60, z: 0, r: 35, killY: 40 } }
-    const full = choose(W, st, { ...goal, at: () => goal.at }, { rocketNow })
-    const fullChecks = checks; checks = 0
-    const pruned = choose(W, st, goal, { rocketNow })
-    assert.deepEqual(pruned, full)
-    assert(checks < fullChecks, 'only candidates with a provably losing distance bound skip the unchanged physical checks')
+    const forecasts = new Map<number, number>()
+    const moving = { ...goal, minY: 63, maxY: 73, speedMin: .4, away: { x: 2, y: 64, z: -3 }, at: t => {
+      forecasts.set(t, (forecasts.get(t) || 0) + 1)
+      return { x: goal.at.x + t * .05, y: goal.at.y - t * .1, z: goal.at.z + t * .25 }
+    } }
+    for (const target of [goal, moving]) {
+      checks = 0
+      const full = fullPoint(W, st, target, { rocketNow })
+      const fullChecks = checks; checks = 0; forecasts.clear()
+      const pruned = choose(W, st, target, { rocketNow })
+      assert.deepEqual(pruned, full)
+      assert(checks < fullChecks, 'losing candidates skip the unchanged world collision checks')
+      if (target === moving) assert.equal(forecasts.get(18), 1, 'the clear winner owns the memoized endpoint')
+    }
   })
 }
+
+test('equal moving-point prices keep the first heading and an all-unknown route needs no unseen endpoint', () => {
+  const W = { boxHit: () => false, floorBelow: () => null }
+  const st = { p: { x: 0, y: 64, z: 0 }, v: { x: 0, y: 0, z: 0 }, boost: 0, fd: 0 }
+  const goal = { kind: 'point', pitches: [0], at: t => ({ x: 0, y: 64 - t, z: 0 }) }
+  const first = fullPoint(W, st, goal)
+  assert(first)
+  assert.deepEqual(choose(W, st, goal), first)
+  const blocked = { ...W, boxHit: () => true }
+  const neverKnown = { ...goal, at: t => { assert.equal(t, 0); return goal.at(t) } }
+  assert.deepEqual(choose(blocked, st, neverKnown), fullPoint(blocked, st, neverKnown))
+  const outside = { ...goal, arena: { x: 30, z: 30, r: 2 } }
+  assert.equal(choose(W, st, outside), null)
+})
 
 test('a tall support below the extra row keeps its clearance penalty', () => {
   const W = { boxHit: () => false, floorBelow: (_x, y, _z, depth) => Math.floor(y) - depth <= 95 ? { top: 96.5 } : null }

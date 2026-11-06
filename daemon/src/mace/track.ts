@@ -29,7 +29,8 @@ export function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any)
     try {
       const e = enemy()
       if (!e || !e.position || e.isValid === false) return
-      if (his.id !== e.id) { his.id = e.id; his.y = null; his.air = false; his.peak = null; his.launchedAt = 0; his.hist = [] }
+      if (his.id !== e.id) { his.id = e.id; his.y = null; his.air = false; his.peak = null; his.launchedAt = 0; his.maceAt = 0; his.hist = []; active = null }
+      if (e._ndVisible === false) { his.hist = []; his.air = false; his.peak = null; his.launchedAt = 0; return }
       const y = e.position.y
       // Позиции чужих приходят пакетами, не в такт нашему тику: скорость — по
       // окну в ~150 мс, иначе она скачет между нулём и двойной.
@@ -66,19 +67,19 @@ export function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any)
   // достать при спуске — или сидит сверху с булавой. null — угрозы нет.
   const threat = () => {
     const e = enemy()
-    if (!e || !e.position || e.isValid === false || !bot.entity) return (active = null)
+    if (!e || !e.position || e.isValid === false || e._ndVisible === false || !bot.entity) return (active = null)
     const me = bot.entity.position
     const dy = e.position.y - me.y
     const dh = Math.hypot(e.position.x - me.x, e.position.z - me.z)
-    const mace = gameClock.now() - his.maceAt < 4000
+    const mace = e._ndMaceSeen || his.id === e.id && !!his.maceAt
     // Подбросили его мы сами (свой заряд в него) — это не его взлёт.
     const ours = pushWatch && pushWatch.id === e.id && gameClock.now() - pushWatch.at < 2000
     const launched = his.launchedAt && gameClock.now() - his.launchedAt < 2500 && !ours
     let out = null
-    // Без взлёта и без булавы — только настоящее падение на нас (уже летит
-    // вниз и упал от вершины на 1.5+): подпрыгивать на своём столбе — не угроза
+    // Без взлёта и без виденной булавы — только высокий спуск на нас:
+    // обычный прыжок (вершина 1.25) — не угроза
     // (арена 2026-09-26: «булава сверху ×21» от прыжков на столбе).
-    const dropping = his.vy < -0.3 && his.peak != null && his.peak - e.position.y > 1.5 && his.peak - me.y > 3.5 && dh < 3.5
+    const dropping = his.vy < -0.3 && his.peak != null && his.peak - me.y > 3.5
     // Когда он будет на высоте нашей головы: прогон по вертикали.
     let yy = e.position.y; let vv = his.vy; let n = 0
     const headY = me.y + 1.8
@@ -88,7 +89,7 @@ export function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any)
     // кидал заряды под ноги»). Горизонталь в воздухе гаснет медленно (×0.91 на тик) — сумма ряда.
     const k = (1 - Math.pow(0.91, n)) / 0.09
     const dhLand = Math.hypot(e.position.x + his.vx * k - me.x, e.position.z + his.vz * k - me.z)
-    if (his.air && dy > 1.5 && (dh < 5.5 || mace && dh < 24 && dhLand < 3.5) && (launched || mace || dropping)) {
+    if (his.air && dy > 1.5 && ((launched || mace) && dh < 5.5 || dh < 24 && dhLand < 3.5) && (launched || mace || dropping)) {
       out = { kind: 'air', dy, dh, vy: his.vy, eta: n, mace, launched: !!launched, peak: his.peak }
     } else if (!his.air && mace && dy > 2.4 && dh < 3.6) {
       out = { kind: 'above', dy, dh, eta: 99, mace: true }

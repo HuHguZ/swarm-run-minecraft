@@ -2,6 +2,7 @@
 // Подключения мозгов к демону по WebSocket: часы (тик и пульс), опасности для арены, вызовы RPC-методов.
 // Часы (gameClock) и методы передаёт src/index.ts — тест подменяет часы, не поднимая порта и бота.
 import type { RpcState } from './context'
+import { WIND_BID_REPLY_TICKS, type WindBidFinish, type WindRadio } from '../combat/wind-coordination'
 
 function attachClients (wss, { session, gameClock, methods, log, state }: { session: any, gameClock: any, methods: Record<string, any>, log: (...args: any[]) => void, state: RpcState }) {
   let clients = 0
@@ -57,16 +58,47 @@ function attachClients (wss, { session, gameClock, methods, log, state }: { sess
     // Wall heartbeat is deliberate: freeze must be observable while there are
     // zero gameplay ticks, and campaigns must see stalls and rate changes.
     const clockTimer = gameClock.wall.setInterval(sendClock, 250)
+    let bidId = 0
+    let pendingBid: { id: number; reply: (granted: boolean) => void } | undefined
+    const pushWind = (packet: object) => {
+      if (ws.readyState !== 1) return false
+      try { ws.send(JSON.stringify(packet)); return true } catch { return false }
+    }
+    const radio: WindRadio = (bid, signal) => new Promise(resolve => {
+      if (signal?.aborted || pendingBid || ws.readyState !== 1 || (ws.bufferedAmount || 0) >= 65536) return resolve(undefined)
+      const id = ++bidId
+      const finish: WindBidFinish = shot => { pushWind({ ...bid, type: 'wind_bid_done', id, shot }) }
+      const reply = (granted: boolean) => {
+        if (pendingBid?.id !== id) return
+        gameClock.wall.clearTimeout(timer)
+        signal?.removeEventListener('abort', cancel)
+        pendingBid = undefined
+        if (!granted) finish()
+        resolve(granted ? finish : undefined)
+      }
+      const cancel = () => reply(false)
+      const timer = gameClock.wall.setTimeout(cancel, WIND_BID_REPLY_TICKS * 50)
+      pendingBid = { id, reply }
+      signal?.addEventListener('abort', cancel, { once: true })
+      if (!pushWind({ ...bid, type: 'wind_bid', id })) reply(false)
+    })
     ws.on('close', () => {
       gameClock.wall.clearInterval(clockTimer)
       gameClock.changes.off('bound', bindClock)
       bindClock(null)
+      if (session._windRadio === radio) delete session._windRadio
+      pendingBid?.reply(false)
     })
     ws.on('close', () => { clients--; session.brainAttached = clients > 0 })
     log('brain attached')
     ws.on('message', async (raw) => {
       let msg
       try { msg = JSON.parse(raw.toString()) } catch { return }
+      if (msg?.type === 'wind_radio') { session._windRadio ??= radio; return }
+      if (msg?.type === 'wind_bid_answer') {
+        if (pendingBid && pendingBid.id === msg.id) pendingBid.reply(msg.granted === true)
+        return
+      }
       const { id, method, params } = msg
       const fn = methods[method]
       if (!fn) {

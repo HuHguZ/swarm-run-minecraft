@@ -11,8 +11,13 @@ import './game-clock'
 import * as gameClock from './game-clock'
 import edges = require('./edges')
 import * as wind from './combat/team-wind'
+import * as hands from './mace/hands'
+import * as reflex from './reflex-lock'
 import * as geometry from './navigation/geometry'
 import { landingDamage } from './navigation/landing'
+import { observedCollision } from './pvp/search'
+import { windReleaseSafe } from './combat/wind-safety'
+import { eyeOf } from './pick'
 
 const EYE = 1.62
 const LIFT = wind.WIND.surfaceOffset
@@ -36,7 +41,8 @@ function* simulation (bot, to, v) {
   const dir = { x: -Math.sin(yaw), z: -Math.cos(yaw) }
   const st = edges.cloneState(edges.stateOf(bot, edges.IDLE), edges.IDLE)
   st.yaw = yaw
-  let burst = null; let boom = -1; let path = []; let lastMove = st.vel.clone(); let peak = st.pos.y; let settled = 0; let shot = null
+  let burst = null; let boom = -1; let path = []; let lastMove = wind.windMovement(bot); let peak = st.pos.y; let settled = 0; let shot = null
+  let handoffReady = !v.handoffAt
   for (let t = 0; t < 90; t++) {
     const ctrl: any = { ...edges.IDLE }
     if (t < v.run) { ctrl.forward = true; ctrl.sprint = true }
@@ -58,6 +64,7 @@ function* simulation (bot, to, v) {
     }
     // После толчка — руль к цели: вперёд, пока не над ней.
     if (boom >= 0 && t > boom) {
+      if (!handoffReady && !st.onGround && st.vel.y < 0) handoffReady = v.handoffAt(st.pos)
       const steering = wind.windSteer(bot, st, to, v.arena)
       st.yaw = steering.yaw; Object.assign(ctrl, steering.control)
     }
@@ -73,7 +80,7 @@ function* simulation (bot, to, v) {
       const fall = t - boom <= wind.WIND.forgivenessTicks ? Math.min(peak - st.pos.y, burst.y - st.pos.y) : peak - st.pos.y
       if (!support || landingDamage(support.block, fall, bot.entity.attributes) > 0) return null
       if (wind.windLanding(bot, st, to)) settled++; else settled = 0
-      if (settled >= 6) return { ...v, land: st.pos.clone(), off, dy: st.pos.y - to.y, ticks: t, burst, boomTick: boom, yaw, path, shot, settled: true }
+      if (settled >= 6) return !handoffReady ? null : { ...v, land: st.pos.clone(), off, dy: st.pos.y - to.y, ticks: t, burst, boomTick: boom, yaw, path, shot, settled: true }
       if (t > boom + 8 && off > .8) return null
     }
     yield
@@ -107,7 +114,7 @@ async function planAsync (bot, to, { arena = undefined, maxTries = Infinity }: a
 }
 
 // План: лучший вариант, садящийся на клетку цели (to — ноги на цели: центр клетки, y верха опоры).
-function plan (bot, to, { arena = undefined, maxTries = Infinity }: any = {}) {
+function plan (bot, to, { arena = undefined, maxTries = Infinity, handoffAt = null }: any = {}) {
   if (!geometry.bodyClear(bot, to) || !geometry.supportAt(bot, to, .03) || !wind.windInside(to, arena)) return { best: null, tried: 0, near: null }
   const cache = edges.worldOf(bot)
   const observed = { ...bot, blockAt: p => cache.getBlock(p) }
@@ -118,7 +125,7 @@ function plan (bot, to, { arena = undefined, maxTries = Infinity }: any = {}) {
       const v = { run, jump, tThrow: run + dt, back, arena }
       if (tried >= maxTries) return { best: null, tried, near: null }
       tried++
-      const r = simulate(observed, to, v)
+      const r = simulate(observed, to, handoffAt ? { ...v, handoffAt } : v)
       if (r) return { best: r, tried, near: null }
     }
   }
@@ -127,36 +134,62 @@ function plan (bot, to, { arena = undefined, maxTries = Infinity }: any = {}) {
 
 // Исполнение плана тик в тик. Итог: { ok, plan, land, off }.
 // handoff() — на спуске отдать полёт вызывающему (засада жемчуга: булавой на точку появления), не доводя посадку.
-async function leap (session, ctl, to, { dryRun = false, arena = undefined, handoff = null }: any = {}) {
-  const bot = session.bot
+async function leap (session, ctl, to, { dryRun = false, arena = undefined, handoff = null, handoffAt = null, canLaunch = null, observedStationary = false }: any = {}) {
+  const bot = session.bot, body = bot.entity, owner = session.current
+  const owns = () => session.bot === bot && bot.entity === body && session.current === owner && reflex.allowed(session)
+  const canUse = () => owns() && !ctl.aborted && bot.health > 0 && !bot.usingHeldItem && (!canLaunch || canLaunch())
+  const observed = () => ({ ...bot, blockAt: observedCollision(bot).blockAt })
+  const stationary = () => {
+    const moved = bot._ndLaunchMovement?.()
+    return moved && Math.hypot(moved.x, moved.y, moved.z) < 1e-6 && bot.entity.onGround
+  }
   const T = new Vec3(to.x, to.y, to.z)
-  const wc0 = bot.inventory.items().find(i => i.name === 'wind_charge')
-  if (!wc0) return { ok: false, why: 'нет зарядов ветра' }
+  const offhand = hands.offWind(bot), wc0 = offhand ? null : hands.findItem(bot, 'wind_charge')
+  if (!offhand && !wc0) return { ok: false, why: 'нет зарядов ветра' }
+  if (!canUse()) return { ok: false, why: 'hands_busy' }
   if (!bot.entity.onGround) return { ok: false, why: 'не на земле' }
-  const p = plan(bot, T, { arena })
+  if (observedStationary && !stationary()) return { ok: false, why: 'moving_route_launch' }
+  const p = observedStationary ? plan(observed(), T, { arena, maxTries: 4 }) : plan(bot, T, { arena, handoffAt })
   if (!p.best || dryRun) return { ok: !!p.best, why: p.best ? 'план' : 'не допрыгнуть', tried: p.tried, near: p.near, plan: p.best && { run: p.best.run, jump: p.best.jump, tThrow: p.best.tThrow, back: p.best.back, ticks: p.best.ticks, off: +p.best.off.toFixed(2) } }
   const v = p.best
   bot.pathfinder?.setGoal(null)
-  await bot.equip(wc0, 'hand')
+  if (!offhand) await bot.equip(wc0, 'hand')
+  if (!canUse()) return { ok: false, why: 'hands_busy' }
   const dir = { x: -Math.sin(v.yaw), z: -Math.cos(v.yaw) }
   await bot.look(v.yaw, 0, true)
-  let boom = -1; let settled = 0; let lastPos = bot.entity.position.clone(); let moved = bot.entity.velocity.clone()
+  let boom = -1; let settled = 0; let lastPos = bot.entity.position.clone(); let moved = wind.windMovement(bot)
   try {
     for (let t = 0; t < 95 && !ctl.aborted; t++) {
+      if (observedStationary && !owns()) return { ok: false, why: 'route_owner_changed' }
       if (!wind.windInside(bot.entity.position, arena) || bot.health <= 0) return { ok: false, why: 'unsafe_actual_flight' }
       bot.clearControlStates()
       if (t < v.run) { bot.setControlState('forward', true); bot.setControlState('sprint', true) }
       if (v.jump && t === v.run) bot.setControlState('jump', true)
       if (t > v.run && boom < 0 && v.run > 0) { bot.setControlState('forward', true); bot.setControlState('sprint', true) }
       if (t === v.tThrow) {
+        if (!canUse()) return { ok: false, why: 'hands_busy' }
         const pos = bot.entity.position
-        const B = floorBurst(bot, pos.x - dir.x * v.back, pos.z - dir.z * v.back, pos.y)
+        const world = observedStationary ? observed() : bot
+        const B = floorBurst(world, pos.x - dir.x * v.back, pos.z - dir.z * v.back, pos.y)
         if (!B) return { ok: false, why: 'некуда бросить' }
-        const actual = wind.windShot(bot, (require('./pick') as typeof import('./pick')).eyeOf(bot), B.offset(0, -LIFT, 0), new Vec3(moved.x, bot.entity.onGround ? 0 : moved.y, moved.z))
+        const launchMovement = bot._ndLaunchMovement ? wind.windMovement(bot) : new Vec3(moved.x, bot.entity.onGround ? 0 : moved.y, moved.z)
+        let actual = wind.windShot(world, eyeOf(bot), B.offset(0, -LIFT, 0), launchMovement)
         if (!actual) return { ok: false, why: 'actual_charge_ray_changed' }
         await bot.look(actual.yaw, actual.pitch, true)
-        bot.entity.yaw = actual.yaw; bot.entity.pitch = actual.pitch
-        await new Promise<void>(resolve => edges.afterPacket(bot, () => { if (!ctl.aborted) { bot.activateItem(); bot.usingHeldItem = false }; resolve() }))
+        const fired = await new Promise<boolean>(resolve => edges.afterPacket(bot, () => {
+          try {
+            if (!canUse() || hands.windCooling(bot) || (offhand ? !hands.offWind(bot) : bot.heldItem?.name !== 'wind_charge')) return resolve(false)
+            if (observedStationary) {
+              if (!stationary()) return resolve(false)
+              const fresh = simulate(observed(), T, v)
+              if (!fresh?.shot || !windReleaseSafe(bot, fresh.shot, wind.windMovement(bot))) return resolve(false)
+              actual = fresh.shot
+            }
+            wind.useWindAtAngle(bot, offhand, actual); bot.usingHeldItem = false; resolve(true)
+          }
+          catch { resolve(false) }
+        }))
+        if (!fired) return { ok: false, why: 'wind_release_interrupted' }
         boom = t + actual.ticks
         await bot.look(v.yaw, 0, true)
       }
@@ -172,7 +205,7 @@ async function leap (session, ctl, to, { dryRun = false, arena = undefined, hand
       await bot.waitForTicks(1)
       moved = bot.entity.position.minus(lastPos); lastPos = bot.entity.position.clone()
     }
-  } finally { bot.clearControlStates() }
+  } finally { if (owns() && !bot.usingHeldItem) bot.clearControlStates() }
   const at = bot.entity.position
   const off = Math.hypot(at.x - T.x, at.z - T.z)
   return { ok: !ctl.aborted && settled >= 6 && wind.windLanding(bot, { pos: at, vel: bot.entity.velocity, onGround: bot.entity.onGround }, T), off: +off.toFixed(2), dy: +(at.y - T.y).toFixed(2), plan: { run: v.run, jump: v.jump, tThrow: v.tThrow, back: v.back, ticks: v.ticks, simOff: +v.off.toFixed(2) }, at: { x: +at.x.toFixed(2), y: +at.y.toFixed(2), z: +at.z.toFixed(2) } }

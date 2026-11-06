@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import * as edges from '../src/edges'
-import { fireWind } from '../src/mace/hands'
+import { activate, GameClock } from '../src/game-clock'
+import { fireWind, install, windReady } from '../src/mace/hands'
 import { windReleaseSafe } from '../src/combat/wind-safety'
 
 const registry = require('prismarine-registry')('1.21.11')
@@ -56,10 +57,11 @@ for (const mode of ['blocked-look', 'intercepted-before-packet', 'nonfinite-look
   })
 }
 
-for (const mode of ['clear', 'wrapped-yaw', 'native-small-look-rounding']) {
+for (const mode of ['clear', 'wrapped-yaw', 'vertical-yaw-change', 'native-small-look-rounding']) {
   test(`wind packet release preserves safe ${mode}`, async () => {
     const f = fixture()
     if (mode === 'wrapped-yaw') f.bot.look = async (yaw, pitch) => { f.bot.entity.yaw = yaw + 2 * Math.PI; f.bot.entity.pitch = pitch }
+    if (mode === 'vertical-yaw-change') f.bot.look = async (yaw, pitch) => { f.bot.entity.yaw = yaw + 1; f.bot.entity.pitch = pitch }
     if (mode === 'native-small-look-rounding') f.bot.look = async (yaw, pitch) => { f.bot.entity.yaw = yaw + .001; f.bot.entity.pitch = pitch + .001 }
     const result = await fireWind(f.bot, () => requested, { immediate: true, swap: true })
     assert.equal(result.fired, true)
@@ -80,4 +82,71 @@ test('wind packet release preserves caller cancellation through its existing bef
   assert.deepEqual(f.slots, [])
   assert.equal(f.bot._ndWindCd, undefined)
   assert.equal(f.bot.listenerCount('physicsTick'), 0)
+})
+
+test('an owned self-launch uses the sent movement and native packet aim before an async look can run', async () => {
+  const f = fixture(), oldPitch = f.bot.entity.pitch, moved = new Vec3(.12, 0, 0)
+  f.bot.inventory.slots[45] = f.bot.inventory.slots[37]
+  f.bot._ndLaunchMovement = () => moved.clone()
+  f.bot.look = async (yaw, pitch) => { await Promise.resolve(); f.bot.entity.yaw = yaw; f.bot.entity.pitch = pitch }
+  let atAim: Vec3 | undefined
+  const pending = fireWind(f.bot, m => { atAim = m; return requested }, { packetAim: true, hand: 'off' })
+  f.bot.emit('physicsTick'); f.bot.emit('ndMovementSent')
+  assert.equal((await pending).fired, true)
+  assert.deepEqual(atAim, moved)
+  assert.equal(f.shots[0]?.pitch, requested.pitch)
+  assert.equal(f.bot.entity.pitch, oldPitch, 'the view outside the use packet belongs to its current owner')
+  assert.deepEqual(f.slots, [])
+})
+
+test('the owned self-launch still respects a cancelled or defending body at the packet boundary', async () => {
+  const f = fixture()
+  let allowed = true
+  const pending = fireWind(f.bot, () => requested, { packetAim: true, canFire: () => allowed })
+  f.bot.emit('physicsTick'); allowed = false; f.bot.emit('ndMovementSent')
+  assert.equal((await pending).fired, false)
+  assert.deepEqual(f.shots, [])
+  assert.deepEqual(f.slots, [])
+})
+
+test('native wind cooldown survives body catch-up, world transition and Paper death until the server clears it', async t => {
+  const f = fixture(), clock = activate(new GameClock({ manual: true }))
+  t.after(() => clock.dispose())
+  install(f.bot)
+  const cooldown = cooldownTicks => f.bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:wind_charge', cooldownTicks })
+  cooldown(10)
+  // The body can process ten predicted frames before ten native cooldown ticks have elapsed.
+  clock.ticks += 10
+  f.bot.emit('respawn')
+  assert.equal(windReady(f.bot), false)
+  assert.equal((await fireWind(f.bot, () => requested, { immediate: true })).fired, false)
+  assert.equal(f.shots.length, 0)
+  cooldown(0)
+  assert.equal(windReady(f.bot), true)
+  assert.equal((await fireWind(f.bot, () => requested, { immediate: true })).fired, true)
+  assert.equal(windReady(f.bot), false, 'a just-sent use retains its fallback until the first acknowledgement')
+  cooldown(0)
+  assert.equal(windReady(f.bot), true, 'a negative server confirmation clears the optimistic fallback')
+  cooldown(10)
+  f.bot.emit('death')
+  f.bot.emit('respawn')
+  clock.ticks += 10
+  assert.equal(windReady(f.bot), false, 'Paper respawns the same server player with its cooldown')
+  cooldown(0)
+  assert.equal(windReady(f.bot), true)
+  cooldown(10)
+  f.bot.emit('end')
+  assert.equal(f.bot._client.listenerCount('set_cooldown'), 0)
+  assert.equal(windReady(f.bot), true, 'the closed session releases its local state')
+})
+
+test('a native cooldown starting after aim prevents the pending wind release', async t => {
+  const f = fixture(), clock = activate(new GameClock({ manual: true }))
+  t.after(() => clock.dispose())
+  install(f.bot)
+  const pending = fireWind(f.bot, () => requested, { immediate: true })
+  f.bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:wind_charge', cooldownTicks: 10 })
+  assert.equal((await pending).fired, false)
+  assert.equal(f.shots.length, 0)
+  assert.deepEqual(f.slots, [])
 })

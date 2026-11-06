@@ -4,6 +4,12 @@ import * as gameClock from '../game-clock'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import { sleep } from '../movement'
 import { itemNamed } from '../items'
+import { allowed } from '../reflex-lock'
+import { trackTarget } from '../bow/track'
+import { bodyClear } from '../navigation/geometry'
+import * as pick from '../pick'
+import { reachFrom } from '../pvp/body'
+import { observedCollision } from '../pvp/search'
 
 // --------------------------------------------------------------- shield
 
@@ -36,8 +42,49 @@ const HAND_IS_OFF = 0x02
 const SHIELD_CONFIRM_MS = 600
 // Items.SHIELD / BlocksAttacks.blockDelayTicks, native Java 1.21.11: round(.25 * 20).
 const SHIELD_DELAY_TICKS = 5
+export const SMASH_SHIELD_HORIZON = 25
 // Two native age broadcasts (20 ticks each) plus the existing metadata ACK leash.
 const SHIELD_NATIVE_CONFIRM_MS = 2 * 20 * 50 + SHIELD_CONFIRM_MS
+
+// A falling attacker can cross over our head before its eyes can reach our box.
+// Only turn across that gap on a trusted public descent through visible air.
+export function smashShieldAim(bot, foe, lead?: import('vec3').Vec3): import('vec3').Vec3 | null {
+  const self = bot.entity
+  if (!self || foe?._ndVisible !== true || foe.onGround !== false) return null
+  const pos = foe.position.clone(), height = pick.eyeHeight(bot, foe)
+  const current = pos.offset(0, height, 0)
+  if (reachFrom(current, self) <= pick.RANGE) return current
+  const tracker = trackTarget(foe)
+  if (!tracker.hasPhysicalVelocity()) return null
+  const v = tracker.vel()
+  if (!(v.y < 0) || ![v.x, v.y, v.z].every(Number.isFinite)) return null
+
+  // trackTarget exposes the observed horizontal displacement and the
+  // post-tick vertical velocity. Native air drag acts before the next move.
+  const step = new Vec3(v.x * .91, v.y, v.z * .91), path = []
+  for (let t = 1; t <= SMASH_SHIELD_HORIZON; t++) {
+    pos.add(step)
+    path.push(pos.clone())
+    const contact = pos.offset(0, height, 0)
+    if (contact.y < self.position.y) return null
+    if (reachFrom(contact, self) <= pick.RANGE) {
+      const me = self.position
+      const towardCurrent = p => (current.x - me.x) * (p.x - me.x) + (current.z - me.z) * (p.z - me.z)
+      const currentCovers = towardCurrent(contact) > 0
+      if (t <= v.ageTicks || currentCovers && (!lead || towardCurrent(lead) > 0)) return null
+      const known = observedCollision(bot)
+      const body = { ...known, entity: { _ndPoseHeight: foe.height } }
+      if (!path.every(p => bodyClear(body, p))) return null
+      const unknown = { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+      const sight = { entity: self, registry: bot.registry, blockAt: p => known.blockAt(p) || unknown }
+      if (!pick.canHit(sight, self, { eye: contact, range: pick.RANGE })) return null
+      // The ordinary two-tick look can pass a source that is reachable sooner.
+      return currentCovers ? current : contact
+    }
+    step.set(step.x * .91, (step.y - .08) * Math.fround(.98), step.z * .91)
+  }
+  return null
+}
 
 // item.shield.block is played at the blocker's feet, so anything further than
 // this is somebody else's shield.
@@ -127,7 +174,7 @@ function facingCos (bot, point) {
 // закрытие — функции ниже; guard — объект боя поверх них.
 interface ShieldState {
   session: any; ctl: any; bot: any; policy: string; on: boolean; st: any; census: Map<string, number> | null; blocking: () => boolean
-  why: string | null; want: boolean; up: boolean; disabledUntil: number; lastAsk: number; target: any; reach: number
+  why: string | null; want: boolean; up: boolean; disabledUntil: number; lastAsk: number; askEpoch: number; askRelease: number; target: any; reach: number
   lastHp: number; lastTick: number; closed: boolean; charge: any
   tick?: () => void; onRawSound?: (p: any) => void; onHealth?: () => void; onCooldown?: (pkt: any) => void; timer?: any
 }
@@ -241,10 +288,11 @@ function shieldState (session, ctl, policy): ShieldState {
   }
   const sh: ShieldState = {
     session, ctl, bot, policy, on, st, census: null, blocking: null,
-    why: null, want: false, up: false, disabledUntil: 0, lastAsk: 0, target: null, reach: 3.2,
+    why: null, want: false, up: false, disabledUntil: 0, lastAsk: 0, askEpoch: 0, askRelease: 0, target: null, reach: 3.2,
     lastHp: bot && typeof bot.health === 'number' ? bot.health : 20, lastTick: 0, closed: false, charge: null
   }
   const blocking = () => !sh.closed && !ctl.aborted && offHandItem(bot)?.name === 'shield' &&
+    sh.askRelease === (bot._ndUse?.stats?.ended?.['отпустил'] || 0) &&
     gameClock.now() >= Math.max(sh.disabledUntil, bot._ndShieldDisabledUntil || 0) && shieldUp(bot) && !!sh.charge?.ready(SHIELD_DELAY_TICKS)
   const census = process.env.ND_SHIELD_SOUNDS ? new Map() : null
   Object.assign(sh, { blocking, census })
@@ -422,6 +470,10 @@ async function shieldRaise (sh: ShieldState, raised) {
     sh.up = false
     return false
   }
+  if (!allowed(sh.session)) return false
+  const epoch = sh.session._reflexState?.epoch || 0, released = bot._ndUse?.stats?.ended?.['отпустил'] || 0
+  // Rescue and ordinary skill cleanup can release use before its first ACK, even in the same game tick.
+  if (sh.want && (sh.askEpoch !== epoch || sh.askRelease !== released)) { sh.want = false; sh.charge?.close(); sh.charge = null }
   if (sh.want) {
     if (shieldUp(bot)) return true
     // Re-asking is only safe once the server has been seen to answer at
@@ -436,6 +488,8 @@ async function shieldRaise (sh: ShieldState, raised) {
   // the disable is timed and re-asking cannot shorten it.
   if (gameClock.now() < Math.max(sh.disabledUntil, bot._ndShieldDisabledUntil || 0)) return false
   sh.want = true
+  sh.askEpoch = epoch
+  sh.askRelease = released
   sh.lastAsk = gameClock.now()
   st.raises++
   if (process.env.ND_BLAZE_SHIELD_TRACE === '1') bot.emit('nd_blazeShieldUse', { action: 'raise', t: sh.lastAsk })

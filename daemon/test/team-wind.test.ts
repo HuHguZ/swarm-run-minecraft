@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
-import { windImpulse, windShot, windLanding, windSteer, teamWindPlan, worldTick, matchingBurst } from '../src/combat/team-wind'
+import { windImpulse, windShot, windLanding, windSteer, teamWindPlan, worldTick, matchingBurst, windLaunch, windAboveWorld, arenaRoom, windOutside } from '../src/combat/team-wind'
 const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
 const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
 const native = (require('../src/tick-plugins') as typeof import('../src/tick-plugins')).getPhysics()
@@ -26,6 +26,43 @@ function fixture(extra: Array<[number, number, number, string]> = []) {
   return { bot, cells, world }
 }
 const report = { id: 'thrower', position: { x: -2.5, y: 1, z: .5 }, velocity: { x: 0, y: 0, z: 0 }, onGround: true }
+
+test('the whole body must clear the ellipse even along a diagonal', () => {
+  const arena = { x: 0, z: 0, r: 80, ellipse: { a: 77, b: 65 } }
+  const edge = 1 / Math.hypot(1 / 77, 1 / 65)
+  const touching = { x: edge + .25, z: edge + .25 }
+  assert.ok(arenaRoom(arena, touching) < -.3)
+  assert.equal(windOutside(arena, touching), false)
+  assert.equal(windOutside(arena, { x: -edge - .31, z: -edge - .31 }), true)
+})
+
+test('native wind launch has no invented thirty-tick lifetime', () => {
+  const from = new Vec3(0, 130, 0), aim = new Vec3(75, 130, 0)
+  const shot = windLaunch(from, aim)
+  assert.ok(shot && shot.time > 30)
+  assert.ok(from.plus(shot.velocity.scaled(shot.time)).distanceTo(aim) < 1e-8)
+  assert.equal(windLaunch(from, new Vec3(-5, 130, 0), new Vec3(2, 0, 0)), null, 'an unreachable launch direction still has no positive native solution')
+})
+
+test('native wind ceiling uses the public inclusive dimension maximum and pre-move block Y', () => {
+  const { bot } = fixture([[2, 349, 0, 'stone'], [2, 350, 0, 'stone']])
+  assert.equal(windAboveWorld(bot, new Vec3(0, 349.999, 0)), false)
+  assert.equal(windAboveWorld(bot, new Vec3(0, 350, 0)), true)
+  assert.equal(windAboveWorld({ game: { minY: 0, height: 128 } }, new Vec3(0, 158, 0)), true)
+  assert.ok(windShot(bot, new Vec3(-50, 349.5, .5), new Vec3(2, 349.5, .5)))
+  assert.equal(windShot(bot, new Vec3(-50, 350.5, .5), new Vec3(2, 350.5, .5)), null)
+})
+
+test('wind floor ray uses the bounded body forecast before tracing a huge input', () => {
+  const { bot } = fixture([[75, 2, 0, 'stone']]), from = new Vec3(.5, 2.62, .5)
+  const legal = windShot(bot, from, new Vec3(75, 2.62, .5))
+  assert.ok(legal && legal.ticks === 50, 'a fifty-tick native floor/face shot stays available')
+  let reads = 0; bot.blockAt = () => { reads++; throw Error('oversized forecast must stop before DDA') }
+  const far = new Vec3(1e6, 2.62, .5)
+  assert.ok(windLaunch(from, far), 'pure launch mathematics does not invent projectile TTL or range')
+  assert.equal(windShot(bot, from, far), null)
+  assert.equal(reads, 0)
+})
 
 test('team wind: existing 1.21.11 burst physics uses feet distance, eye direction, cover and own resistance', () => {
   const { bot } = fixture()
@@ -142,4 +179,46 @@ test('self wind uses the same forecast and exact landing receipt; unsupported an
   assert.ok(windLanding(bot, { pos: result.best.land, vel: new Vec3(0, 0, 0), onGround: true }, target))
   assert.equal(self.plan(bot, new Vec3(5.5, 4, .5)).best, null)
   assert.equal(self.plan(bot, target, { arena: { x: 0, z: 0, r: 4, killY: -3 } }).best, null)
+})
+
+for (const mode of ['offhand', 'main', 'shield', 'food', 'replaced']) test(`self wind leap uses the planned hand and preserves active item use: ${mode}`, async () => {
+  const { leap, plan }: typeof import('../src/wind-leap') = require('../src/wind-leap')
+  const edges = require('../src/edges')
+  const { bot, world } = fixture(), target = bot.entity.position.clone()
+  const charge = { name: 'wind_charge', count: 1 }, mace = { name: 'mace', count: 1 }
+  const off = mode !== 'main' && mode !== 'shield' && mode !== 'food'
+  bot.heldItem = mace
+  bot.inventory.items = () => off ? [mace] : [mace, charge]
+  bot.inventory.slots[45] = off ? charge : mode === 'shield' ? { name: 'shield' } : null
+  bot.usingHeldItem = mode === 'shield'
+  const nativePlan = plan(bot, target).best
+  assert.ok(nativePlan && nativePlan.tThrow === 0)
+  const state = edges.stateOf(bot, edges.IDLE), controls = { ...edges.IDLE }
+  const uses: boolean[] = [], equips: string[] = []
+  let tick = 0
+  bot.equip = async item => { equips.push(item.name); bot.heldItem = item }
+  bot.look = async (yaw, pitch) => {
+    bot.entity.yaw = yaw; bot.entity.pitch = pitch
+    if (pitch < -.1 && mode === 'food') { bot.heldItem = { name: 'golden_apple' }; bot.usingHeldItem = true }
+    if (pitch < -.1 && mode === 'replaced') bot.inventory.slots[45] = { name: 'shield' }
+  }
+  bot.activateItem = hand => { uses.push(!!hand); bot.usingHeldItem = true }
+  bot.setControlState = (key, value) => { controls[key] = value }
+  bot.clearControlStates = () => Object.assign(controls, edges.IDLE)
+  bot.waitForTicks = async () => {
+    if (uses.length && tick === nativePlan.boomTick) state.vel = state.vel.plus(windImpulse(bot, state.pos, nativePlan.burst))
+    state.yaw = bot.entity.yaw; state.control = { ...controls }
+    bot.physics.simulatePlayer(state, world)
+    Object.assign(bot.entity, { position: state.pos.clone(), velocity: state.vel.clone(), onGround: state.onGround })
+    tick++
+  }
+  const result = await leap({ bot }, { aborted: false }, target, { handoff: () => bot.entity.position.y > 3 })
+  const launched = mode === 'offhand' || mode === 'main'
+  assert.deepEqual(uses, launched ? [off] : [])
+  assert.deepEqual(equips, mode === 'main' || mode === 'food' ? ['wind_charge'] : [])
+  if (launched) assert.ok(result.ok && result.handedOff, 'the actual simulated descent reaches the mace handoff')
+  else assert.equal(result.ok, false)
+  if (mode === 'offhand') assert.equal(bot.heldItem, mace)
+  if (mode === 'food') assert.equal(bot.heldItem.name, 'golden_apple')
+  if (mode === 'shield' || mode === 'food') assert.equal(bot.usingHeldItem, true)
 })

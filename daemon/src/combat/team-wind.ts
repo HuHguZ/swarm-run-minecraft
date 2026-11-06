@@ -7,11 +7,14 @@ import boom = require('../boom')
 
 // WindChargeItem / AbstractWindCharge / ServerExplosion, reviewed 1.21.11 (PVP-RESEARCH б.8).
 export const WIND = Object.freeze({ speed: 1.5, reach: 2.4, knockback: 1.22, surfaceOffset: .25, forgivenessTicks: 40, dispersion: .0172275 })
+// Bounded body prediction work; native wind projectiles have no matching lifetime limit.
+export const WIND_FORECAST_TICKS = 65
+export const WIND_REPORT_AGE_TICKS = 20
 const vector = (p: Point) => new Vec3(p.x, p.y, p.z)
 const finite = (p: Point) => !!p && [p.x, p.y, p.z].every(Number.isFinite)
 const yawTo = (a: Point, b: Point) => Math.atan2(-(b.x - a.x), -(b.z - a.z))
 const positionKey = (p: Point) => `${p.x},${p.y},${p.z}`
-export interface WindReport { id: string; position: Point; velocity: Point; onGround: boolean; eyeHeight?: number; yaw?: number; gameTick?: number; attributes?: Record<string, any>; effects?: Record<string, any>; control?: Record<string, boolean> }
+export interface WindReport { id: string; position: Point; velocity: Point; launchMovement?: Point; onGround: boolean; gliding?: boolean; pitch?: number; eyeHeight?: number; yaw?: number; gameTick?: number; attributes?: Record<string, any>; effects?: Record<string, any>; control?: Record<string, boolean> }
 export interface WindShot { from: Vec3; aim: Vec3; yaw: number; pitch: number; velocity: Vec3; ticks: number; impact: Vec3; burst: Vec3; normal: Vec3; block: Point }
 // ellipse — Колизей: край — внешняя стена, эллипс a×b (77×65), а не квадрат r (у него на малой оси до края 17 бл., на диагонали 25).
 export interface WindArena { x: number; z: number; r: number; killY?: number; ellipse?: { a: number; b: number } }
@@ -21,6 +24,24 @@ export function arenaRoom(arena: WindArena, p: { x: number; z: number }) {
   if (!e) return arena.r - Math.max(Math.abs(dx), Math.abs(dz))
   const d = Math.hypot(dx, dz); if (d < 1e-6) return Math.min(e.a, e.b)
   return 1 / Math.hypot(dx / d / e.a, dz / d / e.b) - d
+}
+
+/** The nearest point of the horizontal body box must clear the boundary. */
+export function windOutside(arena: WindArena, p: { x: number; z: number }, width = .6) {
+  const half = Math.fround(width) / 2, e = arena.ellipse
+  const x = Math.max(0, Math.abs(p.x - arena.x) - half), z = Math.max(0, Math.abs(p.z - arena.z) - half)
+  return e ? Math.hypot(x / e.a, z / e.b) > 1 : Math.max(x, z) > arena.r
+}
+
+/** Offensive direction shared by throw pricing and its airborne approach. */
+export function windOutward(arena: WindArena, p: Point, width = .6): Vec3 {
+  const outward = new Vec3(p.x - arena.x, 0, p.z - arena.z)
+  if (Math.abs(outward.x) <= width / 2 && Math.abs(outward.z) <= width / 2) {
+    const alongX = arena.ellipse && arena.ellipse.a < arena.ellipse.b
+    outward.set(alongX ? 1 : 0, 0, alongX ? 0 : 1)
+  }
+  if (outward.norm()) outward.scale(1 / outward.norm())
+  return outward
 }
 interface WindStep { yaw: number; control: Record<string, boolean>; pos: Point; vel: Point; onGround: boolean }
 export interface WindPairPlan {
@@ -67,6 +88,30 @@ export function windImpulse(bot: any, feet: Point, center: Point, { resistance, 
   return result.kb.scaled(WIND.knockback)
 }
 
+/** Own sent/pending position displacement from the core tick adapter. */
+export function windMovement(bot: any): Vec3 {
+  // shortcut: plain farm clients without the adapter retain the old post-drag estimate, not the native movement proof.
+  const moved = vector(bot._ndLaunchMovement?.() || bot.entity.velocity)
+  if (bot.entity.onGround) moved.y = 0
+  return moved
+}
+
+export function useWindAtAngle(bot: any, off: boolean, shot: { yaw: number; pitch: number }, keepLook = bot.entity.elytraFlying && bot.version === '1.21.11') {
+  const entity = bot.entity
+  const { yaw, pitch } = entity
+  try {
+    entity.yaw = shot.yaw
+    entity.pitch = shot.pitch
+    bot.activateItem(off)
+  } finally {
+    // The use_item packet carried its own aim. Preserve the next movement frame's look.
+    if (keepLook) {
+      entity.yaw = yaw
+      entity.pitch = pitch
+    }
+  }
+}
+
 // Shared launch: both a friendly floor burst and an enemy body hit inherit the shooter's movement.
 export function windLaunch(from: Vec3, aim: Vec3, moved = new Vec3(0, 0, 0)) {
   if (![from, aim, moved].every(finite)) return null
@@ -76,36 +121,71 @@ export function windLaunch(from: Vec3, aim: Vec3, moved = new Vec3(0, 0, 0)) {
   if (discriminant < 0 || c < 1e-8) return null
   const times = Math.abs(a) < 1e-9 ? [-c / b] : [(-b + Math.sqrt(discriminant)) / (2 * a), (-b - Math.sqrt(discriminant)) / (2 * a)]
   const time = times.filter(t => t > 0 && Number.isFinite(t)).sort((x, y) => x - y)[0]
-  if (!time || time > 30) return null
+  if (!time) return null
   const velocity = delta.scaled(1 / time), direction = velocity.scaled(1 / velocity.norm())
   const look = velocity.minus(moved).scaled(1 / WIND.speed)
   return { velocity, direction, time, yaw: Math.atan2(-look.x, -look.z), pitch: Math.asin(Math.max(-1, Math.min(1, look.y))) }
 }
 
+/** AbstractWindCharge.tick explodes before moving when blockY exceeds Level.getMaxY()+30. */
+export function windAboveWorld(bot: any, position: Point): boolean {
+  const { minY, height } = bot.game || {}
+  return Number.isSafeInteger(minY) && Number.isSafeInteger(height) && height > 0 && Math.floor(position.y) > minY + height - 1 + 30
+}
+
 /** Shared native block surface and quarter-block burst offset; flight/entity policy belongs to callers. */
-export function windBlockImpact(bot: any, from: Vec3, direction: Vec3, distance: number) {
-  const hit = pick.blockOnRay(bot, from, direction, distance)
-  if (!hit) return null
-  const impact = from.plus(direction.scaled(hit.t))
-  const faces: Vec3[] = []
-  for (const box of shapeBoxes(hit.block)) for (const axis of ['x', 'y', 'z'] as const) for (const sign of [-1, 1]) {
-    const plane = box[(sign < 0 ? 'min' : 'max') + axis.toUpperCase()]
-    if (Math.abs(impact[axis] - plane) < 1e-5) { const n = new Vec3(0, 0, 0); n[axis] = sign; faces.push(n) }
+export function windBlockImpact(bot: any, from: Vec3, direction: Vec3, distance: number, tickLength = distance) {
+  if (!Number.isFinite(distance) || !Number.isFinite(tickLength) || distance <= 0 || tickLength <= 0) return null
+  let lastCell: Vec3 | undefined, lastBlock: any, unknown = false
+  const world = { blockAt(p: Vec3) {
+    if (unknown) return null
+    if (lastCell?.equals(p)) return lastBlock
+    lastCell = p
+    lastBlock = bot.blockAt(p, false)
+    unknown = !lastBlock
+    return lastBlock
+  } }
+  for (let tick = 0; tick * tickLength < distance; tick++) {
+    const travelled = tick * tickLength, length = Math.min(tickLength, distance - travelled)
+    const origin = from.plus(direction.scaled(travelled))
+    const hit = pick.blockOnRay(world, origin, direction, length)
+    if (unknown) return null
+    if (!hit || hit.t >= tickLength) continue
+    const boxes = shapeBoxes(hit.block), sample = tickLength * .001
+    const inside = origin.plus(direction.scaled(sample))
+    // VoxelShape.clip samples start + .001 * movement before the regular entry face.
+    if (boxes.some(b => inside.x >= b.minX && inside.x < b.maxX &&
+        inside.y >= b.minY && inside.y < b.maxY && inside.z >= b.minZ && inside.z < b.maxZ)) {
+      if (sample > length) return null
+      const axes = ['y', 'z', 'x'] as const
+      const axis = axes.reduce((best, a) => Math.abs(Math.fround(direction[a] * tickLength)) >
+        Math.abs(Math.fround(direction[best] * tickLength)) ? a : best)
+      const normal = new Vec3(0, 0, 0); normal[axis] = -Math.sign(direction[axis])
+      return { distance: travelled + sample, impact: inside, burst: inside.plus(normal.scaled(WIND.surfaceOffset)), normal, block: hit.block, pos: hit.pos }
+    }
+    const impact = origin.plus(direction.scaled(hit.t)), faces: Vec3[] = []
+    for (const box of boxes) for (const axis of ['x', 'y', 'z'] as const) for (const sign of [-1, 1]) {
+      const plane = box[(sign < 0 ? 'min' : 'max') + axis.toUpperCase()]
+      if (Math.abs(impact[axis] - plane) < 1e-5) { const n = new Vec3(0, 0, 0); n[axis] = sign; faces.push(n) }
+    }
+    const normal = faces.sort((x, y) => x.dot(direction) - y.dot(direction))[0]
+    if (!normal) return null
+    return { distance: travelled + hit.t, impact, burst: impact.plus(normal.scaled(WIND.surfaceOffset)), normal, block: hit.block, pos: hit.pos }
   }
-  const normal = faces.sort((x, y) => x.dot(direction) - y.dot(direction))[0]
-  if (!normal) return null
-  return { distance: hit.t, impact, burst: impact.plus(normal.scaled(WIND.surfaceOffset)), normal, block: hit.block, pos: hit.pos }
+  return null
 }
 
 // No gravity/drag: solve the inherited shooter movement exactly, then take the FIRST real block hit.
 export function windShot(bot: any, from: Vec3, aim: Vec3, moved = new Vec3(0, 0, 0), owner?: string | number): WindShot | null {
   const launch = windLaunch(from, aim, moved)
-  if (!launch) return null
+  if (!launch || launch.time > WIND_FORECAST_TICKS || windAboveWorld(bot, from)) return null
   const { velocity, direction } = launch, delta = aim.minus(from)
   let unknown = false
   const observed = { ...bot, blockAt(p: Vec3) { const block = bot.blockAt(p, false); if (!block) unknown = true; return block } }
-  const hit = windBlockImpact(observed, from, direction, delta.norm() + .05)
+  const speed = velocity.norm(), hit = windBlockImpact(observed, from, direction, delta.norm() + .05, speed)
   if (unknown || !hit || hit.distance < delta.norm() - .02 || HAZARD.test(hit.block.name)) return null
+  const ticks = Math.max(1, Math.ceil(hit.distance / speed))
+  if (windAboveWorld(bot, from.plus(velocity.scaled(ticks - 1)))) return null
   for (const entity of Object.values(bot.entities || {}) as any[]) {
     if (!entity || entity === bot.entity || entity.id === bot.entity?.id && entity.id !== undefined || entity.username === owner && owner !== undefined || entity.id === owner && owner !== undefined ||
         !(entity.username || entity.type === 'player' || entity.type === 'mob' || entity.name === 'armor_stand')) continue
@@ -116,7 +196,7 @@ export function windShot(bot: any, from: Vec3, aim: Vec3, moved = new Vec3(0, 0,
     if (body !== null && body < hit.distance - .01) return null
   }
   return { from: from.clone(), aim: aim.clone(), yaw: launch.yaw, pitch: launch.pitch, velocity,
-    ticks: Math.max(1, Math.ceil(hit.distance / velocity.norm())), impact: hit.impact, burst: hit.burst, normal: hit.normal, block: { ...hit.pos } }
+    ticks, impact: hit.impact, burst: hit.burst, normal: hit.normal, block: { ...hit.pos } }
 }
 
 export function windLanding(bot: any, state: { pos: Point; vel: Point; onGround: boolean }, target: Point): boolean {
@@ -233,7 +313,7 @@ export function teamWindPlan(bot: any, report: WindReport, target: Point, { aren
   if (!finite(target) || !finite(report.position) || !finite(report.velocity) || !report.id || !report.onGround || !bot.entity.onGround || !bodyClear(bot, target) || !supportAt(bot, target, .03) || ![target, report.position, bot.entity.position].every(p => windInside(p, arena))) return result
   const to = vector(target), start = bot.entity.position, yaw = yawTo(start, to), dir = new Vec3(-Math.sin(yaw), 0, -Math.cos(yaw))
   const from = vector(report.position).offset(0, report.eyeHeight || 1.62, 0)
-  const moved = vector(report.velocity); if (report.onGround) moved.y = 0
+  const moved = vector(report.launchMovement || report.velocity); if (report.onGround) moved.y = 0
   const cache = edges.worldOf(bot), observed = { ...bot, blockAt: (p: Vec3) => cache.getBlock(p) }
   for (const back of [.4, .8, 1.2, 1.6]) {
     const aim = floorAim(observed, start.x - dir.x * back, start.z - dir.z * back, start.y)
@@ -496,7 +576,7 @@ export async function windBoost(session: any, ctl: any, p: { ally: string; plan:
   bot._client.on('set_cooldown', cooldown)
   try {
     if (!p.prepareOnly && !plan.progress && !(await waitStart(bot, ctl, p.startTick))) return { ok: false, why: 'shared_world_tick_required_or_missed' }
-    const from = pick.eyeOf(bot), moved = bot.entity.velocity.clone(); if (bot.entity.onGround) moved.y = 0
+    const from = pick.eyeOf(bot), moved = windMovement(bot)
     const actual = windShot(bot, from, vector(plan.shot.aim), moved)
     if (!actual || actual.burst.distanceTo(vector(plan.shot.burst)) > .08 || !pick.faceAim(bot, vector(actual.block), actual.normal, { range: 32 })) return { ok: false, why: 'actual_charge_ray_changed' }
     await bot.look(actual.yaw, actual.pitch, true)
@@ -504,7 +584,7 @@ export async function windBoost(session: any, ctl: any, p: { ally: string; plan:
     if (p.prepareOnly) return { ok: true, gameTick: worldTick(bot) }
     let fired = false
     await new Promise<void>(resolve => edges.afterPacket(bot, () => {
-      const movement = bot.entity.velocity.clone(); if (bot.entity.onGround) movement.y = 0
+      const movement = windMovement(bot)
       const release = windShot(bot, pick.eyeOf(bot), vector(plan.shot.aim), movement)
       if (!ctl.aborted && !receiverImpulse && (!plan.spear || freshProgress(bot, p.ally, plan, p.startTick)) && release && (!plan.spear || release.ticks === plan.shot.ticks) && release.burst.distanceTo(vector(plan.shot.burst)) <= .08 &&
           vector(plan.thrower.start).distanceTo(bot.entity.position) <= .15 && vector(plan.receiver.start).distanceTo(ally.position) <= .2 &&

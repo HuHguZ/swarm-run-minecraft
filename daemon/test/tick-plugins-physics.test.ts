@@ -4,6 +4,59 @@ import test = require('node:test')
 import assert = require('node:assert/strict')
 import { Vec3 } from 'vec3'
 import { data, testClock, testBot, install } from './tick-plugins-fixture'
+import { enemyWindReport } from '../src/combat/enemy-wind-execute'
+
+test('wind release waits for the own body and public pose to settle after a glide landing', async () => {
+  const clock = testClock(), bot = install(clock), body = bot.entity
+  bot.username = 'Blue'; bot.health = 20; bot.ndClock = { age: 15781065n, ticks: 0, serverTicks: 0 }
+  bot.inventory.slots[5] = { name: 'elytra', type: data.itemsByName.elytra.id, count: 1 }
+  bot.inventory.slots[36] = { name: 'wind_charge', type: data.itemsByName.wind_charge.id, count: 1 }
+  const report = () => enemyWindReport({ bot }, { flying: true })
+  const approach = () => {
+    bot._client.emit('position', { x: .5, y: 1.30366565551601, z: .5, yaw: 0, pitch: 0, flags: {}, teleportId: 2 })
+    Object.assign(body, { onGround: false, elytraFlying: true,
+      velocity: new Vec3(-.06698877804, -.330323168, -.035845077), metadata: [128, , , , , , 1] })
+    bot.packets.length = 0
+  }
+  try {
+    approach()
+    assert.equal(report().ready, true)
+    assert.equal(report().report?.eyeHeight, .4)
+    await clock.advanceGame(50)
+    assert.deepEqual(bot.packets.map(p => p.name), ['position', 'tick_end'])
+    assert.equal(body.onGround, true)
+    assert.equal(body.elytraFlying, false)
+    assert.equal(body._ndPoseHeight, .6)
+    assert.equal(report().ready, false)
+    body.metadata = [0, , , , , , 0]
+    assert.equal(report().ready, false, 'the old local physical height survives even an immediate pose update')
+    body.metadata = [128, , , , , , 1]
+    await clock.advanceGame(50)
+    assert.equal(body._ndPoseHeight, 1.8)
+    assert.equal(report().ready, false, 'the previous public flight pose still selects the low eye')
+    body.metadata = [0, , , , , , 0]
+    assert.equal(report().ready, true)
+    assert.equal(report().report?.eyeHeight, 1.62)
+    assert.equal(enemyWindReport({ bot, current: { name: 'lava_escape' } }, { flying: true }).ready, false)
+
+    for (const [pose, height, eye] of [[5, 1.5, 1.27], [3, .6, .4]]) {
+      Object.assign(body, { metadata: [0, , , , , , pose], _ndPoseHeight: height })
+      assert.equal(report().ready, true)
+      assert.equal(report().report?.eyeHeight, eye)
+    }
+
+    approach()
+    await clock.advanceGame(50)
+    body.metadata = [0, , , , , , 0]
+    assert.equal(report().ready, false)
+    bot.entity = { ...body, _ndPoseHeight: 1.8 }
+    assert.equal(report().ready, true, 'a landing belongs to the exact body that landed')
+    bot.entity = body
+    bot._client.emit('position', { x: 1.5, y: 1, z: .5, yaw: 0, pitch: 0, flags: {}, teleportId: 3 })
+    assert.equal(bot._ndOwnGlideLanding, null, 'a server position reset invalidates the landing frame')
+  } finally { bot.emit('end') }
+  assert.equal(bot._ndOwnGlideLanding, undefined)
+})
 
 test('installed physics warns for external deprecated listeners but not marked late aim callbacks', async t => {
   const clock = testClock()
@@ -320,12 +373,14 @@ test('play ticks end after movement, including unloaded terrain, and stop outsid
   assert.equal(bot.packets.length, start)
   assert.equal(clock.pending(), 0)
 })
-test('packet-bound actions release after the same native movement and tick end in a synchronous physics burst', async () => {
+for (const [name, afterPacket] of [
+  ['clutch', (require('../src/edges') as typeof import('../src/edges')).afterPacket],
+  ['mace', (require('../src/mace/hands') as typeof import('../src/mace/hands')).afterPacket]
+] as const) test(`${name} packet-bound actions release after the same native movement and tick end in a synchronous physics burst`, async () => {
   const { AsyncLocalStorage, AsyncResource }: typeof import('node:async_hooks') = require('node:async_hooks')
   const owner = new AsyncLocalStorage()
   const clock = testClock(750)
   const bot = install(clock)
-  const afterPacket = (require('../src/edges') as typeof import('../src/edges')).afterPacket
   bot.packets.length = 0
   bot.setControlState('forward', true)
   let plannedPosition
@@ -345,9 +400,62 @@ test('packet-bound actions release after the same native movement and tick end i
     assert.deepEqual(releases[0].sent, plannedPosition, 'the native movement establishing the muzzle precedes release')
     assert.equal(releases[0].previous, 'tick_end', 'the same native client frame has finished its movement packets')
     assert.equal(releases[0].owner, 'airborne release', 'the original control lease survives the packet boundary')
+    assert.equal(bot.listenerCount('ndMovementSent'), 0, 'the winning boundary removes its listener')
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(releases.length, 1, 'fallback and native packet boundary cannot release twice')
   } finally { bot.emit('end') }
+})
+
+test('queued packet release waits for the adapted movement boundary, even when the next tick wins the race', async () => {
+  const { AsyncLocalStorage }: typeof import('node:async_hooks') = require('node:async_hooks')
+  const { afterPacket }: typeof import('../src/mace/hands') = require('../src/mace/hands')
+  const owner = new AsyncLocalStorage<string>()
+  const clock = testClock(), bot = install(clock)
+  const from = bot.entity.position.clone()
+  const releases = []
+  bot.packets.length = 0
+  bot.entity.yaw = 0.5
+  bot.setControlState('forward', true)
+  try {
+    assert.equal(typeof bot._ndLaunchMovement, 'function', 'the real clock adapter installs the launch movement hook')
+    owner.run('queued owner', () => afterPacket(bot, () => {
+      releases.push({ at: bot.entity.position.clone(), moved: bot._ndLaunchMovement(), owner: owner.getStore() })
+      bot._client.write('use_item', { hand: 0, sequence: 9 })
+    }))
+    await clock.advanceGame(50, false)
+    assert.deepEqual(bot.packets.map(p => p.name), ['position_look', 'tick_end', 'use_item'])
+    const move = bot.packets[0], at = new Vec3(move.x, move.y, move.z)
+    assert.ok(at.distanceTo(from) > 0)
+    assert.deepEqual(releases, [{ at, moved: at.minus(from), owner: 'queued owner' }])
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(releases.length, 1)
+
+    let idleReleases = 0
+    afterPacket(bot, () => idleReleases++)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(idleReleases, 1, 'an idle adapted client can release between ticks')
+    assert.equal(bot.listenerCount('ndMovementSent'), 0)
+  } finally { bot.emit('end') }
+})
+
+test('mace packet release keeps both legacy fallbacks, original owner and once-only cleanup on callback failure', async () => {
+  const { AsyncLocalStorage }: typeof import('node:async_hooks') = require('node:async_hooks')
+  const { EventEmitter }: typeof import('node:events') = require('node:events')
+  const { afterPacket }: typeof import('../src/mace/hands') = require('../src/mace/hands')
+  const owner = new AsyncLocalStorage<string>(), bot = new EventEmitter(), releases = []
+  owner.run('queued owner', () => afterPacket(bot, () => { releases.push(owner.getStore()); throw Error('release failed') }))
+  assert.doesNotThrow(() => owner.run('later tick owner', () => bot.emit('physicsTick')))
+  assert.deepEqual(releases, ['queued owner'])
+  assert.equal(bot.listenerCount('physicsTick'), 0)
+  assert.equal(bot.listenerCount('ndMovementSent'), 0)
+  bot.emit('ndMovementSent')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(releases.length, 1, 'the losing event and immediate cannot retry a failed callback')
+  owner.run('between ticks', () => afterPacket(bot, () => { releases.push(owner.getStore()) }))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(releases, ['queued owner', 'between ticks'])
+  assert.equal(bot.listenerCount('physicsTick'), 0)
+  assert.equal(bot.listenerCount('ndMovementSent'), 0)
 })
 test('respawn transport response uses wall time while frozen and cancels on disconnect', async () => {
   const clock = testClock(200)

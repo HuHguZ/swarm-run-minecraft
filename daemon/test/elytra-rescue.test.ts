@@ -10,9 +10,11 @@ import { EventBus } from '../src/events'
 import * as clock from '../src/game-clock'
 import * as flight from '../src/elytra/flight'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
+const registry = require('prismarine-registry')('1.21.11')
 
 function fixture(p: any = {}) {
   const bot: any = new EventEmitter(), calls: any[] = [], flights: any[] = [], goals: any[] = []
+  bot.version = '1.21.11'; bot.registry = registry; bot._client = new EventEmitter()
   bot.health = p.hp ?? 20
   bot.entity = { position: new Vec3(70, p.y ?? 125, 0), velocity: new Vec3(0, p.vy ?? -1, 0),
     onGround: false, elytraFlying: !!p.flying, yaw: 0, pitch: 0 }
@@ -173,11 +175,12 @@ test('orbit hands the live intent to combat without unmanaged rescue, while leth
   f.bot.pathfinder = { setGoal () {} }; f.bot.clearControlStates = () => {}
   f.bot.inventory.slots[6] = { name: 'elytra', count: 1 }
   f.bot.inventory.items = () => [{ name: 'firework_rocket', count: 8 }, { name: 'wind_charge', count: 2 }]
-  f.bot.players.Foe = { entity: { position: new Vec3(74, 150, 0), velocity: new Vec3(0, 0, 0), onGround: false } }
+  f.bot.players.Foe = { entity: { id: 2, type: 'player', name: 'player', username: 'Foe', isValid: true,
+    position: new Vec3(74, 150, 0), velocity: new Vec3(0, 0, 0), onGround: false, metadata: [] } }
   let fought = 0, landed = 0
   t.mock.method(flight, 'fly', async (_bot, ctl, options) => {
     assert.equal(session.current.ctl, ctl)
-    f.bot.players.Foe.entity.metadata = { 0: 0x80 }
+    f.bot.players.Foe.entity.metadata[0] = 0x80
     game.advanceTicks(2)
     return { why: options.until() }
   })

@@ -77,22 +77,10 @@ export function slamHit (bot, e, stats = null) {
   return { stun: ai >= 0, swapped: mi >= 0 && mi !== cur, cur }
 }
 
-// Сделать fn после пакета позиции этого тика: setImmediate — или в начале
-// следующего тика, если он пришёл раньше. mineflayer, отстав, гонит два тика
-// физики подряд в одном таймере, и setImmediate срабатывал уже ПОСЛЕ пакета
-// приземления: сервер обнулял высоту падения до удара, и булава била без
-// бонуса (замер 2026-09-26: из трёх ударов с 8 бл. два — по 1.56 хп, один
-// убил; в трассе тики с одной меткой времени).
+// Общая граница после movement/tick_end сохраняет позицию и владельца действия;
+// edges оставляет fallback для клиентов без адаптера и вызовов между тиками.
 export function afterPacket (bot, fn) {
-  let done = false
-  const run = () => {
-    if (done) return
-    done = true
-    bot.removeListener('physicsTick', run)
-    try { fn() } catch {}
-  }
-  bot.prependListener('physicsTick', run)
-  setImmediate(run)
+  return (require('../edges') as typeof import('../edges')).afterPacket(bot, fn)
 }
 
 export const nextTick = (bot) => new Promise<any>(resolve => {
@@ -104,14 +92,34 @@ export const nextTick = (bot) => new Promise<any>(resolve => {
 // Перезарядка заряда ветра — по пакету set_cooldown (группа minecraft:
 // wind_charge): mineflayer его не разбирает (ждёт itemID, а в 1.21.11 там
 // cooldownGroup), читаем сырой пакет, один раз на бота.
+const nativeWindCooldown = new WeakSet<object>()
+
+export function windCooling (bot) {
+  return nativeWindCooldown.has(bot) || gameClock.now() < (bot._ndWindCd || 0)
+}
+
 export function install (bot) {
   if (bot._ndMaceInstalled) return
   bot._ndMaceInstalled = true
   bot._ndWindCd = 0
   try {
-    bot._client.on('set_cooldown', (p) => {
-      const g = String((p && p.cooldownGroup) || '')
-      if (/wind_charge/.test(g)) bot._ndWindCd = gameClock.now() + Math.max(0, p.cooldownTicks || 0) * 50
+    const client = bot._client, native = bot.version === '1.21.11'
+    const cooldown = p => {
+      const group = p?.cooldownGroup, ticks = p?.cooldownTicks
+      if ((group !== 'minecraft:wind_charge' && group !== 'wind_charge') || !Number.isSafeInteger(ticks) || ticks < 0) return
+      if (native) {
+        // Predicted body ticks can overtake the native cooldown. The server sends zero when it expires.
+        if (ticks > 0) nativeWindCooldown.add(bot)
+        else nativeWindCooldown.delete(bot)
+      }
+      bot._ndWindCd = gameClock.now() + ticks * 50
+    }
+    client.on('set_cooldown', cooldown)
+    // Paper retains the server player's cooldowns across death and dimension changes.
+    if (native) bot.once?.('end', () => {
+      client.removeListener('set_cooldown', cooldown)
+      nativeWindCooldown.delete(bot)
+      bot._ndWindCd = 0
     })
   } catch {}
   // Когда булава взята в правую: заряд (33 тика) считается от смены предмета.
@@ -141,11 +149,11 @@ export function windCount (bot) {
 }
 
 export function windReady (bot) {
-  return gameClock.now() >= (bot._ndWindCd || 0) && windCount(bot) > 0
+  return !windCooling(bot) && windCount(bot) > 0
 }
 
 // Нужное — в хотбар (свап берёт слоты хотбара, из рюкзака — только кликами).
-// Не на выбранный слот и не поверх оружия, еды, тотема, ведра.
+// Сначала свободный/неценный слот; при полном хотбаре обмен возвращает вещь в рюкзак.
 const KEEP = /_sword$|_axe$|^mace$|^wind_charge$|^bow$|^crossbow$|^totem_of_undying$|golden_apple$|^water_bucket$|^ender_pearl$|^shield$/
 export async function ensureHotbar (bot, names) {
   for (const name of names) {
@@ -156,6 +164,7 @@ export async function ensureHotbar (bot, names) {
     let dest = -1
     for (let i = 0; i < 9; i++) if (i !== bot.quickBarSlot && !bot.inventory.slots[36 + i]) { dest = i; break }
     if (dest < 0) for (let i = 8; i >= 0; i--) { const s = bot.inventory.slots[36 + i]; if (i !== bot.quickBarSlot && s && !KEEP.test(s.name)) { dest = i; break } }
+    if (dest < 0) for (let i = 8; i >= 0; i--) if (i !== bot.quickBarSlot && !names.some(name => hotbarIndex(bot, name) === i)) { dest = i; break }
     if (dest < 0) return false
     try { await bot.moveSlotItem(it.slot, 36 + dest) } catch { return false }
     if (hotbarIndex(bot, name) < 0) return false
@@ -190,12 +199,12 @@ export function selfWindAim (bot, { yaw = bot.entity.yaw, back = 0, moved }: any
 }
 
 // Бросок после пакета позиции; immediate — текущий тик MLG, чтобы не ждать приземления.
-export function fireWind (bot, aim, { swap = SWAP, before = null, hand = null, immediate = false }: any = {}) {
+export function fireWind (bot, aim, { swap = SWAP, before = null, hand = null, immediate = false, allies = [], packetAim = false, canFire = null }: any = {}) {
   return new Promise<any>(resolve => {
     const off = hand === 'off' || (hand == null && offWind(bot))
     const wi = off ? -1 : hotbarIndex(bot, 'wind_charge')
     if (!off && wi < 0) return resolve({ fired: false, why: 'заряда нет в хотбаре' })
-    if (gameClock.now() < (bot._ndWindCd || 0)) return resolve({ fired: false, why: 'перезарядка' })
+    if (windCooling(bot)) return resolve({ fired: false, why: 'перезарядка' })
     const lastPos = bot.entity.position.clone()
     let done = false
     const onT = () => {
@@ -204,31 +213,41 @@ export function fireWind (bot, aim, { swap = SWAP, before = null, hand = null, i
       gameClock.clearTimeout(timer)
       bot.removeListener('physicsTick', onT)
       let sol = null
-      const aimPos = bot.entity.position.clone(), aimMovement = aimPos.minus(lastPos)
-      try { if (before) before(); sol = aim(aimMovement) } catch {}
-      if (!sol) return resolve({ fired: false, why: 'некуда' })
-      bot.look(sol.yaw, sol.pitch, true).catch(() => {})
+      const aimPos = bot.entity.position.clone(), aimMovement = bot._ndLaunchMovement?.() || aimPos.minus(lastPos)
+      try { if (before) before(); if (!packetAim) sol = aim(aimMovement) } catch { return resolve({ fired: false, why: 'некуда' }) }
+      if (!packetAim) {
+        if (!sol) return resolve({ fired: false, why: 'некуда' })
+        bot.look(sol.yaw, sol.pitch, true).catch(() => {})
+      }
       afterPacket(bot, () => {
         try {
-          const actual = { yaw: bot.entity.yaw, pitch: bot.entity.pitch }
-          const { WIND } = require('../combat/team-wind') as typeof import('../combat/team-wind')
-          const yawError = Math.atan2(Math.sin(actual.yaw - sol.yaw), Math.cos(actual.yaw - sol.yaw))
-          if (![actual.yaw, actual.pitch, sol.yaw, sol.pitch].every(Number.isFinite) || Math.abs(yawError) > WIND.dispersion || Math.abs(actual.pitch - sol.pitch) > WIND.dispersion) {
+          if (windCooling(bot)) return resolve({ fired: false, why: 'перезарядка' })
+          if (canFire && !canFire()) return resolve({ fired: false, why: 'прервали' })
+          const moved = bot._ndLaunchMovement?.() || (bot.entity.position.equals(aimPos) ? aimMovement.clone() : bot.entity.position.minus(aimPos))
+          if (bot.entity.onGround) moved.y = 0
+          if (packetAim) {
+            if (off ? !offWind(bot) : bot.inventory.slots[36 + wi]?.name !== 'wind_charge') return resolve({ fired: false, why: 'заряд сменился' })
+            sol = aim(moved)
+            if (!sol) return resolve({ fired: false, why: 'некуда' })
+          }
+          const actual = packetAim ? sol : { yaw: bot.entity.yaw, pitch: bot.entity.pitch }
+          const { WIND, useWindAtAngle } = require('../combat/team-wind') as typeof import('../combat/team-wind')
+          const agreement = Math.sin(actual.pitch) * Math.sin(sol.pitch) +
+            Math.cos(actual.pitch) * Math.cos(sol.pitch) * Math.cos(actual.yaw - sol.yaw)
+          if (!Number.isFinite(agreement) || agreement < Math.cos(WIND.dispersion)) {
             resolve({ fired: false, why: 'wind_look_changed' }); return
           }
-          const moved = bot.entity.position.equals(aimPos) ? aimMovement.clone() : bot.entity.position.minus(aimPos)
-          if (bot.entity.onGround) moved.y = 0
           const { windReleaseSafe } = require('../combat/wind-safety') as typeof import('../combat/wind-safety')
-          if (!windReleaseSafe(bot, sol, moved) || (actual.yaw !== sol.yaw || actual.pitch !== sol.pitch) && !windReleaseSafe(bot, actual, moved)) {
+          if (!windReleaseSafe(bot, sol, moved, undefined, allies) || (actual.yaw !== sol.yaw || actual.pitch !== sol.pitch) && !windReleaseSafe(bot, actual, moved, undefined, allies)) {
             resolve({ fired: false, why: 'unsafe_allied_wind' }); return
           }
           const back = bot.quickBarSlot
-          if (off) bot.activateItem(true)
-          else {
-            if (back !== wi) bot.setQuickBarSlot(wi)
-            bot.activateItem()
-            if (swap && back !== wi) bot.setQuickBarSlot(back)
-          }
+          if (!off && back !== wi) bot.setQuickBarSlot(wi)
+          try {
+            if (packetAim) useWindAtAngle(bot, off, sol, true)
+            else if (off) bot.activateItem(true)
+            else bot.activateItem()
+          } finally { if (!off && swap && back !== wi) bot.setQuickBarSlot(back) }
           // Заряд — не «натягивают»: mineflayer иначе считает руку занятой.
           bot.usingHeldItem = false
           bot._ndWindCd = gameClock.now() + WIND_CD_MS

@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events'
 import * as edges from '../src/edges'
 import { getPhysics } from '../src/tick-plugins'
 import { teamSafe } from '../src/spear'
+import { leap } from '../src/wind-leap'
 
 // Local 1.21.11 LivingEntity.jumpFromGround: setDeltaMovement(oldX, max(getJumpPower(), oldY), oldZ).
 // getJumpPower includes Jump Boost before the max; sprint then adds its native horizontal .2 impulse.
@@ -71,4 +72,19 @@ test('the spear ray still vetoes a newly visible ally after actual wind and jump
   bot.entities[2] = { id: 2, username: 'Late', type: 'player', position: bot.entity.position.offset(3, 0, 0),
     velocity: new Vec3(0, 0, 0), width: .6, height: 1.8, onGround: false }
   assert.equal(teamSafe(bot, -Math.PI / 2, 0), false)
+})
+
+test('wind leap can choose a safe trajectory with a descending mace handoff', async () => {
+  const { bot } = fixture()
+  bot.health = 20
+  bot.entity.velocity.x = 0
+  bot.inventory.slots[45] = { name: 'wind_charge', count: 1 }
+  const session = { bot }, ctl = { aborted: false }
+  const landing = new Vec3(3.5, 1, .5), target = new Vec3(6, 1, 2)
+  const ordinary = await leap(session, ctl, landing, { dryRun: true })
+  assert.equal(ordinary.ok, true)
+  const intercept = await leap(session, ctl, landing, { dryRun: true,
+    handoffAt: (feet: Vec3) => feet.y >= target.y + 2.5 && Math.hypot(target.x - feet.x, target.z - feet.z) <= 3.5 })
+  assert.equal(intercept.ok, true)
+  assert.notDeepEqual(intercept.plan, ordinary.plan, 'the ordinary safe leap does not descend into the attack envelope')
 })

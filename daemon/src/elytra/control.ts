@@ -20,6 +20,13 @@ function pointCanBeat (st, at, yaw, pitch, boost, H, price) {
   return false
 }
 
+function movingPointCanBeat (W, st, goal, at, yaw, pitch, boost, H, price) {
+  const p = { ...st.p }; const v = { ...st.v }
+  for (let tick = 0; tick < H; tick++) glideStep(p, v, yaw, pitch, boost > tick)
+  // The free endpoint uses the same physics. The world rollout can only add a clearance cost.
+  return cost(W, st, goal, at, { p, v, kind: null, t: H, minFloorGap: Infinity }, yaw, pitch) <= price + 1e-9
+}
+
 // Выбор взгляда на этот тик: перебор (yaw, pitch), каждый — прогон H тиков
 // своей физикой, цена — по цели. goal:
 //  { kind: 'point', at: Vec3 | (t)→Vec3, minY, maxY, away: Vec3, awayR, speedMin }
@@ -63,10 +70,14 @@ function choose (W, st, goal, { H = 18, rocketNow = false }: any = {}) {
   const options = { fd: st.fd, keepPath: goal.kind === 'strike' || !!goal.reach, arena: goal.arena, movementFall: goal.kind === 'land', floorDepth }
   // At longer horizons the existing collision time discounts can be negative.
   const boundPoint = goal.kind === 'point' && typeof goal.at !== 'function' && H > 0 && H <= 18
+  const movingPoint = goal.kind === 'point' && typeof goal.at === 'function' && !goal.reach && H > 0 && H <= 18
   let best = null
   for (const yaw of yaws) {
     for (const pitch of goal.pitches || PITCHES) {
       if (best && boundPoint && !pointCanBeat(st, tgt0, yaw, pitch, boost, H, best.c)) continue
+      // Every contact costs at least 60 at this horizon. A clear winner has already cached at(H).
+      if (best && movingPoint && best.r.kind === null && best.c <= 60 &&
+          !movingPointCanBeat(W, st, goal, at, yaw, pitch, boost, H, best.c)) continue
       const r = rollout(W, st.p, st.v, yaw, pitch, boost, H, options)
       if (r.kind === 'outside') continue
       let c = cost(W, st, goal, at, r, yaw, pitch)

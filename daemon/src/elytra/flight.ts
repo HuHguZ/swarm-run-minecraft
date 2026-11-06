@@ -126,7 +126,7 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
   })
 }
 
-// Поперёк тарана в ближайшие 12 тиков, иначе — линии стрелы или натянутого лука.
+// От тарана/булавы в ближайшие 12 тиков, иначе — линии стрелы или натянутого лука.
 function dodgeSide (bot, b, arrows, memory) {
   let d
   try {
@@ -161,6 +161,14 @@ function dodgeSide (bot, b, arrows, memory) {
         return { ...side, at: b.position.offset(side.x * 5, 0, side.z * 5) }
       }
       memory.lance = null
+    }
+    // The ground shield reflex cannot turn an owned glider. Keep its pilot and
+    // safe trajectory selection, but leave a visible descending strike point.
+    const smash = threats.smashes(bot, scope.foes ?? []).find(p => p.ticks <= 12)
+    if (smash) {
+      const dx = b.position.x - smash.at.x, dz = b.position.z - smash.at.z, n = Math.hypot(dx, dz)
+      const side = n ? { x: dx / n, z: dz / n } : { x: -Math.sin(b.yaw), z: -Math.cos(b.yaw) }
+      return { ...side, at: b.position.offset(side.x * 5, 0, side.z * 5) }
     }
     if (!arrows) return null
     d = threats.projectileDangers(bot, scope)

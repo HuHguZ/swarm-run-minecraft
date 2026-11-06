@@ -1,8 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as L from '../src/combat/aerial-lance'
+import * as clock from '../src/game-clock'
+import spear = require('../src/spear')
 import sky = require('../src/elytra')
 import { EventEmitter } from 'node:events'
+import { Vec3 } from 'vec3'
 
 // Плоский мир: всё ниже y=100 твёрдое, стена x ≥ wallX (если задана).
 function flatWorld (wallX = Infinity, ceilY = Infinity) {
@@ -114,6 +117,34 @@ test('таран: готовое касание после раннего, ра�
     p: { x: .5, y: 106, z: 14.5 }, v: { x: 0, y: -.1, z: -1.4 }, boost: 0, fd: 0
   }, foot, { readyIn: 13 })
   assert.ok(early && !early.ready && early.dmg === 0 && early.hitT + 1 < 13)
+})
+
+test('ветровой заход: уже проверенное касание используется до дедлайна перебора', t => {
+  const item = { name: 'netherite_spear' }
+  const bot = Object.assign(new EventEmitter(), {
+    entity: { position: new Vec3(621.1551, 169.7472, 600.4957), velocity: new Vec3(-1.5687, .5135, .0014), elytraFlying: true },
+    health: 20, heldItem: item, inventory: { items: () => [item] }, fireworkRocketDuration: 17,
+    _ndObservedSkyWorld: flatWorld(), blockAt: () => ({ boundingBox: 'empty', name: 'air' })
+  })
+  const e = { position: new Vec3(597.194, 170.122, 600.5723), height: 1.8, width: .6 }
+  let pos = e.position, vel = new Vec3(-.1649, .3769, .0041)
+  const frames = Array.from({ length: 17 }, () => {
+    const frame = { pos, vel }
+    pos = pos.plus(vel)
+    vel = new Vec3(vel.x * .91, (vel.y - .08) * .98, vel.z * .91)
+    return frame
+  })
+  const window = { ticks: 48, frames }, arena = { x: 600.5, y: 120, z: 600.5, r: 80, ellipse: { a: 77, b: 65 } }
+  assert.equal(L.windLancePlan(bot, e, window, arena, Infinity), item)
+  let work = 0
+  t.mock.method(clock.wall, 'monotonic', () => ++work)
+  assert.equal(L.windLancePlan(bot, e, window, arena, 20), item)
+  assert.ok(work <= 20)
+  let allyChecks = 0
+  t.mock.method(spear, 'teamSafe', () => { allyChecks++; return false })
+  work = 0
+  assert.equal(L.windLancePlan(bot, e, window, arena, 20), null)
+  assert.ok(allyChecks > 0)
 })
 
 test('возврат внутрь: стороны и углы, с ракетой и без', () => {

@@ -170,20 +170,29 @@ test('таран вызывает продолжение после попада
   }
 })
 
-test('два летуна не занимают друг друга облётом без исполнимого броска', async t => {
-  t.mock.method(flight, 'fly', async () => { assert.fail('ordinary air combat must retain these actors') })
+test('two visible gliders hand their accepted escort to ordinary air combat without orbiting indefinitely', async t => {
+  t.mock.method(flight, 'fly', async (_bot, _ctl, options) => {
+    assert.equal(options.until(), 'цель на элитрах')
+    return { why: options.until() }
+  })
+  let fought = 0, landed = 0
+  t.mock.method(require('../src/combat'), 'fight', async () => { fought++; return { hits: 0 } })
+  t.mock.method(flight, 'land', async () => { landed++; return { ok: true } })
   const a = orbitWindFixture(2, 0, true), b = orbitWindFixture(2, 0, true)
+  ;(a.session as any).updateMovements = (b.session as any).updateMovements = () => {}
   a.bot.players.Foe.entity = b.bot.entity
   b.bot.players.Foe.entity = a.bot.entity
   const out = await Promise.all([a, b].map(f => wingOrbit(f.session, f.ctl, f.params)))
-  assert.ok(out.every(r => !r.ok && r.why === 'цель на элитрах — нужен перехват'))
+  assert.ok(out.every(r => r.ok && r.why === 'цель на элитрах'))
+  assert.equal(fought, 2); assert.equal(landed, 2)
 })
 test('высота облёта стоящего, падающего без элитр и гребня сохраняет прежний заход', async t => {
   t.mock.method(flight, 'land', async () => ({ ok: false, why: 'orbit-only model' }))
   for (const [mode, onGround, ledge, offset] of [['perch', true, false, 3], ['fall', false, false, 3], ['ledge', true, true, 2]] as const) {
-    const foe: any = { position: new Vec3(30, 120, 0), onGround, elytraFlying: false, isValid: true }
-    const bot: any = { entity: { position: new Vec3(0, 120, 0), velocity: new Vec3(1, 0, 0), elytraFlying: true, onGround: false },
-      players: { Foe: { entity: foe } }, inventory: { slots: [], items: () => [{ name: 'elytra' }, { name: 'firework_rocket', count: 5 }, { name: 'wind_charge', count: 2 }] } }
+    const foe: any = { id: 2, type: 'player', username: 'Foe', position: new Vec3(30, 120, 0), onGround, elytraFlying: false, isValid: true }
+    const bot: any = Object.assign(new EventEmitter(), { entity: { position: new Vec3(0, 120, 0), velocity: new Vec3(1, 0, 0), elytraFlying: true, onGround: false },
+      blockAt: () => ({ name: 'air', boundingBox: 'empty' }),
+      players: { Foe: { entity: foe } }, inventory: { slots: [], items: () => [{ name: 'elytra' }, { name: 'firework_rocket', count: 5 }, { name: 'wind_charge', count: 2 }] } })
     t.mock.method(flight, 'fly', async (_b, _ctl, o) => {
       const goal = o.goal()
       assert.equal(o.until(), null, 'контроль высоты имеет заряды для продолжения облёта')
@@ -198,23 +207,121 @@ test('высота облёта стоящего, падающего без эл
 function orbitWindFixture(main = 2, off = 0, flying = false) {
   const supply = { main, off }, slots: any[] = []
   slots[6] = { name: 'elytra', count: 1 }
-  const foe = { position: new Vec3(20, 150, 0), onGround: false }
-  const bot: any = { health: 20, _ndWindCd: 100000,
-    entity: { position: new Vec3(0, 130, 0), velocity: new Vec3(1, 0, 0), onGround: !flying, elytraFlying: flying },
+  const foe = Object.assign(new EventEmitter(), { id: 2, type: 'player', username: 'Foe', position: new Vec3(20, 150, 0), onGround: false, metadata: [] })
+  const bot: any = Object.assign(new EventEmitter(), { health: 20, _ndWindCd: 100000,
+    entity: { id: 1, type: 'player', username: 'Wing', position: new Vec3(0, 130, 0), velocity: new Vec3(1, 0, 0), onGround: !flying, elytraFlying: flying },
     blockAt: () => ({ name: 'air', boundingBox: 'empty' }),
     players: { Foe: { entity: foe } }, inventory: { slots,
-      items: () => [{ name: 'firework_rocket', count: 8 }, ...(supply.main ? [{ name: 'wind_charge', count: supply.main }] : [])] } }
+      items: () => [{ name: 'firework_rocket', count: 8 }, ...(supply.main ? [{ name: 'wind_charge', count: supply.main }] : [])] } })
   Object.defineProperty(slots, '45', { get: () => supply.off ? { name: 'wind_charge', count: supply.off } : null })
   return { bot, supply, session: { require: () => bot }, ctl: { aborted: false }, params: { target: 'Foe', floorY: 120 } }
 }
 
-test('wind-only orbit does not launch against an already gliding target', async t => {
+test('recorded AA d unknown forecast ignores the old ground ledge hint for its air goal and rocket request', async t => {
+  const f = orbitWindFixture(2, 0, true), foe: any = f.bot.players.Foe.entity
+  // AA d +1657ms: actual enemyWindFrames returned [], current public feet and own body below.
+  foe.position = new Vec3(600.45703125, 125.48347654938698, 600.330078125)
+  f.bot.entity.position = new Vec3(596.7853652506574, 128.45157456403558, 606.2267638198339)
+  Object.defineProperty(foe, 'health', { get() { throw Error('private enemy HP') } })
+  Object.defineProperty(foe, 'velocity', { get() { throw Error('private enemy velocity') } })
+  t.mock.method(flight, 'fly', async (_bot, _ctl, options) => {
+    const goal = options.goal()
+    assert.notEqual(typeof goal.at, 'function', 'unknown future stays an observed current-pose fallback')
+    assert.equal(goal.at.y, 126.70347654938698)
+    assert.equal(options.rocketIf({ p: f.bot.entity.position, v: new Vec3(1, 0, 0) }, null, goal), false,
+      'the recorded glider is already above the current public-eye approach')
+    assert.equal(options.until(), null)
+    return { why: 'recorded unknown goal control' }
+  })
+  t.mock.method(flight, 'land', async () => ({ ok: true }))
+  await wingOrbit(f.session, f.ctl, { ...f.params, ledge: true, arena: { x: 600.5, y: 120, z: 600.5, r: 80 } })
+})
+
+for (const departure of ['jump', 'fall']) test(`a supported ledge switches to air after a visible ${departure} and stops on the next actual support`, async t => {
+  const f = orbitWindFixture(2, 0, true), foe: any = f.bot.players.Foe.entity
+  foe.position = new Vec3(30, 120, 0); foe.onGround = true
+  t.mock.method(flight, 'fly', async (_bot, _ctl, options) => {
+    assert.equal(options.goal().at.y, 122, 'the real supported perch still uses its centre-side arc')
+    assert.equal(options.until(), null, 'a standing initial perch is not an immediate landing')
+    foe.onGround = false; foe.position.y = departure === 'jump' ? 127.5 : 115.5
+    assert.equal(options.goal().at.y, foe.position.y + pick.eyeHeight(f.bot, foe) - pick.eyeHeight(f.bot), 'the initial hint yields to the public-eye air approach')
+    assert.equal(options.until(), null, 'air without support remains an escort')
+    foe.onGround = true; foe.position.y = 120
+    assert.equal(options.until(), 'он внизу', 'the completed air phase does not orbit the returned ground target again')
+    return { why: options.until() }
+  })
+  t.mock.method(flight, 'land', async () => ({ ok: true }))
+  await wingOrbit(f.session, f.ctl, { ...f.params, floorY: 64, ledge: true, arena: { x: 0, y: 64, z: 0, r: 80 } })
+})
+
+for (const scenario of [
+  { name: 'legacy late ETA', eta: 1, fires: false },
+  { name: 'legacy feasible ETA', eta: 30, fires: true },
+  { name: 'fresh native ETA', eta: 30, observed: 100, received: 100, fires: true },
+  { name: 'native ETA delivered two ticks late', eta: 30, observed: 100, received: 102, fires: false },
+  { name: 'expiry after queue', eta: 30, observed: 100, received: 100, change: 'advance', fires: false },
+  { name: 'abort after queue', eta: 30, observed: 100, received: 100, change: 'abort', fires: false },
+  { name: 'body change after queue', eta: 30, observed: 100, received: 100, change: 'body', fires: false },
+  { name: 'clock change after queue', eta: 30, observed: 100, received: 100, change: 'clock', fires: false },
+  { name: 'frozen clock after queue', eta: 30, observed: 100, received: 100, change: 'freeze', fires: false }
+]) test(`a forty-five-block pearl pop keeps the native arrival deadline: ${scenario.name}`, async t => {
+  t.mock.method(clock, 'now', () => 1000)
+  let shots = 0
+  const wind = { name: 'wind_charge', count: 1, slot: scenario.change ? 45 : 36 }, slots: any[] = []; slots[wind.slot] = wind
+  const bot: any = Object.assign(new EventEmitter(), { username: 'Blue', health: 20, quickBarSlot: 0,
+    ndClock: scenario.received === undefined ? undefined : { age: BigInt(scenario.received), ticks: 0, serverTicks: 0 },
+    game: { minY: -64, height: 384 }, inventory: { slots, items: () => [wind] },
+    entity: { id: 1, username: 'Blue', position: new Vec3(0, 120, .5), velocity: new Vec3(0, 0, 0), onGround: true, yaw: 0, pitch: 0 },
+    blockAt: (p: Vec3) => ({ name: p.y < 120 ? 'stone' : 'air', boundingBox: p.y < 120 ? 'block' : 'empty',
+      shapes: p.y < 120 ? [[0, 0, 0, 1, 1, 1]] : [], position: p.floored() }),
+    activateItem: () => { shots++ }, setQuickBarSlot: () => {} })
+  const ctl = { aborted: false }
+  const pending = require('../src/combat/pearl-ambush').pearlPop({ bot }, ctl, {
+    at: { x: 45, y: 120, z: .5 }, eta: scenario.eta, gameTick: scenario.observed
+  })
+  if (scenario.change) {
+    assert.equal(bot.listenerCount('ndMovementSent'), 1, 'the offhand release is already queued')
+    if (scenario.change === 'advance') bot.ndClock.ticks += 2
+    if (scenario.change === 'abort') ctl.aborted = true
+    if (scenario.change === 'body') bot.entity = { ...bot.entity, id: 2 }
+    if (scenario.change === 'clock') bot.ndClock = { ...bot.ndClock }
+    if (scenario.change === 'freeze') bot.ndClock.frozen = true
+    bot.emit('ndMovementSent')
+  }
+  const result = await pending
+  assert.equal(result.ok, scenario.fires)
+  assert.equal(shots, Number(scenario.fires))
+  if (scenario.fires) assert.equal(result.ticks, 31, 'the actual native floor ray is longer than thirty ticks')
+  else if (!scenario.change || scenario.change === 'advance') assert.match(result.why, /^поздно: полёт заряда/)
+})
+
+test('an arena orbit without motion history aligns its muzzle with the current fair eyes', async t => {
+  const f = orbitWindFixture(2, 0, true), foe = f.bot.players.Foe.entity
+  f.bot.entity._ndPoseHeight = .6
+  let landed = 0
+  t.mock.method(flight, 'fly', async (_bot, owner, options) => {
+    assert.equal(owner, f.ctl)
+    const goal = options.goal()
+    assert.equal(goal.at.y + pick.eyeHeight(f.bot), foe.position.y + pick.eyeHeight(f.bot, foe))
+    assert.equal(options.rocketIf({ p: goal.at.offset(0, .1, 0), v: new Vec3(1, 0, 0) }, null, goal), false)
+    assert.equal(options.until(), null)
+    foe.onGround = true
+    assert.equal(options.until(), 'он внизу', 'the unknown future does not remove actual landing detection')
+    return { why: options.until() }
+  })
+  t.mock.method(flight, 'land', async (_bot, owner) => { assert.equal(owner, f.ctl); landed++; return { ok: true } })
+  assert.equal((await wingOrbit(f.session, f.ctl, { ...f.params, arena: { x: 0, y: 120, z: 0, r: 80 } })).why, 'он внизу')
+  assert.equal(landed, 1)
+})
+
+test('an already gliding target reaches the same safe native launch as other visible targets', async t => {
   const f = orbitWindFixture(), foe: any = f.bot.players.Foe.entity
-  foe.metadata = { 0: 0x80 }
-  t.mock.method(flight, 'takeoff', async () => { assert.fail('the wind executor has no attack on a glider') })
+  foe.metadata = []; foe.metadata[0] = 0x80
+  let launches = 0
+  t.mock.method(flight, 'takeoff', async () => { launches++; return { ok: false, why: 'controlled unsafe launch' } })
   const r = await wingOrbit(f.session, f.ctl, f.params)
   assert.equal(r.ok, false)
-  assert.equal(r.why, 'цель на элитрах — нужен перехват')
+  assert.equal(r.why, 'взлёт: controlled unsafe launch'); assert.equal(launches, 1)
 })
 
 test('wind orbit keeps its owner through ordinary combat before landing when the target opens elytra', async t => {
@@ -224,9 +331,9 @@ test('wind orbit keeps its owner through ordinary combat before landing when the
   ;(f.session as any).updateMovements = () => {}
   t.mock.method(flight, 'fly', async (_bot, _ctl, options) => {
     assert.equal(options.until(), null)
-    foe.metadata = { 6: 'fall_flying' }
+    foe.metadata = []; foe.metadata[6] = 'fall_flying'
     f.bot.blockAt = () => ({ name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] })
-    assert.equal(options.until(), null, 'hidden pose packets must not change the action')
+    assert.equal(options.until(), 'цели не видно', 'loss of sight ends the orbit without reacting to hidden pose packets')
     f.bot.blockAt = () => ({ name: 'air', boundingBox: 'empty' })
     assert.equal(options.until(), 'цель на элитрах')
     now += 2000
@@ -259,7 +366,7 @@ for (const exit of ['aborted', 'expired', 'failed']) test(`orbit combat handoff 
   t.mock.method(clock, 'now', () => now)
   ;(f.session as any).updateMovements = () => {}
   t.mock.method(flight, 'fly', async () => {
-    foe.metadata = { 0: 0x80 }
+    foe.metadata = []; foe.metadata[0] = 0x80
     if (exit === 'aborted') f.ctl.aborted = true
     if (exit === 'expired') now += 12000
     return { why: 'цель на элитрах' }
@@ -355,4 +462,57 @@ for (const shots of [0, 2, null]) test(`orbit receipt reports ${shots ?? 'unknow
   const result = await wingOrbit(f.session, f.ctl, f.params)
   assert.equal(result.windShots, shots)
   assert.equal(result.nearTicks, 0, 'no charge receipt is inferred from contact distance')
+})
+
+test('a visible low jump with unknown foreign onGround delegates flight feasibility without a height veto', async t => {
+  const f = orbitWindFixture(), foe: any = f.bot.players.Foe.entity
+  delete foe.onGround
+  foe.position.y = 121.25
+  let launches = 0
+  t.mock.method(flight, 'takeoff', async () => { launches++; return { ok: false, why: 'controlled unsafe launch' } })
+  const r = await wingOrbit(f.session, f.ctl, f.params)
+  assert.equal(r.ok, false)
+  assert.equal(r.why, 'взлёт: controlled unsafe launch'); assert.equal(launches, 1)
+  assert.equal(f.bot.listenerCount('physicsTick'), 0)
+})
+
+test('a known floor beyond the height scan cannot end an airborne orbit with unknown foreign onGround', async t => {
+  const now = Date.now()
+  t.mock.method(Date, 'now', () => now)
+  const f = orbitWindFixture(2, 0, true), foe: any = f.bot.players.Foe.entity
+  delete foe.onGround
+  foe.position.y = 170
+  f.bot.blockAt = p => ({ name: p.y < 120 ? 'stone' : 'air', boundingBox: p.y < 120 ? 'block' : 'empty', position: p.floored() })
+  assert.equal(require('../src/combat/wind-out').heightAbove(f.bot, foe.position), Infinity, 'the existing scan stops before the known arena floor')
+  t.mock.method(flight, 'fly', async (_bot, owner, o) => {
+    assert.equal(owner, f.ctl)
+    assert.equal(o.until(), null, 'only actual support or onGround ends the airborne chain')
+    assert.equal(o.maxMs, 12000, 'the existing bounded flight and its own safety retain ownership')
+    return { why: 'high-chain control' }
+  })
+  let landed = 0
+  t.mock.method(flight, 'land', async (_bot, owner) => { assert.equal(owner, f.ctl); landed++; return { ok: true } })
+  assert.equal((await wingOrbit(f.session, f.ctl, f.params)).why, 'high-chain control')
+  assert.equal(landed, 1)
+  assert.equal(f.bot.listenerCount('physicsTick'), 0)
+})
+
+test('a wind orbit stops live tracking behind a wall and releases its sight observer after safe landing', async t => {
+  const f = orbitWindFixture(2, 0, true), foe: any = f.bot.players.Foe.entity
+  for (const key of ['velocity', 'inventory']) Object.defineProperty(foe, key, { get() { throw Error(`private ${key}`) } })
+  t.mock.method(flight, 'fly', async (_bot, _ctl, o) => {
+    assert.ok(o.goal(), 'the initial visible position is a legal goal')
+    f.bot.blockAt = p => ({ name: 'stone', boundingBox: 'block', position: p.floored(), shapes: [[0, 0, 0, 1, 1, 1]] })
+    foe.position.x += 12
+    assert.equal(o.goal(), null, 'a hidden movement packet cannot move the flight goal')
+    assert.equal(o.until(), 'цели не видно')
+    return { why: o.until() }
+  })
+  let landed = 0
+  t.mock.method(flight, 'land', async (_b, ctl, o) => { landed++; assert.equal(ctl, f.ctl); assert.equal(o.away, null); return { ok: true } })
+  const r = await wingOrbit(f.session, f.ctl, f.params)
+  assert.equal(r.why, 'цели не видно')
+  assert.equal(landed, 1)
+  assert.equal(f.bot.listenerCount('physicsTick'), 0)
+  assert.equal(foe.listenerCount('ndPositionObserved'), 0)
 })

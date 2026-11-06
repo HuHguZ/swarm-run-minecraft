@@ -5,12 +5,16 @@ import { supportAt } from '../navigation/geometry'
 import { seesPlayer } from '../pvp/last-seen'
 import { observedCollision } from '../pvp/search'
 import { visibleAllies, allyAt, allyOnSegment } from './ally-safety'
-import { WIND, windBlockImpact, type WindReport } from './team-wind'
-import { windTeamSafe, windResistance } from './enemy-wind'
+import { WIND, windBlockImpact, windAboveWorld, type WindReport } from './team-wind'
+import { windTeamSafe, windResistance, WIND_FORECAST_TICKS } from './enemy-wind'
 
 /** Last-packet safety for ordinary self/push wind: unknown allied HP buys zero damage. */
-export function windReleaseSafe(bot: any, aim: { yaw: number; pitch: number }, moved: Vec3, explicitReceiver?: string): boolean {
-  const allies = visibleAllies(bot).filter(e => e.username !== explicitReceiver)
+export function windReleaseSafe(bot: any, aim: { yaw: number; pitch: number }, moved: Vec3, explicitReceiver?: string, explicitAllies: string[] = []): boolean {
+  const names = new Set(explicitAllies), own = bot.entity
+  const extra = (Object.values(bot.entities || {}) as any[]).filter(e => e && e !== own && !(e.id !== undefined && e.id === own?.id) &&
+    e.username && e.username !== (bot.username || own?.username) && names.has(e.username) && e.isValid !== false &&
+    bot.players?.[e.username]?.gamemode !== 3 && e._ndVisible !== false && seesPlayer(bot, e))
+  const allies = [...new Map([...visibleAllies(bot), ...extra].map(e => [e.username, e])).values()].filter(e => e.username !== explicitReceiver)
   if (!allies.length) return true
   if (![aim.yaw, aim.pitch, moved.x, moved.y, moved.z].every(Number.isFinite)) return false
   const from = pick.eyeOf(bot), cp = Math.cos(aim.pitch)
@@ -20,7 +24,8 @@ export function windReleaseSafe(bot: any, aim: { yaw: number; pitch: number }, m
   const sight = observedCollision(bot), reports: WindReport[] = allies.map(e => {
     const velocity = observedVelocity(e)
     return { id: e.username, position: { ...e.position }, velocity: { x: velocity.x, y: velocity.y, z: velocity.z },
-      onGround: !!supportAt(sight, e.position, .05), yaw: e.yaw || 0 }
+      onGround: !!supportAt(sight, e.position, .05), yaw: e.yaw || 0, pitch: e.pitch || 0,
+      gliding: (require('../elytra/track') as typeof import('../elytra/track')).gliding(e), eyeHeight: pick.eyeHeight(bot, e) }
   })
   const tracks = new Map(), world = { ...bot, blockAt: (p: Vec3) => sight.blockAt(p) }
   const resistance = allies.map(e => e.equipment ? windResistance(e).hi : 1)
@@ -33,8 +38,9 @@ export function windReleaseSafe(bot: any, aim: { yaw: number; pitch: number }, m
     if (!Number.isFinite(speed) || speed < 1e-6) return false
     const direction = v.scaled(1 / speed)
     let burst: Vec3 | null = null, ticks = 0
-    for (let age = 1; age <= 30; age++) {
+    for (let age = 1; age <= WIND_FORECAST_TICKS; age++) {
       const origin = from.plus(v.scaled(age - 1))
+      if (windAboveWorld(bot, origin)) { burst = origin; ticks = age; break }
       let unknown = false
       const observed = { blockAt(p: Vec3) { const block = sight.blockAt(p); if (!block) unknown = true; return block } }
       const block = windBlockImpact(observed, origin, direction, speed)
@@ -53,7 +59,7 @@ export function windReleaseSafe(bot: any, aim: { yaw: number; pitch: number }, m
       if (allyOnSegment(bot, allies, origin, end, age - 1, limit, margin + spread)) return false
       if (entityBurst || block) { burst = entityBurst || block!.burst; ticks = age; break }
     }
-    // No observed first impact within the existing 30-tick projectile horizon: its splash is unknown.
+    // No observed first impact within the bounded body forecast: its allied splash remains unknown.
     if (!burst) return false
     // Glint does not reveal Blast Protection. A weaker push can fall short of a safe far landing,
     // so check an interior resistance as well as both extremes; exact enchantments stay unread.

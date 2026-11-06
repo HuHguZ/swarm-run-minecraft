@@ -1,11 +1,19 @@
-import { seesPlayer, observePlayerGear } from './pvp/last-seen'
+import { seesPlayer, observePlayerGear, createLastSeen } from './pvp/last-seen'
 import * as clock from './game-clock'
+import { wingPeak } from './combat/wing-orbit'
+import { recentlyWindAffected } from './combat/enemy-wind'
 const previous = new WeakMap<object, Map<number, any>>()
 const gearMemory = new WeakMap<object, Map<number, any>>()
+const sights = new WeakMap<object, ReturnType<typeof createLastSeen>>()
 
 // Share what this body sees; packet-only movement cannot refresh the team's memory.
 export function swarmSightings(bot: any, allies: string[] = []) {
   if (!bot?.entity) return []
+  let sight = sights.get(bot)
+  if (!sight && bot.physics && typeof bot.on === 'function') {
+    sight = createLastSeen(bot); sights.set(bot, sight)
+    bot.once('end', () => { sight.close(); sights.delete(bot) })
+  }
   const excluded = new Set(Array.isArray(allies) ? allies : [])
   // Только имена команды из её же опроса: позиции для стройки всё равно нужны видимые сейчас.
   bot._ndSwarmAllies = [...excluded]
@@ -16,19 +24,22 @@ export function swarmSightings(bot: any, allies: string[] = []) {
   const remembered = gearMemory.get(bot) || new Map()
   for (const e of Object.values(bot.entities || {}) as any[]) {
     if (e === bot.entity || !e?.username || excluded.has(e.username)) continue
+    const mode = bot.players?.[e.username]?.gamemode
+    if (mode === 1 || mode === 3) continue
     const position = { x: e.position.x, y: e.position.y, z: e.position.z }
     if (!Object.values(position).every(Number.isFinite)) continue
     // Ник игрока виден сквозь стены (клиент рисует его поверх блоков в 64 бл.), если он не крадётся и не невидим — это видит и
     // человек (пользователь 25.10: «вылезаю с другого этажа — как будто не видят мой ник заранее»). Только место и движение:
     // снаряжение за стеной не видно, visible: false — не цель для выстрела и броска.
     if (!seesPlayer(bot, e)) {
+      sight?.observe(e)
       const flags = Number(e.metadata?.[0]) || 0
       if (flags & 0x02 || flags & 0x20 || bot.entity.position.distanceTo(e.position) > 64) continue
       const old = before.get(e.id), ticks = old && old.now < now ? (now - old.now) / 50 : 0
       const velocity = ticks ? Object.fromEntries(['x', 'y', 'z'].map(k => [k, (position[k] - old.position[k]) / ticks])) : { x: 0, y: 0, z: 0 }
       const known = remembered.get(e.id)?.raw === e ? remembered.get(e.id).projection?.equipment || [] : []
       const weapon = known[0]?.name || null
-      sightings.push({ id: e.username, position, velocity, equipment: { weapon, armor: known.slice(2, 6).map(it => it?.name).filter(Boolean) }, threat: /bow|crossbow/.test(weapon || '') ? 'bow' : 'melee', visible: false, nametag: true, seenAt: now })
+      sightings.push({ id: e.username, position, velocity, peakY: null, equipment: { weapon, armor: known.slice(2, 6).map(it => it?.name).filter(Boolean) }, threat: /bow|crossbow/.test(weapon || '') ? 'bow' : 'melee', visible: false, nametag: true, seenAt: now })
       current.set(e.id, { position, now })
       continue
     }
@@ -45,7 +56,11 @@ export function swarmSightings(bot: any, allies: string[] = []) {
     // В воздухе высоко над опорой (подлетел: заряд, булава, удар) — рою позиции для бокового броска ветром (driver wind.ts).
     const airborne = !e.onGround && (require('./combat/wind-out') as typeof import('./combat/wind-out')).heightAbove(bot, e.position) >= 2.5
     const gliding = (require('./elytra/track') as typeof import('./elytra/track')).gliding(e)
-    sightings.push({ id: e.username, position, velocity, equipment, threat, visible: true, seenAt: now, gliding, ...(airborne ? { airborne: true } : {}), ...(Number.isFinite(hp) ? { hpEstimate: hp } : {}), ...(hitProof && (hitProof.hits.length || hitProof.healing) ? { hitProof } : {}) })
+    // The radio's 500ms average can straddle launch; keep it and publish the fast fair native apex separately.
+    const observed = sight && (airborne || equipment.weapon === 'wind_charge') ? sight.observe(e) : null
+    const peakY = airborne && !gliding && observed ? wingPeak(bot, observed) : null
+    const windAffected = airborne && !gliding && recentlyWindAffected(bot, e)
+    sightings.push({ id: e.username, position, velocity, peakY, equipment, threat, visible: true, seenAt: now, gliding, ...(airborne ? { airborne: true } : {}), ...(windAffected ? { windAffected: true } : {}), ...(Number.isFinite(hp) ? { hpEstimate: hp } : {}), ...(hitProof && (hitProof.hits.length || hitProof.healing) ? { hitProof } : {}) })
     current.set(e.id, { position, now })
   }
   previous.set(bot, current)

@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3'
 import * as pick from '../../pick'
 import * as read from '../../read'
 import * as spear from '../../spear'
-import { afterPacket, windReady } from '../../mace/hands'
+import { afterPacket, windReady, offWind } from '../../mace/hands'
 import { WIND_CD_MS } from '../../mace/consts'
 import { observeCharge } from '../../bow/charge'
 import { aimMoving } from '../../bow/ballistics'
@@ -12,12 +12,13 @@ import { potionOf } from '../../pvp/potions'
 import { firstArrow, readyArrow } from '../../ranged'
 import { throwAt } from '../../throw'
 import { isAlly, visibleAllies, allyOnSegment } from '../../combat/ally-safety'
-import { WIND, windLaunch } from '../../combat/team-wind'
+import { WIND, windLaunch, windMovement } from '../../combat/team-wind'
 import { windReleaseSafe } from '../../combat/wind-safety'
 import * as clock from '../../game-clock'
 import { strike } from './ideas'
 import { unsafeSplash } from './splash-safety'
 import { damageTypeName } from '../../gamedata'
+import { seesPlayer } from '../../pvp/last-seen'
 
 type Control = { aborted: boolean }
 export type AirTiming = { ctl?: Control; delayTicks?: number }
@@ -27,8 +28,8 @@ const wait = async (bot: any, ticks: number, ctl?: Control) => {
   for (let tick = 0; tick < ticks && !stopped(bot, ctl); tick++) await bot.waitForTicks(1)
 }
 const sees = (bot: any, target: any) => !!target?.position && target.isValid !== false && target.id !== bot.entity?.id && pick.canHit(bot, target, { range: 32 })
-function allowed(bot: any, target: any, p: AllyLaunch, damage: number) {
-  if (stopped(bot, p.ctl) || !sees(bot, target)) return false
+function allowed(bot: any, target: any, p: AllyLaunch, damage: number, visible = sees(bot, target)) {
+  if (stopped(bot, p.ctl) || target?.id === bot.entity?.id || !visible) return false
   if (!isAlly(bot, target)) return !p.allowAlly
   return p.allowAlly === true && (p.allyHealth?.() ?? 0) > damage && p.allySafe?.() === true
 }
@@ -42,22 +43,22 @@ const release = (bot: any, action: () => any) => new Promise<any>((resolve, reje
 export async function windAt(bot: any, target: any, p: AllyLaunch & { predict?: (target: any, velocity: any, flightTicks: number) => Vec3 } = {}) {
   const xyz = (v: any) => v ? { x: v.x, y: v.y, z: v.z } : null
   const snapshot = (velocity?: any) => {
-    const visible = sees(bot, target), v = visible ? velocity ?? observedVelocity(target) : null, own = bot.entity
+    const visible = seesPlayer(bot, target), v = visible ? velocity ?? observedVelocity(target) : null, own = bot.entity
     const receipt = target?._ndPositionReceipts?.[1]
     return { ms: Date.now(), visible, target: visible ? xyz(target.position) : null,
       v: v ? { ...xyz(v), ageTicks: v.ageTicks ?? null, hasConfidence: hasObservedVelocity(target),
         receiptKind: receipt?.kind ?? null, clockReceiptMs: receipt?.t ?? null } : null,
-      own: own ? { position: xyz(own.position), velocity: xyz(own.velocity), movement: xyz(movement(bot)),
+      own: own ? { position: xyz(own.position), velocity: xyz(own.velocity), movement: xyz(windMovement(bot)),
         onGround: own.onGround, yaw: own.yaw, pitch: own.pitch } : null }
   }
   await wait(bot, p.delayTicks ?? 0, p.ctl)
-  if (!allowed(bot, target, p, 1) || !windReady(bot)) return { fired: false, why: 'unseen_or_unsafe_target' }
-  const item = bot.inventory.items().find(i => i.name === 'wind_charge')
+  if (!allowed(bot, target, p, 1, seesPlayer(bot, target)) || !windReady(bot)) return { fired: false, why: 'unseen_or_unsafe_target' }
+  const off = offWind(bot), item = off ? bot.inventory.slots[45] : bot.inventory.items().find(i => i.name === 'wind_charge')
   if (!item) return { fired: false, why: 'missing_charge' }
-  if (bot.heldItem?.slot !== item.slot) await bot.equip(item, 'hand')
+  if (!off && bot.heldItem?.slot !== item.slot) await bot.equip(item, 'hand')
   await wait(bot, 2, p.ctl)
-  if (!allowed(bot, target, p, 1)) return { fired: false, why: 'cancelled_or_changed' }
-  const from = pick.eyeOf(bot), v = observedVelocity(target), moved = movement(bot)
+  if (!allowed(bot, target, p, 1, seesPlayer(bot, target))) return { fired: false, why: 'cancelled_or_changed' }
+  const from = pick.eyeOf(bot), v = observedVelocity(target), moved = windMovement(bot)
   let at = target.position.offset(0, .3, 0), shot = windLaunch(from, at, moved)
   for (let i = 0; i < 3 && shot; i++) {
     at = p.predict ? p.predict(target, v, shot.time) : target.position.offset(v.x * shot.time, .3 + v.y * shot.time, v.z * shot.time)
@@ -70,14 +71,14 @@ export async function windAt(bot: any, target: any, p: AllyLaunch & { predict?: 
   await wait(bot, 1, p.ctl)
   return release(bot, () => {
     const released = snapshot()
-    if (!allowed(bot, target, p, 1)) return { fired: false, why: 'cancelled_or_changed', check: 'target' }
-    const now = pick.eyeOf(bot), delta = at.minus(now), length = delta.norm(), actualMove = movement(bot)
+    if (!allowed(bot, target, p, 1, seesPlayer(bot, target))) return { fired: false, why: 'cancelled_or_changed', check: 'target' }
+    const now = pick.eyeOf(bot), delta = at.minus(now), length = delta.norm(), actualMove = windMovement(bot)
     const receiver = p.allowAlly ? target.username : undefined
-    const check = !allowed(bot, target, p, 1) ? 'target' : !windReady(bot) ? 'cooldown' : bot.heldItem?.name !== 'wind_charge' ? 'equip' :
+    const check = !allowed(bot, target, p, 1, seesPlayer(bot, target)) ? 'target' : !windReady(bot) ? 'cooldown' : (off ? !offWind(bot) : bot.heldItem?.name !== 'wind_charge') ? 'equip' :
       !aligned(bot, shot) ? 'aim' : !length ? 'intercept' : pick.blockOnRay(bot, now, delta.scaled(1 / length), length) ? 'block' :
         !windReleaseSafe(bot, shot, actualMove, receiver) ? 'wind-team' : null
     if (check) return { fired: false, why: 'release_changed_or_unsafe', check }
-    bot.activateItem(); bot.usingHeldItem = false; bot._ndWindCd = clock.now() + WIND_CD_MS
+    bot.activateItem(off); bot.usingHeldItem = false; bot._ndWindCd = clock.now() + WIND_CD_MS
     return { fired: true, ticks: shot.time, yaw: shot.yaw, pitch: shot.pitch, trace: { aim, release: released } }
   })
 }

@@ -334,5 +334,5 @@ function install (s) {
     }
   }
 }
-module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb, shieldHold, keepMagmaSneak }
-export { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, emergency, protectedClimb, shieldHold, keepMagmaSneak }
+module.exports = { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, allowed, emergency, protectedClimb, shieldHold, keepMagmaSneak }
+export { on, run, wait, start, install, cancel, releaseIntent, mark, clock, owner, allowed, emergency, protectedClimb, shieldHold, keepMagmaSneak }

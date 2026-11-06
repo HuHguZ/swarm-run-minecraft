@@ -33,6 +33,8 @@ const FIREBALLS = new Set(['fireball', 'small_fireball', 'dragon_fireball'])
 const FIREBALL_INERTIA = Math.fround(.95)
 
 const seen = new WeakMap() // observed entity -> { x, y, z, t }
+const smashDescents = new WeakMap<object, 'launch' | 'descent'>()
+const fastWindRises = new WeakMap<object, { epoch: number; receipt: object }>()
 const playerSights = new WeakMap()
 const projectileSights = new WeakMap()
 
@@ -239,34 +241,60 @@ function potionRoleOf (bot, item) {
 // Падающий сверху враг (булава с высоты, 12.10: «залетел на бота — он тупо смотрел»): его ноги — шаг тика как у игрока
 // в воздухе (LivingEntity.travel: y = (y − 0.08)·0.98, по горизонтали трение 0.91), пока не опустятся до моей головы;
 // сядет ближе 4 бл. и в 30 тиков — угроза. foes — имена врагов (команду знает арена).
-function smashes (bot, foes: string[], scope: string | null = null) {
+function smashes (bot, foes: string[], scope: string | null = null, shieldAim = false) {
   const out = []
   if (!foes.length) return out
   const me = bot.entity.position
   const now = gameClock.now()
   for (const raw of Object.values(bot.entities) as any[]) {
     if (!raw || raw.type !== 'player' || !foes.includes(raw.username) || !raw.position) continue
-    const e = visiblePlayer(bot, raw, scope); if (!e) continue
-    if (e.position.y - me.y < 1.5 || Math.hypot(e.position.x - me.x, e.position.z - me.z) > 32) continue
-    // Падает без булавы — не удар сверху (13.10: прыжки и полёты человека — 126 ложных рывков за 3 мин, бой рвался). В руке
-    // видно; переложит булаву в полёте — увидим на следующем тике.
-    if ((e.heldItem || e.equipment?.[0])?.name !== 'mace') continue
+    const e = visiblePlayer(bot, raw, scope); if (!e) { smashDescents.delete(raw); continue }
+    const dy = e.position.y - me.y
+    if (dy < 1.5 || Math.hypot(e.position.x - me.x, e.position.z - me.z) > 32) { smashDescents.delete(raw); fastWindRises.delete(e); continue }
     const v = e.velocity || { x: 0, y: 0, z: 0 }
+    if (v.y >= -.3 && smashDescents.get(raw) === 'descent') smashDescents.delete(raw)
+    const hand = (e.heldItem || e.equipment?.[0])?.name
+    const mace = e._ndMaceSeen || hand === 'mace'
+    // Поздний свап не отменяет высокий спуск на нас; обычный прыжок (вершина 1.25) этого не доказывает.
+    const descent = v.y < -.3 && (dy > 3.5 || smashDescents.has(raw))
+    // Как mace.track: видимый подъём быстрее прыжка, с зарядом в руке и уже высоко над нами.
+    // Его апекс нельзя забыть до спуска: поднявшийся защитник оставляет меньше времени на щит.
+    const legacyLaunch = smashDescents.get(raw) === 'launch' || dy > 3.5 && v.y > .55 && hand === 'wind_charge'
+    const risePhase = e.onGround === false && !(require('./elytra/track') as typeof import('./elytra/track')).gliding(e)
+    const epoch = e._ndMotionEpoch
+    const [previous, receipt] = e._ndPositionReceipts || []
+    const earlier = e._ndEarlierPositionReceipt
+    const rise = fastWindRises.get(e)
+    // The remembered rise belongs to this observer's body view and its continuous air receipts.
+    const retained = risePhase && rise && rise.epoch === epoch && receipt && !receipt.grounded &&
+      (rise.receipt === receipt || !previous?.grounded &&
+        (rise.receipt === previous || rise.receipt === earlier && !earlier?.grounded))
+    if (!retained) fastWindRises.delete(e)
+    const fastWind = risePhase && Number.isInteger(epoch) && v.y > .55 && hand === 'wind_charge' && e._ndGearVisible?.[0] &&
+      [previous, receipt].every(r => /^(rel_entity_move|entity_move_look)$/.test(r?.kind || ''))
+    const launch = legacyLaunch || fastWind || retained
+    if (!mace && !descent && !launch) continue
     // Стоит на крыше (под ногами блок) — не падает: скачок позиции (телепорт, ступенька) давал «падает на меня».
     let under = null
     try { under = bot.blockAt(e.position.offset(0, -0.3, 0), false) } catch {}
     const world = Object.create(bot)
     world.blockAt = p => { try { return bot.blockAt(p, false) || { name: 'unknown', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } } catch { return { name: 'unknown', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } } }
     const knownSupport = under?.boundingBox === 'block' && (require('./pick') as typeof import('./pick')).blockSeen(world, under.position || e.position.offset(0, -.3, 0).floored())
-    if (knownSupport) continue
+    if (knownSupport) { smashDescents.delete(raw); fastWindRises.delete(e); continue }
+    // Запомнить видимый разгон, пока защитник сам прыгает или цель ещё не входит в прогноз удара.
+    if ((fastWind || retained) && rise?.receipt !== receipt) fastWindRises.set(e, { epoch, receipt })
     // Взлёт (ветер, прыжок) — тоже угроза: вниз он вернётся; скачок позиции от телепорта даёт дикую скорость — в пределах
     // взлёта на заряде ветра (замер mace-2: телепорт на 14 бл. вверх — «летит вверх», удар замечен за 6 тиков).
     const p = { x: e.position.x, y: e.position.y, z: e.position.z }
     let vx = Math.max(-2, Math.min(2, v.x)); let vy = Math.max(-4, Math.min(1.2, v.y)); let vz = Math.max(-2, Math.min(2, v.z)); let t = 0
     while (t < 45 && !(vy < 0 && p.y <= me.y + 1.8)) { p.x += vx; p.y += vy; p.z += vz; vy = (vy - 0.08) * 0.98; vx *= 0.91; vz *= 0.91; t++ }
     // 5, а не 4: за время падения я и сам могу шагнуть под него (mace-6: шёл отдать броню — и под удар).
-    if (t >= 45 || Math.hypot(p.x - me.x, p.z - me.z) > 5) continue
-    out.push({ name: e.username, at: { x: p.x, y: p.y, z: p.z }, from: { x: e.position.x, y: e.position.y + 1.6, z: e.position.z }, vel: sample(e, now), ticks: t, dbg: `support unknown@${e.position.y.toFixed(2)} vy ${v.y.toFixed(2)}` })
+    if (t >= 45 || Math.hypot(p.x - me.x, p.z - me.z) > (mace ? 5 : 3.5)) continue
+    if (descent) smashDescents.set(raw, 'descent')
+    else if (legacyLaunch) smashDescents.set(raw, 'launch')
+    const shieldFrom = shieldAim ? (require('./combat/shield') as typeof import('./combat/shield')).smashShieldAim(bot, e) : null
+    out.push({ name: e.username, at: { x: p.x, y: p.y, z: p.z }, from: { x: e.position.x, y: e.position.y + 1.6, z: e.position.z },
+      ...(shieldFrom ? { shieldFrom } : {}), vel: sample(e, now), ticks: t, dbg: `support unknown@${e.position.y.toFixed(2)} vy ${v.y.toFixed(2)}` })
   }
   return out
 }
@@ -279,9 +307,42 @@ function thrownTracker (bot) {
   bot._ndThrown = T
   // Стрелы и трезубец — так же (12.10: «стрелы — уворачиваться, просчитывать заранее»): их позиция приходит раз в 20 тиков.
   // Всё, что летит (12.10: «уворот от зелий — такой же, как от снежков, от любых предметов, что летят в бота»): снаряды
-  // PROJECTILES, кроме жемчуга.
-  const types = new Map([...PROJECTILES].filter(n => !HARMLESS.has(n)).map(n => [bot.registry.entitiesByName[n]?.id, n]).filter(([id]) => id != null) as any)
+  // Жемчуг нужен засаде, хотя не входит в список угроз.
+  const types = new Map([...PROJECTILES].map(n => [bot.registry.entitiesByName[n]?.id, n]).filter(([id]) => id != null) as any)
+  const windVelocity = (id, velocity, position = null, birthSample = false) => {
+    const record = T.get(id), entity = bot.entities[id]
+    if (!record || !entity || !velocity || !/^(?:breeze_)?wind_charge$/.test(record.name)) return
+    const time = gameClock.observationNow(), view = projectileView(bot, entity, time)
+    // Native motion is public only with its visible receipt. A LOS rebaseline creates a new view without it.
+    if (!view) return
+    const previous = view._ndWindMotion, axes = ['x', 'y', 'z']
+    let birth = birthSample ? { record, velocity: null } : null
+    if (position && previous?.birth?.record === record && axes.every(a => position[a] === record.p[a])) {
+      // The first full sync refines LpVec3's packed spawn velocity; later duplicates must match its exact doubles.
+      const scale = Math.ceil(Math.max(...axes.map(a => Math.abs(velocity[a]))))
+      const same = previous.birth.velocity
+        ? axes.every(a => velocity[a] === previous.birth.velocity[a])
+        : scale > 0 && axes.every(a => (Math.min(Math.round((velocity[a] / scale * .5 + .5) * 32766), 32766) * 2 / 32766 - 1) * scale === record.v[a])
+      if (same) {
+        const age = Math.max(0, (time - record.observedAt) / 50)
+        position = Object.fromEntries(axes.map(a => [a, record.p[a] + velocity[a] * age]))
+        birth = { record, velocity: { ...velocity } }
+      }
+    }
+    if (!position) {
+      const previous = view._ndWindMotion, receipt = view._ndPositionReceipts[1]
+      const native = previous?.t >= receipt.t, motion = native ? previous.velocity : sample(view, time)
+      if (!motion) return
+      const start = native ? previous.position : view.position, age = (time - (native ? previous.t : receipt.t)) / 50
+      position = { x: start.x + motion.x * age, y: start.y + motion.y * age, z: start.z + motion.z * age }
+    }
+    view._ndWindMotion = { position: { ...position }, velocity: { ...velocity }, t: time, ...(birth ? { birth } : {}) }
+  }
   bot._client.on('packet', (data, meta, buf) => {
+    if (data && meta?.name === 'entity_velocity') {
+      if (/^(?:breeze_)?wind_charge$/.test(T.get(data.entityId)?.name || '')) windVelocity(data.entityId, (require('./drops') as typeof import('./drops')).velocityFromRaw(buf, 'velocity'))
+      return
+    }
     if (!meta || meta.name !== 'spawn_entity' || !data || !types.has(data.type)) return
     const v = (require('./drops') as typeof import('./drops')).velocityFromRaw(buf, 'spawn')
     // objectData снаряда — id бросившего (Projectile.getOwner в пакете спавна, 1.21): свой бросок и союзный — не угроза.
@@ -291,8 +352,15 @@ function thrownTracker (bot) {
     const owner = bot.entities[Number(data.objectData)]
     const knownOwner = own ? bot.entity.id : owner && seesPlayer(bot, owner) ? owner.id : 0
     // rawOwner — id стрелка без проверки видимости: только чтобы узнать «свою» стрелу разгона (лучник за спиной не виден).
-    if (v) T.set(data.entityId, { name: types.get(data.type), p: { x: data.x, y: data.y, z: data.z }, v, t0: gameClock.now(), owner: knownOwner, rawOwner: Number(data.objectData) || 0, own })
+    const name = types.get(data.type)
+    const gameTick = name === 'ender_pearl' ? (require('./combat/team-wind') as typeof import('./combat/team-wind')).worldTick(bot) : undefined
+    if (v) T.set(data.entityId, { name, p: { x: data.x, y: data.y, z: data.z }, v, t0: gameClock.now(), observedAt: gameClock.observationNow(), owner: knownOwner, rawOwner: Number(data.objectData) || 0, own, gameTick })
   })
+  const spawn = entity => windVelocity(entity.id, T.get(entity.id)?.v, T.get(entity.id)?.p, true)
+  const sync = packet => { if (T.has(packet.entityId)) windVelocity(packet.entityId, { x: packet.dx, y: packet.dy, z: packet.dz }, { x: packet.x, y: packet.y, z: packet.z }) }
+  bot.on('entitySpawn', spawn)
+  bot._client.on('sync_entity_position', sync)
+  bot.once('end', () => { bot.removeListener('entitySpawn', spawn); bot._client.removeListener('sync_entity_position', sync) })
   bot.on('entityGone', e => { if (e) T.delete(e.id) })
   return T
 }
@@ -497,6 +565,7 @@ function projectileThreats (bot, foes, moving = false) {
     const e = bot.entities[id]
     const age = Math.round((gameClock.now() - r.t0) / 50)
     if (!e) { T.delete(id); continue }
+    if (HARMLESS.has(r.name)) continue
     if (age > 60 && !moving) {
       // Старый опрос не удаляет свежую траекторию, которую ведёт слой тела.
       if (!r.visibleMotion) T.delete(id)
@@ -602,5 +671,5 @@ function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) 
   return { potions, holders, clouds, smashes: smashes(bot, foes || [], scope), arrows, aims: aims(bot, foes, scope), lava: lava.slice(0, 1), floor: floorDanger(bot), blasts, web }
 }
 
-module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes }
-export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes }
+module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes, thrownTracker, projectileView, projectileVelocity: sample }
+export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes, thrownTracker, projectileView, sample as projectileVelocity }
