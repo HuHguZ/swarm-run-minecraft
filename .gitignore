@@ -18,6 +18,7 @@
 !/docs/media/
 /docs/media/*
 !/docs/media/architecture.svg
+!/docs/media/architecture.ru.svg
 !/docs/media/cover.jpg
 !/docs/media/colosseum.png
 !/package.json
