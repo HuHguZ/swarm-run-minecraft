@@ -1,8 +1,8 @@
 {
-  "name": "neurodown-mcp",
+  "name": "swarm-run-minecraft-mcp",
   "version": "0.1.0",
   "private": true,
-  "description": "MCP bridge between Claude Code and the NeuroDown daemon. Holds no game state of its own.",
+  "description": "Local MCP bridge for the Swarm Run Minecraft bot daemon.",
   "type": "module",
   "main": "../dist/mcp/src/index.js",
   "scripts": {

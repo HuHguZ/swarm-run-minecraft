@@ -5,7 +5,7 @@
 # Свежие миры (--fresh) с сидами по порядку: слоты 8..20 ← сиды 1..13, 27..29 ← 14..16. Сцена try-lab-fresh.js
 # (сама: /random reset, keep_inventory=false, утро 1000), 30 мин, смерть = провал (DEATHS_MAX=1), маршрут ND_ROUTE=1.
 # После серии слоты остаются поднятыми (следующая серия сама опустит).
-cd /c/Users/user/Desktop/work/minecraft-claude || exit 1
+CDPATH= cd "$(dirname "$0")/../.." || exit 1
 TAG=$1; SEEDS=$(cat "$2" | tr -d '\r\n'); shift 2
 SLOTS=${ROUTE_SLOTS:-8-20,27-29}
 echo "== $TAG $(date +%H:%M:%S): опускаю $SLOTS"

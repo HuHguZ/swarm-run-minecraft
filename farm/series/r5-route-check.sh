@@ -4,7 +4,7 @@
 # (поведение r4), 10 — только бюджет. Слоты 8–20, 27–29 (farm/route-scan/series.sh). Серия не начинается, если не успевает
 # к сроку. Флаги — и в окружение (демон: голем в fauna.js), и в env сцены (кампания: бюджет в route.js).
 #   bash farm/series/r5-route-check.sh <ЧЧ:ММ> [метка]       мягкий стоп: touch farm/logs/collect/STOP
-cd /c/Users/user/Desktop/work/minecraft-claude || exit 1
+CDPATH= cd "$(dirname "$0")/../.." || exit 1
 UNTIL=$1; TAG=${2:-r5c}
 D=farm/logs/collect; mkdir -p "$D"
 now () { echo $(( 10#$(date +%H) * 60 + 10#$(date +%M) )); }

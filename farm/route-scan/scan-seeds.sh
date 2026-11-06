@@ -2,7 +2,7 @@
 # Скан копий миров для маршрута (поток route): на одном своём слоте по очереди — свежий мир сида, прогрузка квадрата
 # 2*HALF у спавна, чтение region-файлов → farm/route-scan/<сид>.json, слот опустить.
 #   sh farm/route-scan/scan-seeds.sh <слот> <сид> [<сид> ...]     (HALF=160 по умолчанию; готовые сиды пропускаются)
-cd /c/Users/user/Desktop/work/minecraft-claude
+CDPATH= cd "$(dirname "$0")/../.." || exit 1
 SLOT=$1; shift
 HALF=${HALF:-160}
 for S in "$@"; do

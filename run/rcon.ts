@@ -1,9 +1,12 @@
 'use strict'
-// Minimal RCON client for MY run server only (server-run, rcon port from its
+// Minimal RCON client for the campaign server (server-run, RCON port from its
 // server.properties). Usage: node rcon.js "gamerule keep_inventory true"
-import * as net from 'net'
-import * as fs from 'fs'
-const props = fs.readFileSync('C:/Users/user/Desktop/work/minecraft-claude/server-run/server.properties', 'utf8')
+import * as net from 'node:net'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { REPO_ROOT } from '../daemon/src/paths'
+
+const props = readFileSync(join(REPO_ROOT, 'server-run', 'server.properties'), 'utf8')
 const get = k => (new RegExp('^' + k.replace('.', '\\.') + '=(.*)$', 'm').exec(props) || [])[1]
 const port = Number(get('rcon.port'))
 const pass = get('rcon.password')

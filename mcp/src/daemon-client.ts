@@ -30,7 +30,7 @@ export class DaemonClient {
       const ws = new WebSocket(this.url)
       const onError = () => {
         reject(new Error(
-          `демон не отвечает на ${this.url}. Запусти его: powershell -File "${'C:\\Users\\user\\Desktop\\work\\minecraft-claude\\restart-daemon.ps1'}"`
+          `Демон не отвечает на ${this.url}. Запусти node dist/daemon/src/index.js из корня репозитория и проверь ND_WS и ND_WS_PORT.`
         ))
       }
       ws.once('error', onError)

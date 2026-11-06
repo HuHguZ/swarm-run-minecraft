@@ -31,9 +31,9 @@
 
 ## (а) Что было найдено раньше
 
-### а.1 Где лежало
+### а.1 Темы исследования
 
-Исследование шло в сессии `f3cb70c6-6aa4-4598-b237-9ed58b71ecb3` (24–25 сентября) через трёх субагентов. Их стенограммы лежат в `C:\Users\user\.claude\projects\C--Users-user-Desktop-work\f3cb70c6-6aa4-4598-b237-9ed58b71ecb3\subagents\`:
+Исследование 24–25 сентября разделили на три части.
 
 | Файл | Когда | Тема |
 |---|---|---|
@@ -1313,10 +1313,5 @@
 - `entities.js` — `attack`, `entity_status`;
 - `explosion.js` — `getExplosionDamages`;
 - minecraft-data 1.21.11: `protocol.json` (`block_dig.status` — varint, `entity_action`), `entities.json` (индексы метаданных игрока, поплавка, кристалла).
-
-**Стенограммы:**
-- `C:\Users\user\.claude\projects\C--Users-user-Desktop-work\f3cb70c6-6aa4-4598-b237-9ed58b71ecb3\subagents\agent-a8779c7b7e1e7f5ff.jsonl`
-- `...\agent-a013c5a21123acfc9.jsonl`
-- `...\agent-a38845ad31afb06b9.jsonl`
 
 **Расчёты [Р]** сделаны по формулам выше: подъём от взрыва — шаг `y+=v; v=(v−0.08)·0.98`; урон взрыва и брони — формулы б.10 и б.18. Их стоит сверить замером на тестовом сервере (`/data get entity`), как принято в проекте.

@@ -2,7 +2,7 @@
 # Игра людей против роя: слот 31 (25631), обычная скорость 20 TPS без пошагового режима, 30 ботов синие, люди — красные
 # (ARMS_SOLO=1: набор человека — незерит, меч, булава, лук, яблоки). Код — dist-play, снимок arena-play.
 #   arena-play.sh up | drive N | down     лог: farm/results/duo-31/arena<N>.out
-cd /c/Users/user/Desktop/work/minecraft-claude || exit 1
+CDPATH= cd "$(dirname "$0")/.." || exit 1
 SL=31; C=${C:-29}; CODE=${CODE:-arena-play}; D=${D:-dist-play}
 stop_driver () { powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | ? { \$_.CommandLine -like '*arena*ffa.js arms $SL' } | % { Stop-Process -Id \$_.ProcessId -Force; 'driver stopped' }"; }
 case "$1" in

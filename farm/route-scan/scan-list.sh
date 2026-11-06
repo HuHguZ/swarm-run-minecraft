@@ -2,7 +2,7 @@
 # Скан копий миров для списка сидов (поток route): партиями по 16 на своих слотах (8–20 ← до 13 сидов, 27–29 ← до 3),
 # свежие миры, gen+scan параллельно (scan-par.sh); в конце слоты опускаются.
 #   sh farm/route-scan/scan-list.sh <файл сидов через запятую>
-cd /c/Users/user/Desktop/work/minecraft-claude
+CDPATH= cd "$(dirname "$0")/../.." || exit 1
 ALL=$(cat "$1" | tr -d '\r\n')
 N=$(echo "$ALL" | tr ',' '\n' | grep -c .)
 i=1

@@ -2,7 +2,7 @@
 
 Консольная утилита на библиотеке [cubiomes](https://github.com/Cubitect/cubiomes) (та же, что внутри cubiomes-viewer).
 
-- Клон с GUI: `C:\Users\user\Desktop\work\cubiomes-viewer`, программа — `bin\cubiomes-viewer-static-w64.exe` (релиз 4.1.2).
+- Для сборки нужен MSVC с инструментами C++. Скрипт `build.cmd` берёт подмодуль из соседнего `cubiomes-viewer/cubiomes` или из каталога `CUBIOMES_DIR`.
 - Библиотека — подмодуль `cubiomes`, ветка **`nd-1.21.11`**. В master нет поддержки новее 1.21.4, поэтому поверх неё взяты открытые PR:
   - #162 — дерево биомов 1.21.5+, снятое с `1.21.11.jar` (`MC_1_21_11`);
   - #145 — тип нижнего разрушенного портала;

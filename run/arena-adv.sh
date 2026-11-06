@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Слот 31, стенд бота-противника: собрать dist-adv$N, снимок arena-adv$N, перезапустить демонов (если не DRIVER_ONLY) и драйвер.
 #   run/arena-adv.sh N        (ARENA_TRACE_NEAR=1 ARENA_BOOST=0 — трасса стояний, без «человек на арене»); лог драйвера: farm/results/duo-31/arenaadv$N.out
-cd /c/Users/user/Desktop/work/minecraft-claude || exit 1
+CDPATH= cd "$(dirname "$0")/.." || exit 1
 N=$1; D=dist-adv$N; CODE=arena-adv$N; S=$(dirname "$0")
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | ? { \$_.CommandLine -like '*adversary.js*' -or \$_.CommandLine -like '*ffa.js arms 31' } | % { Stop-Process -Id \$_.ProcessId -Force }"
 node scripts/build.mjs --out $D 2>&1 | tail -1

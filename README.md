@@ -1,202 +1,64 @@
-# NeuroDown
+# Swarm Run
 
-Бот, который сам проходит **Minecraft Java 1.21.11** по-спидраннерски: от нового мира до убитого дракона.
-Без модов и без читов. [mineflayer](https://github.com/PrismarineJS/mineflayer) реализует клиентский протокол, и бот
-заходит на обычный сервер Paper как живой игрок со своим ником, телом и инвентарём. Код пишут ИИ-агенты (Claude Code и
-Codex) под руководством автора; бот в основном мире играет честно — никаких `/tp`, `/give`, `/effect`, `/time`, он
-не оператор.
+**PvP swarms and autonomous speedrunning for Minecraft Java 1.21.11.**
 
-> Неофициальный проект. Minecraft — товарный знак Mojang/Microsoft. Серверов, миров и jar-файлов игры в репозитории нет.
+![Illustrated cover of a team of voxel adventurers on arena steps and a runner approaching a portal](docs/media/cover.jpg)
 
-## Где мы сейчас
+[Local setup and play](docs/local-play.md) · [По-русски](docs/README.ru.md) · [Architecture](docs/media/architecture.svg)
 
-Прохождение разбито на этапы, каждый оттачивается на ферме тестовых миров (до 32 серверов параллельно), на хороших
-сидах, с `keep_inventory=false`: смерть = провал прогона.
+Swarm Run is an experimental bot lab with two game modes on the same Mineflayer runtime. You can join a local Paper arena with a regular Minecraft client, run a speedrun campaign, or control one bot through MCP from Codex or Claude Code. The autonomous modes run without an AI agent or model API key.
 
-| Этап | Состояние (октябрь 2026) |
-|---|---|
-| Новый мир → Ад | на 16 новых сидах: вход в Ад в 10 из 16, медиана ~10 мин, со смертью 4 из 16 |
-| Ад → Энд (бастион, жемчуг, ифриты, крепость) | смертей стало вдвое меньше, до Энда серии пока не доходят — идёт работа |
-| Дракон | 86 % побед на 4 кроватях (18 из 21, дважды подряд), без смертей, бой ~2:20 |
-| Сквозной прогон «новый мир → дракон» | после того как этапы возьмут ≥ 8 из 10 |
+> Unofficial Minecraft project. Not approved by or associated with Mojang or Microsoft. [Minecraft Usage Guidelines](https://www.minecraft.net/en-us/usage-guidelines)
 
-Цель — пройти игру быстро и без смертей, как спидраннер: ресурсы сначала из построек по карте, портал литьём лавы,
-жемчуг бартером в бастионе, кровати против дракона.
+## PvP swarm
 
-## Как устроено
+Bots start with a loot phase, then share sightings and supplies, pick targets, and adjust roles as the fight changes. The arena coordinator assigns actions such as flanking, guarding and retreat. Each bot owns its movement and executes attacks through its own client.
 
-```
-Сервер Minecraft 1.21.11 (Paper)
-        ↕ протокол
-ДЕМОН (daemon/)        тело: живёт само, следует тикам сервера, автопилот, рефлексы, журнал
-  mineflayer + pathfinder, свои ходы (мосты, столбы, спуски, жемчуг, лодка),
-  бой, выживание, добыча, крафт, Ад, бастион, крепость, дракон
-        ↕ WebSocket RPC
-СТРАТЕГ (daemon/src/core/)     WorldState → граф стратегий → навык → проверка результата
-  кампания подключает навыки спидрана; после угрозы — новое наблюдение и новый план
-        ↕
-MCP-сервер (mcp/)      мост для Claude Code: ~80 инструментов mc_*, мозг «возвращается в тело»
-```
+- **What works.** Weapon-aware retreats and melee pressure, shield reactions, elytra pursuit, and aerial spear and mace attacks. Wind charges can lift, redirect or eject opponents. A late swap from wind charge to mace was fully blocked in a controlled Paper test.
+- **Where it struggles.** A target can cross the rim and recover. Cover, strafing, packet timing and access to a second throwing position can break a wind chain. Wind-to-spear and wind-to-mace follow-ups have succeeded in controlled scenarios. Their timing in a crowded fight still varies.
+- **How decisions are tested.** Unit and replay tests check local rules. Paper matches measure whether contacts, blocks, landings and ejections actually happen. An ejection requires the opponent to finish outside the arena.
 
-- **Тело работает без мозга.** Автопилот ест, вылезает из воды, откапывается, надевает броню, уходит в укрытие;
-  у каждого намерения есть срок и сторож застревания, отчёт всегда честный — в том числе частичный.
-- **Иерархия решений.** Стратегический граф выбирает путь к дракону. Тактический граф пересчитывает угрозу 0–4 и
-  может сменить бой на отход, укрытие или лечение. Экстренное спасение имеет высший приоритет; после инцидента
-  кампания обновляет состояние и перепланирует. Владение управлением: Emergency → Tactical → Skill.
-- **Удар и установка блока — только по тому, что видит прицел** (`daemon/src/pick.ts`): сквозь стены бот не бьёт.
-- **Механика сверена с кодом игры 1.21.11** (байткод Paper): урон взрыва кровати, фазы дракона, бартер пиглинов,
-  форма портала из 10 обсидиана и т.д. — числа в `SPEEDRUN.md`.
+![In-world capture of the generated sandstone Colosseum above its lava moat](docs/media/colosseum.png)
 
-## Что в репозитории
+*The generated Colosseum, captured from the development viewer. The cover above is an illustration.*
 
-| Путь | Что |
-|---|---|
-| `daemon/src/` | тело бота: движение, бой, выживание, Ад, бастион, крепость, дракон… |
-| `daemon/campaign.ts` (вход), `daemon/campaign/` (этапы, навыки, цикл), `daemon/src/campaign/` | кампания и адаптер зрелых навыков к стратегическому графу |
-| `daemon/src/core/`, `daemon/src/environments/` | независимое ядро, состояние, реестр стратегий, Minecraft и абстрактный симулятор |
-| `daemon/src/tactics/`, `daemon/src/combat/` | тактический граф, управление приоритетами, воздушные действия и прогноз видимого жемчуга |
-| `daemon/test/` | тесты (`node:test`) |
-| `daemon/scenes/<этап>/try-*.ts` | сцены-проверки поведения против живого мира (готовят арену командами, печатают вердикты); этапы `ow`, `nether`, `end`, `move`, `pvp`, `infra`, общий код сцен — `scenes/lib/`; `farm.js run` находит сцену по имени файла |
-| `daemon/arena/`, `daemon/castle/`, `daemon/sim/`, `daemon/tools/` | арена PvP и Колизей, замок, CLI симулятора стратега, мелкие утилиты |
-| `mcp/` | MCP-сервер для Claude Code (`node dist/mcp/src/index.js`) |
-| `farm/` | ферма тестовых миров: `farm.ts`, сиды `farm/seeds/`, скан карт `route-scan/`, серии этапов `series/`, сводки `analysis/`, стенды `scenes/`, `swarm/` |
-| `run/` | скрипты основного мира (PowerShell): демон, кампания, RCON |
-| `tools/seedtool/` | подбор сидов на [cubiomes](https://github.com/Cubitect/cubiomes) с генерацией 1.21.11 |
-| `AGENTS.md` | правила проекта для ИИ-агентов (честная игра, ресурсы машины, что не трогать) |
-| `SPEEDRUN.md`, `PVP-RESEARCH.md` | механика и тактики, сверенные с 1.21.11 |
-| `BRAIN.md`, `PERSONA.md` | устав «мозга» (Claude через MCP) и характер бота |
+## Autonomous speedrun
 
-## Требования
+The campaign moves through milestones for survival, iron, a lava-cast portal, Nether resources, stronghold routing and the dragon. The strategic graph compares prerequisites, costs and risks. It checks results against fresh observations. Tactical and emergency behavior can take over to handle immediate danger.
 
-- Windows 10/11 (скрипты — PowerShell и Git Bash; код бота кроссплатформенный)
-- Node.js 24+
-- Java 21 и сервер **Paper 1.21.11** — скачать самостоятельно, в репозиторий не входит
-- для `tools/seedtool` — MSVC 2022 и клон cubiomes с веткой генерации 1.21.11 (см. README там)
+| Stage | Current development status |
+| --- | --- |
+| Overworld → Nether | Reached in test series on selected seeds. Early food, equipment and portal access still vary by world. |
+| Nether → Stronghold → End | Current bottleneck. Bastion entry, bartering, blaze rods and fortress routing have individual scenarios. Consecutive success in the full route remains open. |
+| Dragon fight | Repeated wins from prepared End entries. These trials start with a known loadout and measure the fight. |
+| Fresh world → Dragon | Experimental campaign. A repeatable full clear is an open milestone. |
 
-## Быстрый старт
+The default knowledge mode is `rsg`. A fair run uses observations available to the bot, without operator permissions or administrative commands. The test farm can stage scenarios, select seeds and run controlled comparisons. See the [speedrun notes](SPEEDRUN.md) and [PvP mechanics notes](PVP-RESEARCH.md).
 
-```bash
-npm ci
-npm --prefix daemon ci
-npm --prefix mcp ci
-npm run build
-npm run typecheck
-npm test                                  # тесты, сервер не нужен
-```
+## How it fits together
 
-Код — TypeScript с ES-модулями; `tsc` (TypeScript 7) собирает его в CommonJS в папку `dist/` с той же раскладкой,
-что у исходников (`dist/daemon/src`, `dist/farm`, `dist/mcp`, `dist/run`), с картами исходников. Рядом с `.ts`
-собранных файлов нет; запуск — из `dist/`. `npm run build:watch` пересобирает изменённые модули; запущенный демон после
-изменения кода нужно перезапустить. Пути к данным, логам, памяти бота и мирам строятся от корня репозитория
-(`REPO_ROOT` из `daemon/src/paths.ts`), к собранным модулям — от `__dirname`.
+[![Architecture showing the campaign, arena coordinator and MCP bridge connected to bot daemons and Paper](docs/media/architecture.svg)](docs/media/architecture.svg)
 
-`npm run typecheck` проверяет весь проект и строгую зону — файлы из `include` в `tsconfig.core.json` (ядро, среды,
-тактика, навигация, графы). Зона расширяется переносом файлов в её `include`.
+| Component | Role |
+| --- | --- |
+| [Bot daemon](daemon/src/) | Owns the Mineflayer session, tick clock, navigation, inventory, combat and reflexes. Exposes local WebSocket RPC. |
+| [Campaign](daemon/campaign/) and [strategy core](daemon/src/core/) | Select and run speedrun stages and skills. |
+| [Arena](farm/arena/) and [swarm planner](farm/swarm/) | Build arenas, run matches, share observations and assign tasks across bot processes. |
+| [MCP bridge](mcp/) | Runs over stdio and forwards `mc_*` tools to a bot daemon. |
+| [Test farm](farm/) | Runs isolated Paper worlds and repeatable scenarios. |
 
-Из корня доступны `npm run start:daemon`, `start:mcp`, `campaign`, `farm`, `rpc` с аргументами после `--`.
+## Run and test
 
-Стратегии регистрируются в `daemon/src/core/speedrun.ts`: предусловия, количественные эффекты, цена, риск,
-срок и проверка успеха по новому наблюдению. Граф выбирает дешёвый путь, повышает цену неудачной ветви и
-прекращает бессмысленные повторы. Готовый маршрут по карте остаётся отдельным навыком. Явные этапы
-`node dist/daemon/campaign.js iron` сохраняют прежний режим для сравнительных проверок.
+Start with [Local setup and play](docs/local-play.md). It covers the Paper template, a bot-vs-human arena, the non-operator campaign, clean shutdown and MCP setup for both clients. The managed farm instructions target Windows and use Java 21 and Node.js.
 
-`node dist/daemon/sim/sim.js 100` прогоняет тот же стратег в абстрактной среде. После числа прогонов можно передать
-JSONL телеметрии для калибровки длительности и исходов. Симулятор проверяет развилки и тупики, физику навыков
-проверяет ферма Paper. Решения стратега и тактические эпизоды записываются вместе с телеметрией навыков.
-
-1. Поднимите сервер Paper 1.21.11 (офлайн-режим, RCON включён). Для сцен лаборатории боту нужен оператор; для честного
-   прохождения — нет. Пороги проверки движения в `spigot.yml` стоит ослабить
-   (`moved-too-quickly-multiplier`, `moved-wrongly-threshold`): физика mineflayer чуть расходится с сервером 1.21.11.
-2. Запустите демон: `npm run start:daemon` или `node dist/daemon/src/index.js` (порт WebSocket — `ND_WS_PORT`,
-   сервер — `MC_HOST`/`MC_PORT`, ник — `MC_USERNAME`, память — `ND_MEMORY_DIR`; все настройки — `daemon/src/config.ts`).
-3. Дальше либо **кампания** — `node dist/daemon/campaign.js` (бот проходит этапы сам; адрес демона — `ND_WS`,
-   по умолчанию `ws://127.0.0.1:8769`), либо **Claude Code** — подключите MCP-сервер
-   (`claude mcp add neurodown -- node dist/mcp/src/index.js`), и Claude управляет ботом инструментами `mc_*`.
-
-Скрипты `run/*.ps1` и `farm/farm.ts` написаны под машину автора: корень проекта и папки серверов (`server-run`,
-`server-twin` — шаблон сервера для фермы, с `paper-1.21.11-132.jar`) заданы в начале файлов — поправьте под себя.
-
-## Ферма тестовых миров
-
-```bash
-node dist/farm/farm.js                                   # справка
-node dist/farm/farm.js up 4 --pool --fresh               # хорошие сиды (farm/seeds/good-v2.json), в пределах limits.json
-node dist/farm/farm.js run try-lab-fresh.js --slots 1-4 --tag test UNTIL=nether MINUTES=30
-node dist/farm/farm.js down 1-4
-```
-
-Слот `i`: сервер 25600+i, RCON 25700+i, демон 8800+i. Одна сцена идёт сразу на всех мирах, итоги — в
-`farm/results/<tag>/`. Лимит одновременных миров и ядер — `farm/limits.json` (ПК общий с игрой).
-
-Игровые ожидания, кулдауны, тайм-ауты навыков, физика mineflayer и бюджеты кампании считаются по тикам.
-`seconds`, `timeoutSeconds`, `MINUTES` и старые параметры `*Ms` — игровое время: 1 секунда = 20 тиков,
-50 мс = 1 тик при любой скорости. Темп и пауза берутся из пакетов сервера; менять их можно во время работы.
-MCP использует те же часы демона и показывает TPS в заголовке ответа. Внешние процессы кампании и сцен
-получают часы каждые 5 игровых тиков, каждый шаг замороженного мира и немедленно при смене состояния;
-heartbeat раз в 250 реальных мс сохраняется для паузы и остановки.
-
-```bash
-node dist/farm/farm.js up 1 --from 29 --tick-rate 100
-node dist/farm/farm.js run try-tick-clock.js --slots 29 --tag ticks-100 --tick-rate 100
-node dist/farm/farm.js tick 29 rate 200
-node dist/farm/farm.js tick 29 freeze
-node dist/farm/farm.js tick 29 step 3
-node dist/farm/farm.js tick 29 unfreeze
-node dist/farm/farm.js down 29
-```
-
-`TICK_RATE=100` задаёт скорость серий `farm/series/collect.sh`; явный `--tick-rate` имеет приоритет. При запуске
-ферма снимает сохранённую паузу и применяет выбранную скорость из `farm/limits.json`. Текущий профиль:
-четыре мира, все ядра, запрос 750 TPS (около 645 фактических TPS в проверенной серии). Явные `--tick-rate` и
-`TICK_RATE` позволяют выбрать другую скорость; без настройки профиля запасное значение — 20. `/tick sprint` не используется:
-он не задаёт клиенту устойчивый темп для физики. Сеть, RCON, загрузка чанков, CPU-бюджеты поиска, календарные метки
-журналов и запись на диск используют реальное время. Заморозка приостанавливает игровые бюджеты, но команды
-`stop`/`disconnect` остаются доступны; внешние ограничения времени MCP остаются настенными.
-Коллектор соблюдает лимит миров: при текущих четырёх оба потока получают по два мира;
-при `ROUTE=0` или `NETHER=0` включённый поток получает четыре.
-
-На ферме отключён `packet-limiter` Paper, включая ограничения рецептов: он считает пакеты по реальному времени
-и мешает непрерывному движению и бою при ускоренных тиках. `up`, `run` и `tick` применяют настройку автоматически;
-работающий сервер получает `paper reload` только при изменении этой секции конфигурации. `tick ... query` только
-читает статус и не меняет конфигурацию.
-
-`up` также задаёт ферме `allow-flight=true`: это снимает ванильное отключение за floating при ускоренной
-симуляции, сохраняя обычную физику survival. Для существующего сервера настройка вступает в силу после
-штатного `down`/`up` без `--fresh`. Настройки основного мира не меняются.
-
-Адаптер проверяет установленные mineflayer 4.37.1, mineflayer-pathfinder 2.4.5 и prismarine-physics 1.11.1 по версии и исходникам.
-При обновлении зависимостей сначала нужно сверить их таймеры и запустить тесты адаптера. `node_modules`
-и глобальные часы Node.js не изменяются. Максимальную скорость выбирайте по фактическому TPS и успешности сцен,
-сначала для одного мира, затем увеличивая число миров.
-
-Для последовательного замера уже поднятого слота:
+From the repository root after installing the locked dependencies:
 
 ```powershell
-node dist/daemon/scenes/infra/try-tick-speed.js --slot 31 --rates 100,200,400,800 --repeats 3 --seconds 8 --tag tick-speed-a
+npm.cmd run typecheck
+npm.cmd test
+node dist/mcp/smoke.js
 ```
 
-Отчёт `farm/results/tick-speed-a.json` сравнивает фактические TPS сервера и бота, отставание бота,
-MSPT и успешность ходьбы, копки и боя. Каждая скорость измеряется несколько раз; после серии слот
-возвращается к 20 TPS. Для выбора скорости нужны успешные сцены, фактические серверные тики и отставание не больше
-20 тиков; недостижение 90% запрошенного темпа отмечается отдельно (`targetReached`). Выбирается самый быстрый
-фактический темп без отставания. Один прогон считается предварительным. Скрипт не поднимает миры. После выбора скорости одного мира
-проверяйте её заново при увеличении числа одновременно работающих миров.
+Project constraints for coding agents are in [AGENTS.md](AGENTS.md). The bridge exposes a single bot. Use the arena coordinator to manage a whole match.
 
-На Ryzen9 9950X3D/96ГБ проверено05.10: два повтора четырёх активных миров при запросе750TPS дали
-фактические644–679TPS/мир (32–34×), без потери HP; максимальный sampled lag20/17тиков, CPU peak84/65%.
-При пяти и шести мирах навыки выполнялись, но lag выходил за20тиков. Для максимального темпа начинайте
-с четырёх миров и измеряйте заново на своей сцене: генерация чанков и полный спидран дают другую нагрузку.
-После окончательной правки передачи часов два повтора четырёх миров выполнили все навыки с HP20,
-CPU peak51/45%, но на одном слоте бой дал краткий measured lag25/24. Строгий порог20 в этих повторах
-не выдержан: профиль750 подходит для разработки, гарантией отсутствия задержек в полном спидране он не является.
-Контроль650 прошёл с lag≤18 и фактическими575–585TPS; настройка скорости доступна через `--tick-rate`.
-
-## Как над проектом работают агенты
-
-Код пишут Claude Code и Codex. Правила — в `AGENTS.md`: честная игра основного бота, механика по коду 1.21.11, не
-подбирать коэффициенты вслепую, новое поведение — под флагами `ND_*` (`=0` выключает), каждое изменение — тесты и
-серия на ферме с числами до/после. Журналы агентов, логи и миры в репозиторий не входят.
-
-## Лицензия
-
-[MIT](LICENSE).
+[MIT license](LICENSE).

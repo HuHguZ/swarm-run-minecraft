@@ -9,7 +9,7 @@
 #   TICK_RATE — целевые тики/с, иначе limits.tickRate (либо 20); MINUTES в сценах — игровые минуты.
 #   мягкий стоп: touch farm/logs/collect/STOP (циклы доиграют). Сиды обоих потоков идут по кругу.
 # Итоги: farm/logs/collect/<метка>.log, серии — farm/results/<метка>-rt<k><a|b>/ и farm/results/neF-<метка>N<k><a|b>x<слот>-1/.
-cd /c/Users/user/Desktop/work/minecraft-claude || exit 1
+CDPATH= cd "$(dirname "$0")/../.." || exit 1
 UNTIL=$1; TAG=${2:-col}
 # Проверить до логов/STOP и подготовки миров; export проходит во вложенные series и farm.js up/run.
 CONFIG=$(node -e '

@@ -1,0 +1,5 @@
+name: DragonLab
+version: '1.0'
+main: nd.lab.DragonLab
+api-version: '1.21'
+description: Запись взрывов кроватей и урона дракону/игроку (лаборатория NeuroDown, только ферма)

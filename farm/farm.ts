@@ -1,5 +1,6 @@
 'use strict'
-const { REPO_ROOT }: typeof import('../daemon/src/paths') = require('../daemon/src/paths')
+import { REPO_ROOT } from '../daemon/src/paths'
+import { javaExecutable } from './java'
 // Ферма тестовых миров: N серверов Paper 1.21.11, на каждом свой бот-оператор
 // со своим демоном. Одна сцена этапа (daemon/scenes/<этап>/try-lab-*.js и т.п.) идёт сразу
 // на всех мирах, итоги сводятся в одну таблицу — данных в N раз быстрее.
@@ -91,7 +92,6 @@ function cmdSnapshot (args) {
   log(`снимок ${name}: ${files} файлов → ${root} (git ${head} + незакоммиченное дерево на момент снимка)`)
 }
 const TEMPLATE = path.join(ROOT, 'server-twin')
-const JAVA = 'C:\\Users\\user\\AppData\\Roaming\\.minecraft\\runtime\\java-runtime-delta\\windows\\java-runtime-delta\\bin\\java.exe'
 const JAR = 'paper-1.21.11-132.jar'
 const TWIN_SEED = '5709596442716969862'
 const STATE = path.join(FARM, 'slots.json')
@@ -347,9 +347,10 @@ function prepareSlot (s, { seed, fresh, world }: any) {
 
 async function startServer (s) {
   if (await portOpen(s.mc)) return log(`слот ${s.i}: сервер уже слушает ${s.mc}`)
+  const java = javaExecutable()
   const out = fs.openSync(path.join(s.dir, 'console.out.log'), 'w')
   const err = fs.openSync(path.join(s.dir, 'console.err.log'), 'w')
-  const p = spawn(JAVA, ['-Xms1G', '-Xmx3G', '-XX:+UseG1GC', '-Dfile.encoding=UTF-8', ...acceleratedDigArgs(JAVA, s.dir), '-jar', JAR, '--nogui'], { cwd: s.dir, detached: true, stdio: ['ignore', out, err], windowsHide: true })
+  const p = spawn(java, ['-Xms1G', '-Xmx3G', '-XX:+UseG1GC', '-Dfile.encoding=UTF-8', ...acceleratedDigArgs(java, s.dir), '-jar', JAR, '--nogui'], { cwd: s.dir, detached: true, stdio: ['ignore', out, err], windowsHide: true })
   p.unref()
   log(`слот ${s.i}: java pid ${p.pid}, жду порт ${s.mc}`)
   return p.pid

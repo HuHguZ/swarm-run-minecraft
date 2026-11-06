@@ -2,7 +2,7 @@
 // an answer is the same for every tool, and the one trap that costs a whole
 // turn — `done` on an intent that actually stopped early — is a property of the
 // envelope, not of any single tool.
-const INSTRUCTIONS = `Тело NeuroDown живёт в демоне и работает само, когда тебя нет.
+const INSTRUCTIONS = `Этот MCP-сервер управляет Minecraft-ботом через локальный демон. Бот продолжает работать между вызовами MCP.
 
 Длительности навыков, seconds, timeoutSeconds и параметры *Ms — игровое время:
 1 секунда = 20 тиков, 50 мс = 1 тик при любом TPS. Темп и пауза следуют серверу,

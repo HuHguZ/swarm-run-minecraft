@@ -1,7 +1,7 @@
 'use strict'
 // Мини-клиент RPC демона: node rpc.js [--ws ws://127.0.0.1:8769] method '{"json":1}' [--full]
 // Печатает статус, detail (обрезанный) и сжатое состояние.
-const WebSocket = require('C:/Users/user/Desktop/work/minecraft-claude/daemon/node_modules/ws')
+import { WebSocket } from '../daemon/node_modules/ws'
 const args = process.argv.slice(2)
 let ws = process.env.ND_WS || 'ws://127.0.0.1:8769'
 const i = args.indexOf('--ws'); if (i >= 0) { ws = args[i + 1]; args.splice(i, 2) }

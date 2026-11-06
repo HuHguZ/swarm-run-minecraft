@@ -1,10 +1,19 @@
 #!/bin/sh
-# Сборка DragonLab.jar (лаборатория взрыва кровати): javac/jar из JBR Android Studio, API — из библиотек слота 1.
+# Сборка DragonLab.jar: javac и jar из JDK 21, API — из библиотек слота 1.
 cd "$(dirname "$0")" || exit 1
-JB="/c/Program Files/Android/Android Studio/jbr/bin"
+JAVAC=javac
+JAR=jar
+if [ -n "$JAVA_HOME" ]; then
+  JAVAC="$JAVA_HOME/bin/javac"
+  JAR="$JAVA_HOME/bin/jar"
+fi
 L=../../server-1/libraries
-CP=$(find $L -name '*.jar' | tr '\n' ';')
+CP=$(find -L "$L" -name '*.jar' | paste -sd ';' -)
+if [ -z "$CP" ]; then
+  echo "Paper libraries not found in $L" >&2
+  exit 1
+fi
 rm -rf out && mkdir -p out
-"$JB/javac.exe" --release 21 -nowarn -cp "$CP" -d out src/nd/lab/DragonLab.java || exit 1
-cp plugin.yml out/
-(cd out && "$JB/jar.exe" cf ../DragonLab.jar .) && echo "ok: $(pwd)/DragonLab.jar"
+"$JAVAC" --release 21 -nowarn -cp "$CP" -d out src/nd/lab/DragonLab.java || exit 1
+cp plugin.yml out/ || exit 1
+(cd out && "$JAR" cf ../DragonLab.jar .) && echo "ok: $(pwd)/DragonLab.jar"

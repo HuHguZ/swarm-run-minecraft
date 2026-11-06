@@ -9,14 +9,16 @@
 # Модель и размышления не меняются (пользователь 21.10: только gpt-6.1-sol на ultra) — думает минутами.
 # Лимитов нет (подписка пользователя), звать сколько надо.
 # Долгое — в фоне (run_in_background) и ждать уведомления: молчаливый вызов сторож рвёт на 600 с.
-P=C:/Users/user/Desktop/work/minecraft-claude
-cd "$P" || exit 1
-OPTS="--skip-git-repo-check -m gpt-6.1-sol --color never -s workspace-write -C $P/codex-lab --add-dir $P/farm --add-dir $P/.codegraph"
-OPTS="$OPTS -c model_reasoning_effort=ultra"
+CDPATH= cd "$(dirname "$0")/.." || exit 1
 if [ "$1" = "--resume" ]; then id=$2; shift 2; set -- resume "$id" "$@"; fi
 tmp=$(mktemp)
 SEARCH=""; [ -n "$CODEX_SEARCH" ] && SEARCH="--search"
-{ codex $SEARCH exec $OPTS "$@"; echo $? > "$tmp"; } 2>&1 | grep -v -E '^hook: '
+{
+  codex $SEARCH exec --skip-git-repo-check -m gpt-6.1-sol --color never -s workspace-write \
+    -C "$PWD/codex-lab" --add-dir "$PWD/farm" --add-dir "$PWD/.codegraph" \
+    -c model_reasoning_effort=ultra "$@"
+  echo $? > "$tmp"
+} 2>&1 | grep -v -E '^hook: '
 code=$(cat "$tmp" 2>/dev/null || echo 1)
 rm -f "$tmp"
 exit $code

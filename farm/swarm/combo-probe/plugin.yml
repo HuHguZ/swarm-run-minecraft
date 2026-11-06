@@ -1,0 +1,5 @@
+name: IdeasProbe
+version: 0.1.0
+main: IdeasProbe
+api-version: '1.21.11'
+description: Passive slot 28 potion and movement receipts for NeuroFarm28b0.

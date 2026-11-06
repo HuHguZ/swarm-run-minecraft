@@ -5,7 +5,7 @@ import { render } from '../format.js'
 import { fail, type Toolkit } from '../toolkit.js'
 
 function register ({ tool, server, daemon }: Toolkit): void {
-  tool('mc_connect', 'Зайти на сервер телом NeuroDown. Возвращается, когда мир вокруг прогружен.', {} as Record<string, any>, 'connect')
+  tool('mc_connect', 'Подключить бота к серверу. Возвращается, когда мир вокруг прогружен.', {} as Record<string, any>, 'connect')
 
   tool('mc_disconnect', 'Выйти с сервера.', { reason: z.string().optional() }, 'disconnect')
 

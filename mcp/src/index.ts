@@ -15,7 +15,7 @@ import * as mindTools from './tools/mind.js'
 const daemon = new DaemonClient(process.env.ND_WS || 'ws://127.0.0.1:8765')
 
 const server = new McpServer(
-  { name: 'neurodown', version: '0.1.0' },
+  { name: 'swarm-run-minecraft', version: '0.1.0' },
   { instructions: INSTRUCTIONS }
 )
 

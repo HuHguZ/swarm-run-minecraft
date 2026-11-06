@@ -8,7 +8,7 @@
 # LOCKSTEP=1 — пошаговый слот (up --lockstep --reup), CODE=<снимок> — код из снимка (S5d 07.10).
 # Сводка: node dist/farm/dragon/an-r.js <тег>; LABPLUG=1 — плагин-свидетель DragonLab, события — trace-<тег>/s<k>/lab-ev.jsonl
 TAG=$1; A=$2; B=$3; R=$4; shift 4
-cd /c/Users/user/Desktop/work/minecraft-claude
+CDPATH= cd "$(dirname "$0")/../.." || exit 1
 TR=farm/logs/trace-$TAG; mkdir -p $TR
 ARM=${ARM:-ND_RUNNER=1}
 NS=$((B - A + 1))

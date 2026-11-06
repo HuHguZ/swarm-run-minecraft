@@ -42,7 +42,10 @@ export async function setupArmsMap (ctx: ArenaContext) {
         for (const c of [...P.clear, ...P.cmds, ...P.field]) await rcon(i, c.replace(/^\//, ''), 20000).catch(() => {})
         let ok = true
         for (let y = y0; y <= y1; y++) ok = await clone(`clone ${X - h} ${y} ${Z - h} ${X + h} ${y} ${Z + h} ${X + SX - h} ${y} ${Z - h}`) && ok
-        if (ok) fs.writeFileSync(flagF, JSON.stringify({ at: want, builtAt: new Date().toISOString() }))
+        if (ok) {
+          fs.mkdirSync(path.dirname(flagF), { recursive: true })
+          fs.writeFileSync(flagF, JSON.stringify({ at: want, builtAt: new Date().toISOString() }))
+        }
         log(`гонка: Колизей перестроен целиком и снят в копию (${P.cmds.length} команд, ${Math.round((Date.now() - t0) / 1000)} с)`)
       }
       const t1 = Date.now()

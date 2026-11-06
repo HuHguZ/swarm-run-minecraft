@@ -1,16 +1,17 @@
 // node dist/farm/series/collect-check.js — реальные shell-потоки с заглушками farm.js, без миров.
 'use strict'
 import { REPO_ROOT } from '../../daemon/src/paths'
-import assert = require('node:assert/strict')
+import assert from 'node:assert/strict'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
-import path = require('node:path')
+import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 const root = REPO_ROOT
-const bash = process.env.BASH_EXE || (process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash')
+const gitBash = process.platform === 'win32' && process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe')
+const bash = process.env.BASH_EXE || (gitBash && fs.existsSync(gitBash) ? gitBash : 'bash')
 const shellPath = p => p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, d) => '/' + d.toLowerCase())
 const quote = s => "'" + s.replace(/'/g, "'\\''") + "'"
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nd-collect-check-'))
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nd-collect-check-with spaces-'))
 assert.equal(path.dirname(path.resolve(tmp)), path.resolve(os.tmpdir()))
 assert.ok(path.basename(tmp).startsWith('nd-collect-check-'))
 const write = (p, s) => { fs.mkdirSync(path.dirname(path.join(tmp, p)), { recursive: true }); fs.writeFileSync(path.join(tmp, p), s) }
@@ -19,7 +20,7 @@ try {
     const source = fs.readFileSync(path.join(root, file), 'utf8')
     const syntax = spawnSync(bash, ['-n', path.join(root, file)], { encoding: 'utf8', windowsHide: true })
     assert.equal(syntax.status, 0, syntax.stderr)
-    let sandbox = source.replace('cd /c/Users/user/Desktop/work/minecraft-claude', 'cd ' + quote(shellPath(tmp)))
+    let sandbox = source
     if (file === 'farm/series/collect.sh') {
       assert.match(source, /while ok 36;/)
       assert.match(source, /while ok 66;/)
@@ -46,7 +47,8 @@ try {
     fs.writeFileSync(path.join(tmp, 'calls.jsonl'), '')
     const env = { ...process.env }
     for (const key of ['TICK_RATE', 'FARM_MAX_UP', 'ROUTE', 'NETHER', 'ROUTE_SLOTS']) delete env[key]
-    const result = spawnSync(bash, ['farm/series/collect.sh', '-', 'check'], { cwd: tmp, env: { ...env, ...overrides }, encoding: 'utf8', windowsHide: true, timeout: 15000 })
+    const script = path.join(tmp, 'farm', 'series', 'collect.sh')
+    const result = spawnSync(bash, [script, '-', 'check'], { cwd: path.dirname(tmp), env: { ...env, ...overrides }, encoding: 'utf8', windowsHide: true, timeout: 15000 })
     const calls = fs.readFileSync(path.join(tmp, 'calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse as (text: string) => any)
     return { result, calls }
   }

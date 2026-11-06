@@ -2,7 +2,7 @@
 # Скан копий миров параллельно на нескольких своих слотах (поток route, 03.10): слоты уже подняты с нужными сидами
 # (farm.js up … --fresh --seeds …), здесь — gen + scan на каждом сразу, потом сводка. Слоты не опускает.
 #   sh farm/route-scan/scan-par.sh 8-20,27-29 [HALF]
-cd /c/Users/user/Desktop/work/minecraft-claude
+CDPATH= cd "$(dirname "$0")/../.." || exit 1
 SPEC=$1
 HALF=${2:-160}
 SLOTS=$(node -e "const s=process.argv[1];const o=[];for(const p of s.split(',')){const m=/^(\d+)(?:-(\d+))?$/.exec(p);if(!m)continue;for(let i=+m[1];i<=+(m[2]||m[1]);i++)o.push(i)}console.log(o.join(' '))" "$SPEC")

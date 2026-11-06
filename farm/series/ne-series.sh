@@ -2,7 +2,7 @@
 # farm/series/ne-series.sh <серия> "<слоты>" <файл сидов> [KEY=VAL...]  (поток nether, 03.10)
 # Логи — farm/logs/neF3/<серия>-<слот>.log; итоги — node dist/farm/analysis/ne-sum.js neF-<серия><слот>-1 …
 # Каждому слоту — один сид (по порядку), все параллельно с шагом 15 с. Флаги демона — из окружения.
-cd /c/Users/user/Desktop/work/minecraft-claude || exit 1
+CDPATH= cd "$(dirname "$0")/../.." || exit 1
 series=$1; slots=$2; seedfile=$3; shift 3
 i=0
 for s in $slots; do

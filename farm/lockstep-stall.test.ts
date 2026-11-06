@@ -5,12 +5,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { REPO_ROOT } from '../daemon/src/paths'
+import { javaExecutable } from './java'
 
 test('farm lockstep aborts before a connected stall advances the world; disconnect and healthy clients still work', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'nd-lockstep-test-'))
-  // The farm's own Java 21 (farm.ts JAVA); the PATH java on this PC is 8 and has no `-m jdk.compiler`.
-  const farmJava = 'C:\\Users\\user\\AppData\\Roaming\\.minecraft\\runtime\\java-runtime-delta\\windows\\java-runtime-delta\\bin\\java.exe'
-  const java = process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin', process.platform === 'win32' ? 'java.exe' : 'java') : fs.existsSync(farmJava) ? farmJava : 'java'
+  const java = javaExecutable()
   const harness = `
 import java.util.function.BooleanSupplier;
 public class LockstepStallTest {

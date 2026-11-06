@@ -11,6 +11,15 @@
 !/PERSONA.md
 !/SPEEDRUN.md
 !/PVP-RESEARCH.md
+!/docs/
+/docs/*
+!/docs/local-play.md
+!/docs/README.ru.md
+!/docs/media/
+/docs/media/*
+!/docs/media/architecture.svg
+!/docs/media/cover.jpg
+!/docs/media/colosseum.png
 !/package.json
 !/package-lock.json
 !/tsconfig*.json
@@ -63,6 +72,8 @@
 /farm/*/**/*.yml
 /farm/*/**/*.diff
 /farm/*/**/*.md5
+!/farm/dragon/lab-plugin/plugin.yml
+!/farm/swarm/combo-probe/plugin.yml
 !/farm/seeds/*.json
 !/farm/route-scan/set-*.txt
 !/farm/crystal/*.md

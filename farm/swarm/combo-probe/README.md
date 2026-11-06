@@ -20,10 +20,10 @@ H38 `player_tick_end` пишет общий snapshot после tick processing 
 
 Native56 использует следующий пассивный observer: source SHA256 `f3ac120e0fbfc2f4b8421631daf6180586e30e2a1b4dc13ddb7598895ab8187a`, jar `5d6521f3d3bd09e7ad5add3333d6db71215b729d9a9ce34c653cb877084786d0`. Добавлены MONITOR `wind_launch` и `wind_hit` только для WIND_CHARGE стрелка exact NeuroFarm28j на порту25628: projectileId, cancelled, launch/hit position, launch velocity, hitEntityId или hitBlock. Hit callback предшествует последующему explosion processing; accepted spawn/hit сам по себе не доказывает новое защитное состояние B. Сопоставлять с tick-end context и фактической посадкой/HP. Предыдущая версия55 сохранена в results как probe-h37-context55.java.txt/.jar;56 — probe-h37-wind56.java.txt/.jar.
 
-Команды создают только isolated `farm/swarm/combo-probe/out`; ничего не устанавливают и не запускают. Используется javac/jar из имеющегося Java runtime через модули JDK.
+Команды создают только `farm/swarm/combo-probe/out`. Укажи JDK 21 в `JAVA_HOME`.
 
 ```powershell
-$javaTask = 'C:/Users/user/AppData/Roaming/.minecraft/runtime/java-runtime-delta/windows/java-runtime-delta/bin/java.exe'
+$javaTask = Join-Path $env:JAVA_HOME 'bin/java.exe'
 $sourceTask = Join-Path (Get-Location) 'farm/swarm/combo-probe'
 $outTask = Join-Path $sourceTask 'out'
 $classesTask = Join-Path $outTask 'classes'
