@@ -2,7 +2,7 @@
 
 **PvP swarms and autonomous speedrunning for Minecraft Java 1.21.11.**
 
-![Illustrated cover of a team of voxel adventurers on arena steps and a runner approaching a portal](docs/media/cover.jpg)
+![Cutaway of the Swarm Run Colosseum with blue bots coordinating a wind charge and an elytra approach, alongside a solo speedrun route from a Nether portal to the End dragon](docs/media/cover.jpg)
 
 [Local setup and play](docs/local-play.md) · [По-русски](docs/README.ru.md) · [Architecture](docs/media/architecture.svg)
 
