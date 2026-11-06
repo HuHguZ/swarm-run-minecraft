@@ -63,20 +63,23 @@ export function groundedHazardClear(world: CollisionWorld, pos: Point, velocityY
   return true
 }
 
-/** Vanilla upward SELF move, clipped against actual body/shape intersections. */
-export function verticalLift(world: CollisionWorld, pos: Point, requested: number): number | null {
-  const body = bodyBox(world, pos); let allowed = Math.max(0, requested)
+/** Vanilla upward SELF move. A visible ceiling can also provide an upper bound with incomplete geometry. */
+export function verticalLift(world: CollisionWorld, pos: Point, requested: number, allowCeilingBound = false): number | null {
+  const body = bodyBox(world, pos); let allowed = Math.max(0, requested), unknown = false
   for (let x = Math.floor(body.minX); x <= Math.floor(body.maxX); x++) for (let z = Math.floor(body.minZ); z <= Math.floor(body.maxZ); z++) {
     for (let y = Math.floor(body.maxY); y <= Math.floor(body.maxY + requested); y++) {
       const block = world.blockAt(new Vec3(x, y, z), false)
-      if (!block) return null
+      if (!block) {
+        if (!allowCeilingBound) return null
+        unknown = true; continue
+      }
       for (const shape of shapeBoxes(block)) {
         if (body.minX >= shape.maxX - EPS || body.maxX <= shape.minX + EPS || body.minZ >= shape.maxZ - EPS || body.maxZ <= shape.minZ + EPS || shape.minY < body.maxY - EPS) continue
         allowed = Math.min(allowed, Math.max(0, shape.minY - body.maxY))
       }
     }
   }
-  return allowed
+  return unknown && allowed === requested ? null : allowed
 }
 export function supportAt(world: CollisionWorld, pos: Point, depth = 3): Support | null {
   const body = bodyBox(world, pos)

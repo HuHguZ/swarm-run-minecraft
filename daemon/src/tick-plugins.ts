@@ -6,11 +6,12 @@ const fs: typeof import('node:fs') = require('node:fs')
 const path: typeof import('node:path') = require('node:path')
 const { createHash }: typeof import('node:crypto') = require('node:crypto')
 const { createRequire }: typeof import('node:module') = require('node:module')
+import { PHYSICS_SOURCE_SHA256, absolutePosition, adaptPositionSource } from './position-packet'
 
 // Reviewed sources from Mineflayer 4.37.1 and pathfinder 2.4.5. Fail closed on
 // upgrades (including local patches) so a changed scheduler cannot slip through.
 const hashes = {
-  physics: 'e6faedca2bab274c6d1ae5dc50e9ee7c57af9576174061b033da0cd50aec7dda',
+  physics: PHYSICS_SOURCE_SHA256,
   digging: 'e615773295934145c59dbcd8502316def235ff337ea77f42d5a5781a4474a85e',
   inventory: 'c670bd9caf47d7ad91054ef0f7a1fecbff4a986f08d43532342991bdedb585c5',
   bed: 'b35d8b8476bbb53e6dc306da28522a19eea0b9832f907a9af10f22149f0a8650',
@@ -44,13 +45,17 @@ function getPhysics () {
   const nativeRequire = createRequire(filename)
   const climbableData = (require('./paths') as typeof import('./paths')).repoJson('daemon/data/climbable-1.21.11.json')
   if (climbableData.version !== '1.21.11' || !Array.isArray(climbableData.climbable?.values) || climbableData.climbable.values.some(value => typeof value !== 'string' || !value.startsWith('minecraft:'))) throw new Error('Invalid reviewed vanilla climbable block tag')
+  // EntityDimensions.makeBoundingBox halves the float width before widening it to double.
+  // Paper's full-cube end-position check uses raw AABB.intersects at the contacted face.
+  const widthSource = source.replace('    playerHalfWidth: 0.3,', "    playerHalfWidth: mcData.version.minecraftVersion === '1.21.11' ? Math.fround(.6) / 2 : 0.3,")
+  if (widthSource === source) throw new Error('Cannot apply reviewed native player width')
   // LivingEntity.onClimbable uses BlockTags.CLIMBABLE. Upstream only knows the
   // two old ids; retain its clamps/acceleration and use the exact vanilla tag.
-  const taggedSource = source.replace('  const vineId = blocksByName.vine.id', `  const vineId = blocksByName.vine.id
+  const taggedSource = widthSource.replace('  const vineId = blocksByName.vine.id', `  const vineId = blocksByName.vine.id
   const ndClimbableIds = new Set(mcData.version.minecraftVersion === '1.21.11'
     ? ndClimbableNames.map(name => blocksByName[name]?.id).filter(id => id !== undefined) : [])`)
     .replace('block.type === ladderId || block.type === vineId', 'block.type === ladderId || block.type === vineId || ndClimbableIds.has(block.type)')
-  if (taggedSource === source || !taggedSource.includes('ndClimbableIds.has(block.type)')) throw new Error('Cannot apply reviewed climbable tag to native physics')
+  if (taggedSource === widthSource || !taggedSource.includes('ndClimbableIds.has(block.type)')) throw new Error('Cannot apply reviewed climbable tag to native physics')
   // PowderSnowBlock.entityInside (javap 1.21.11): a living entity whose feet cell
   // (getInBlockState) is powder snow, without leather boots, is stuck like in a web
   // with multiplier (0.9f, 1.5, 0.9f); Entity.move then zeroes its velocity.
@@ -265,6 +270,7 @@ function createScope (bot, clock) {
 
 function compilePlugin ({ filename, source }: any, scope, name, sources) {
   if (name === 'physics') {
+    source = adaptPositionSource(source)
     // Блоки для физики тела — из кеша тела (fastblocks.ts, S9), когда он поднят: тот же Block, что bot.blockAt(pos, false)
     // (координаты — floor), без постройки Block на каждую клетку рамки каждый тик. Физика блоки не правит.
     const worldSource = '  const world = { getBlock: (pos) => { return bot.blockAt(pos, false) } }'
@@ -279,22 +285,42 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
     // packet follows movement even if terrain isn't loaded or simulation is off.
     source = source.replace(/  function tickPhysics \(now\) \{[\s\S]*?\n  \/\/ remove this/,
       `  const sendsTickEnd = bot.supportFeature('sendsClientTickEndPacket')
+  let ndMoved = false, ndSending = false, ndMovement = null
+  // ServerPlayer.getKnownMovement is accepted position displacement, not the integrator's post-drag velocity.
+  bot._ndLaunchMovement = () => {
+    const p = bot.entity?.position
+    if (!p || !ndMovement) return null
+    if (!ndSending) return ndMovement.clone()
+    return new Vec3(p.x - lastSent.x, p.y - lastSent.y, p.z - lastSent.z)
+  }
   function tickPhysics (now) {
     if (bot._client.state !== 'play') return
     if (!bot.entity?.position || !Number.isFinite(bot.entity.position.x)) return
+    ndSending = true
     if (bot.blockAt(bot.entity.position) != null) {
       if (bot.physicsEnabled && shouldUsePhysics) {
+        const wasGliding = bot.entity.elytraFlying
         physics.simulatePlayer(new PlayerState(bot, controlState), world).apply(bot)
+        bot._ndOwnGlideLanding = wasGliding && bot.entity.onGround && !bot.entity.elytraFlying ? bot.entity : null
         bot.emit('physicsTick')
         bot.emit('physicTick')
       }
       if (shouldUsePhysics) updatePosition(now)
     }
     if (sendsTickEnd) writePacket('tick_end', {})
+    if (!ndMoved) ndMovement = new Vec3(0, 0, 0)
+    ndMoved = false; ndSending = false
     bot.emit('ndMovementSent')
   }
 
   // remove this`)
+    source = source.replaceAll("bot.emit('move', oldPos)", `ndMovement = new Vec3(lastSent.x - oldPos.x, lastSent.y - oldPos.y, lastSent.z - oldPos.z)
+    ndMoved = true; ndSending = false
+    bot.emit('move', oldPos)`)
+      .replaceAll("bot.emit('forcedMove')", `ndMovement = new Vec3(0, 0, 0); ndMoved = false; ndSending = false
+    bot._ndOwnGlideLanding = null
+    bot.emit('forcedMove')`)
+      .replace('  function cleanup () {', '  function cleanup () {\n    delete bot._ndLaunchMovement\n    delete bot._ndOwnGlideLanding')
     // Only our marked late aim callbacks intentionally use this boundary.
     // External deprecated listeners keep the upstream warning.
     source = source.replace("bot.on('newListener', (name) => {", "bot.on('newListener', (name, listener) => {")
@@ -429,10 +455,10 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
   }
   const localModule: any = { exports: {} }
   const evaluate = new Function('require', 'module', 'exports', '__filename', '__dirname',
-    'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'writePacket', 'scopedPromiseUtils', 'scopedWall',
+    'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'writePacket', 'scopedPromiseUtils', 'scopedWall', 'ndAbsolutePosition',
     `${source}\n//# sourceURL=${filename.replace(/\\/g, '/')}`)
   evaluate(scopedRequire, localModule, localModule.exports, filename, path.dirname(filename),
-    scope.setTimeout, scope.clearTimeout, scope.setInterval, scope.clearInterval, scope.Date, scope.writePacket, scope.promiseUtils, scope.wall)
+    scope.setTimeout, scope.clearTimeout, scope.setInterval, scope.clearInterval, scope.Date, scope.writePacket, scope.promiseUtils, scope.wall, absolutePosition)
   return name === 'pathfinder' ? localModule.exports.pathfinder : localModule.exports
 }
 

@@ -37,7 +37,7 @@ function afterPacket (bot, fn) {
     try { act() } catch {}
   }
   bot.on('ndMovementSent', run)
-  bot.prependListener('physicsTick', run)
+  if (typeof bot._ndLaunchMovement !== 'function') bot.prependListener('physicsTick', run)
   setImmediate(run)
 }
 

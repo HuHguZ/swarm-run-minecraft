@@ -10,6 +10,7 @@ import fastblocks = require('../src/fastblocks')
 import AStar = require('mineflayer-pathfinder/lib/astar')
 import Move = require('mineflayer-pathfinder/lib/move')
 import { goals } from 'mineflayer-pathfinder'
+import { performance } from 'node:perf_hooks'
 
 function height (x: number, z: number) {
   const h = 60 + Math.round(4 * Math.sin(x / 7) + 3 * Math.cos(z / 9))
@@ -103,7 +104,9 @@ test('S9: кеш блоков сбрасывают обновление блок
   assert.notDeepEqual(a.after, a.before, 'стена меняет путь')
 })
 
-test('S9: бюджет A* в узлах без среза (ND_ASTAR_SLICE_NODES=0) — только поиск без шага: тот же таймаут на том же числе узлов; с шагом — как было', () => {
+test('S9: бюджет A* в узлах без среза (ND_ASTAR_SLICE_NODES=0) — только поиск без шага: тот же таймаут на том же числе узлов; с шагом — как было', t => {
+  // Compare node budgets without a loaded test runner exhausting the independent wall-time limit first.
+  t.mock.method(performance, 'now', () => 0)
   const w = world()
   const prev = { s9: process.env.ND_S9, r: process.env.ND_ASTAR_NODES_PER_MS, n: process.env.ND_ASTAR_SLICE_NODES }
   process.env.ND_S9 = '1'; process.env.ND_ASTAR_NODES_PER_MS = '1'; process.env.ND_ASTAR_SLICE_NODES = '0'

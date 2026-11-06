@@ -163,6 +163,7 @@ test('unsupported Mineflayer updates fail before injecting plugins', () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'nd-tick-plugins-'))
   try {
     fs.copyFileSync(path.join(__dirname, '../src/tick-plugins.js'), path.join(temporary, 'tick-plugins.js'))
+    fs.copyFileSync(path.join(__dirname, '../src/position-packet.js'), path.join(temporary, 'position-packet.js'))
     const packageDir = path.join(temporary, 'node_modules', 'mineflayer')
     fs.mkdirSync(packageDir, { recursive: true })
     fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ version: '4.37.2' }))

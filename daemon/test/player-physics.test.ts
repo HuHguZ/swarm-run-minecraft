@@ -139,6 +139,7 @@ test('scoped installed physics retains exact trajectories for full blocks, slabs
     const expected = new native.PlayerState(bot, { ...control })
     const actual = new scoped.PlayerState(bot, { ...control })
     const nativePhysics = native.Physics(registry, world)
+    nativePhysics.playerHalfWidth = Math.fround(.6) / 2
     const scopedPhysics = scoped.Physics(registry, world)
     for (let tick = 0; tick < 28; tick++) {
       nativePhysics.simulatePlayer(expected, world)

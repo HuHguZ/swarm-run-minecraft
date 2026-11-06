@@ -269,8 +269,8 @@ function install (bot) {
   }
 }
 
-module.exports = { aim, canHit, faceAim, blockSeen, blockAim, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf, RANGE, PICK_RADIUS }
+module.exports = { aim, canHit, faceAim, blockSeen, blockAim, install, hitboxOf, blockOnRay, rayBox, shapesOf, eyeOf, eyeHeight, poseOf, RANGE, PICK_RADIUS }
 export {
-  aim, canHit, faceAim, blockSeen, blockAim, install, hitboxOf, blockOnRay, rayBox, eyeOf, eyeHeight, poseOf,
+  aim, canHit, faceAim, blockSeen, blockAim, install, hitboxOf, blockOnRay, rayBox, shapesOf, eyeOf, eyeHeight, poseOf,
   RANGE, PICK_RADIUS
 }

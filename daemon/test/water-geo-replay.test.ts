@@ -51,10 +51,12 @@ async function replay(tag: string) {
     const i = new Item(registry.itemsByName[name].id, count); i.slot = 36 + stacks.length; slots[i.slot] = i; stacks.push(i)
   }
   const b = c.body
+  // This rounded legacy record touched Z291; start the native-width body on that same legal face.
+  const startZ = c.tag === 'j1k1-s2-2' ? 291 + Math.fround(.6) / 2 : b.p[2]
   const airKey = registry.entitiesByName.player.metadataKeys.indexOf('air_supply'), poseKey = registry.entitiesByName.player.metadataKeys.indexOf('pose')
   const bot: any = Object.assign(new EventEmitter(), {
     version: '1.21.11', registry, world, game: { dimension: 'overworld', minY: -64, height: 384 },
-    entity: { position: new Vec3(b.p[0], b.p[1], b.p[2]), velocity: new Vec3(b.v[0], b.v[1], b.v[2]), yaw: b.yaw, pitch: b.pitch, onGround: !!b.onGround,
+    entity: { position: new Vec3(b.p[0], b.p[1], startZ), velocity: new Vec3(b.v[0], b.v[1], b.v[2]), yaw: b.yaw, pitch: b.pitch, onGround: !!b.onGround,
       isInWater: true, isInLava: false, isInWeb: false, height: 1.8, width: .6, effects: {}, attributes: {}, metadata: [] },
     health: c.hp, food: c.food, oxygenLevel: Math.max(0, Math.round(air / 15)), physics: native.Physics(registry, world),
     inventory: { slots, items: () => stacks }, heldItem: stacks[0], entities: {}, jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0,

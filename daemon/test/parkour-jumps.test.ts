@@ -255,7 +255,7 @@ test('a hop over a higher slab step walks on and steps down to the lower target 
   const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const slab = { type: 'bottom', waterlogged: false }
   const { bot } = worldOf([[0, 0, 0, 'smooth_stone_slab', slab], [-1, 0, 0, 'smooth_stone_slab', slab], [1, 0, 0, 'stone'], [1, 1, 0, 'smooth_stone_slab', slab], [2, 0, 0, 'stone'], [3, 0, 0, 'stone']])
-  bot.entity.position = new Vec3(.7, .5, .5); bot.entity.velocity.y = -.0784000015258789
+  bot.entity.position = new Vec3(1 - Math.fround(.6) / 2, .5, .5); bot.entity.velocity.y = -.0784000015258789
   const target = new Vec3(2.5, 1, .5)
   const plan = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, planningMs: 180 })
   assert.ok(plan, 'the slab is only a step on the way: landing there must not end the profile, nor pin the body with sneak')

@@ -147,6 +147,10 @@ function observedVelocity (entity) {
 function hasObservedVelocity (entity) {
   return entity.onGround !== false || !entity._ndPositionReceipts?.[1]?.kind || trackTarget(entity).hasVelocity()
 }
+/** A wind forecast needs a unique native air interval, not the receipt-time estimate accepted by legacy bow callers. */
+function hasObservedPhysicalVelocity (entity) {
+  return entity.onGround !== false || !entity._ndPositionReceipts?.[1]?.kind || trackTarget(entity).hasPhysicalVelocity()
+}
 function trackTarget (entity, nowOf = null) {
   const receipts = nowOf === null
   if (receipts && targetTrackers.has(entity)) return targetTrackers.get(entity)
@@ -155,6 +159,7 @@ function trackTarget (entity, nowOf = null) {
   let velocity = { x: 0, y: 0, z: 0 }
   let velocityMeasured = false
   let lastReceipt = null
+  let physicalReceipt = null
   let groundPath = 0
   let groundSamples = []
   let airSamples = []
@@ -245,6 +250,7 @@ function trackTarget (entity, nowOf = null) {
         // Retain its estimate, but release only after another real receipt;
         // an ambiguous pair still uses the existing observation fallback.
         velocityMeasured = !firstFallDisplacement
+        if (physicalTicks !== null) physicalReceipt = receipt
         if (entity.onGround === true) {
           if (!last.grounded || !groundSamples.length) { groundPath = 0; groundSamples = [{ t: last.t, path: 0 }] }
           const dx = p.x - last.x; const dz = p.z - last.z; const distance = Math.hypot(dx, dz)
@@ -309,7 +315,7 @@ function trackTarget (entity, nowOf = null) {
     last = { x: p.x, y: p.y, z: p.z, t: now, grounded: entity.onGround === true }
   }
   const age = () => last ? Math.min(20, Math.max(0, (nowOf() - last.t) / 50)) : 0
-  const tracker = { update, hasVelocity: () => { update(); return velocityMeasured }, vel: () => { update(); return { ...velocity, ageTicks: age() } }, at: ticks => { update(); ticks += age(); return entity.position.offset(velocity.x * ticks, velocity.y * ticks, velocity.z * ticks) } }
+  const tracker = { update, hasVelocity: () => { update(); return velocityMeasured }, hasPhysicalVelocity: () => { update(); return !!lastReceipt && physicalReceipt === lastReceipt && !phasePending }, vel: () => { update(); return { ...velocity, ageTicks: age() } }, at: ticks => { update(); ticks += age(); return entity.position.offset(velocity.x * ticks, velocity.y * ticks, velocity.z * ticks) } }
   if (receipts) {
     const previous = entity._ndPositionReceipts?.[0]
     if (previous) {
@@ -324,4 +330,4 @@ function trackTarget (entity, nowOf = null) {
   return tracker
 }
 
-export { leadTarget, traceTarget, trackTarget, observedVelocity, hasObservedVelocity, observedFallTicks }
+export { leadTarget, traceTarget, trackTarget, observedVelocity, hasObservedVelocity, hasObservedPhysicalVelocity, observedFallTicks }

@@ -111,7 +111,8 @@ function buildLastSeen (bot) {
   const source = e => sources.get(e) || e
   const refresh = rec => {
     const { raw, view } = rec
-    const wasVisible = view._ndVisible
+    const wasVisible = view._ndVisible && rec.observer === bot.entity
+    rec.observer = bot.entity
     view._ndVisible = seesPlayer(bot, raw)
     view.isValid = raw.isValid
     if (!view._ndVisible) return
@@ -127,13 +128,18 @@ function buildLastSeen (bot) {
     view.metadata = Array.from({ length: raw.metadata?.length || 0 }, (_, i) => i === health || i === absorption ? undefined : structuredClone(raw.metadata[i]))
     rec.gear = observePlayerGear(bot, raw, rec.gear)
     view.equipment = rec.gear.equipment
+    view._ndMaceSeen ||= rec.gear.equipment.slice(0, 2).some(it => it?.name === 'mace')
     view._ndGearVisible = rec.gear.visible
     view._ndUnknownArmorSlots = rec.gear.unknownArmorSlots
     view._ndSeenAt = gameClock.now()
     if (!wasVisible || moved || (receipt && receipt !== rec.receipt)) {
+      // Keep the public discontinuity after its baseline packet leaves the two-receipt window.
+      const relative = /^(rel_entity_move|entity_move_look)$/.test(receipt?.kind || '')
+      if (!wasVisible || !relative) view._ndMotionEpoch = (view._ndMotionEpoch || 0) + 1
       const current = { ...receipt, x: view.position.x, y: view.position.y, z: view.position.z,
         t: receipt?.t ?? now, grounded: view.onGround, ...(!wasVisible ? { kind: 'reacquired' } : {}) }
       // A hidden displacement is a new baseline, never a measured speed.
+      view._ndEarlierPositionReceipt = wasVisible && relative && receipt !== rec.receipt ? view._ndPositionReceipts?.[0] : null
       view._ndPositionReceipts = [wasVisible ? view._ndPositionReceipts?.[1] : null, current]
       rec.receipt = receipt
       view.emit('ndPositionObserved')
@@ -162,12 +168,20 @@ function buildLastSeen (bot) {
     return rec.view.position ? rec.view : null
   }
   const tick = () => { for (const rec of records.values()) refresh(rec) }
+  const swing = e => {
+    const rec = records.get(e?.id)
+    if (!rec || rec.raw !== e) return
+    refresh(rec)
+    if (rec.view._ndVisible) rec.view._ndSwingAt = gameClock.now()
+  }
   bot.on('physicsTick', tick)
+  bot.on('entitySwingArm', swing)
   return {
     observe, source,
     visible: e => { const observed = observe(e); return !!observed && observed._ndVisible !== false },
     close () {
       bot.removeListener('physicsTick', tick)
+      bot.removeListener('entitySwingArm', swing)
       for (const rec of records.values()) rec.raw.removeListener?.('ndPositionObserved', rec.update)
       records.clear()
     }
