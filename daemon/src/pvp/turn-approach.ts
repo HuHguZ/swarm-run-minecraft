@@ -7,6 +7,8 @@ import * as spear from '../spear'
 import * as throwMod from '../throw'
 import { healthOf, stepSafe } from './body'
 import { runLength } from '../flee'
+import { bodyClear, supportAt } from '../navigation/geometry'
+import { owner as controlOwner } from '../reflex-lock'
 import { foodAnimals, foodIgnitionAllowed } from './food-fire'
 import { findItem, potionOf, potionRole } from './potions'
 import { FAR, HIT_REACH, TICK_MS } from './rules'
@@ -167,7 +169,20 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
     const run = seesBody && flat < 32 && Math.abs(to.y - me.y) < 1.5 ? runLength(bot, { x: (to.x - me.x) / flat, z: (to.z - me.z) / flat }, Math.ceil(flat), 1, ctx.AR) : null
     if (run && run.len >= Math.floor(flat) - 1 && !run.wet) {
       if (ctx.pathing) { pathTo(false); ctx.pathing = false }
-      set('forward', stepSafe(bot, f)); set('back', false); set('left', false); set('right', false)
+      const forward = stepSafe(bot, f)
+      if (forward && ctx.AR && ctx.prof.player && bot.entity.onGround && bot.getControlState?.('sneak') &&
+          !ctx.fort && !cbShield && !bowShield && !bot._ndUse?.cur && !bot._ndClutch?.waterPlan &&
+          !(bot._ndParkourForecast?.until > gameClock.now()) && !(ctx.session && controlOwner(ctx.session))) {
+        // A completed defensive move can leave crouch held. Only release it on a
+        // supported standing step, before asking the client to start sprinting.
+        const standing = { entity: { position: me, _ndPoseHeight: undefined }, physics: bot.physics, blockAt: at => bot.blockAt(at) }
+        if (bodyClear(standing, me) && supportAt(standing, me, .04) &&
+            supportAt(standing, me.offset(f.x, 0, f.z), .04)) {
+          const step = runLength(standing, f, 1, 0, ctx.AR) // sweeps the standing hull, including the end
+          if (step.len === 1 && !step.wet && step.end.y === me.y) set('sneak', false)
+        }
+      }
+      set('forward', forward); set('back', false); set('left', false); set('right', false)
       set('sprint', (bot.food ?? 20) > 6)
       set('jump', wantsJump(bot, f))
       await ctx.sleep(TICK_MS)

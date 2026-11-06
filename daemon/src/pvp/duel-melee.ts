@@ -44,12 +44,14 @@ export function installMelee (ctx: DuelCtx) {
   ctx.tot = totemMod.install(bot)
   ctx.use0 = bot._ndUse ? { ...bot._ndUse.stats } : null
   mf.setCounter((e) => {
-    if (!ctx.prof.player || e?.id !== ctx.entity.id || !bot.entity || !vision.visible(ctx.entity)) return false
+    if (ctx.ctl?.aborted || !ctx.prof.player || e?.id !== ctx.entity.id || !bot.entity || !vision.visible(ctx.entity)) return false
+    if (bot.heldItem?.name !== ctx.weapon?.name) return false
     e = ctx.entity
     if (reachFrom(bot.entity.position.offset(0, EYE, 0), e) > HIT_REACH) return false
     if (mf.clock.charge(0) <= 0.9 || usingItem(bot, e) === 'shield') return false
     const use = bot._ndUse
     if (use && (use.cur || gameClock.now() - (use.endedAt || 0) < mf.clock.msPerTick)) return false
+    if ((require('./turn-melee') as typeof import('./turn-melee')).targetStrikeWait(ctx, gameClock.now()) > 0) return false
     const sprintHit = mf.clock.srvSprint
     mf.hit(e, { after: sprintHit ? 'wtap' : null, kind: 'counter' })
     st.swings++

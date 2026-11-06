@@ -3,7 +3,7 @@ import { Vec3 } from './world'
 import * as edges from '../edges'
 import * as pick from '../pick'
 import { WIND_SPEED, SWAP, yawTo } from './consts'
-import { countOf, install, offWind, windCount, windReady, ensureHotbar, fireWind } from './hands'
+import { install, offWind, windReady, ensureHotbar, fireWind } from './hands'
 import { grounded } from './world'
 
 // ---------------------------------------------------------------- толчок
@@ -40,29 +40,17 @@ export function knockOff (bot, e, { blocking = false }: any = {}) {
 export function pushPlan (bot, e, { sees = true, theyUp = false, busy = null, closing = 0, cooldownLeft = 0, blocking = false }: any = {}) {
   if (!sees || !windReady(bot)) return null
   if (!e || !e.position || e.isValid === false) return null
-  // В паутине толчок пуст: Entity.makeStuckInBlock режет ход до 0.25/0.05 и обнуляет скорость после шага — всплеск его не
-  // сдвинет (пользователь 23.10: «ветром в паутине в меня кидаются, я всё равно не двигаюсь — просто ресурсы расходуют»).
-  const webAt = dy => bot.blockAt?.(e.position.offset(0, dy, 0).floored())?.name === 'cobweb'
-  if (webAt(0) || webAt(1)) return null
-  const me = bot.entity.position
-  const dist = pick.eyeOf(bot).distanceTo(e.position.offset(0, pick.hitboxOf(bot, e).h / 2, 0))
-  if (dist < 2.2 || dist > 14) return null
-  const have = windCount(bot)
   if (knockOff(bot, e, { blocking })) return { why: 'в яму' }
-  // Заряд — к булаве (пользователь 14.10: «грозу ветра сливают, просто стреляют в игрока ей, хотя надо с булавой
-  // комбинировать»): с булавой толкать — только насмерть, остальное — на подброс и удар сверху; без неё — толчки только
-  // с трёх зарядов, один-два — на выход из ямы.
-  if (countOf(bot, 'mace') > 0 || have < 3) return null
-  if (theyUp && dist < 12) return { why: 'со столба' }
-  if (busy && have >= 2 && dist > 3.6) return { why: busy }
-  if (closing > 0.18 && dist < 6 && dist > 2.8 && cooldownLeft > 300 && have >= 3) return { why: 'сбил рывок' }
+  if (theyUp) return { why: 'со столба' }
+  if (busy) return { why: busy }
+  if (closing > 0.18 && cooldownLeft > 300) return { why: 'сбил рывок' }
   return null
 }
 
 // Выстрел зарядом в него: прямая без гравитации, скорость 1.5 + своё
 // смещение (x,z — всегда, y — в воздухе). Цель — его ноги + 0.3 с упреждением
 // по его скорости: всплеск у ног подкидывает выше всего.
-export async function windPush (bot, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP }: any = {}) {
+export async function windPush (bot, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, allies = [] }: any = {}) {
   install(bot)
   if (!offWind(bot) && !(await ensureHotbar(bot, ['wind_charge']))) return { fired: false, why: 'заряда нет в хотбаре' }
   let lastPos = bot.entity.position.clone()
@@ -80,6 +68,6 @@ export async function windPush (bot, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sw
     const w = P.minus(from).scaled(1 / Math.max(1, t))
     const d = new Vec3(w.x - u.x, w.y - u.y, w.z - u.z)
     return { yaw: Math.atan2(-d.x, -d.z), pitch: Math.atan2(d.y, Math.hypot(d.x, d.z)) }
-  }, { swap, before: () => { lastPos = bot.entity.position.clone() } })
+  }, { swap, allies, before: () => { lastPos = bot.entity.position.clone() } })
   return r
 }

@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { hazardCoverMethods } from '../src/rpc/hazards-cover'
 import { farApproachTurn } from '../src/pvp/turn-approach'
+import { install as installItemUse } from '../src/itemuse'
 const threats: typeof import('../src/threats') = require('../src/threats')
 const flee: typeof import('../src/flee') = require('../src/flee')
 
@@ -83,6 +84,41 @@ test('Q10 подход не возвращается к колонне поза�
   assert.ok(retreat)
   assert.ok(retreat.at.distanceTo(eye) > f.bot.entity.position.distanceTo(eye), 'контроль: колонна действительно позади')
   assert.equal(archerCover(f.bot, eye, { advance: true }), null, 'повторный возврат к задней колонне не приближает к лучнику')
+})
+
+test('a supported arena pursuer releases inherited sneak only for a safe standing step', async t => {
+  for (const mode of ['clear', 'ceiling', 'shoulder', 'lip', 'shield', 'reflex', 'parkour', 'melee', 'outside arena']) await t.test(mode, async t => {
+    const f = scene(t, false), { bot, controls } = f, original = bot.blockAt
+    const d = mode === 'melee' ? 2.4 : 10.828
+    f.foe.position.z = .5 - d
+    if (mode === 'shoulder') bot.entity.position.x = f.foe.position.x = .75
+    bot.entity._ndPoseHeight = 1.5
+    bot.physics.simulatePlayer = state => state
+    bot._client = Object.assign(new EventEmitter(), { write() {} })
+    installItemUse(bot)
+    bot.setControlState('sneak', true)
+    if (mode === 'shield') bot._ndUse.cur = { name: 'shield', canSprint: false, mult: .2 }
+    if (mode === 'parkour') bot._ndParkourForecast = { until: Infinity }
+    if (mode === 'ceiling' || mode === 'shoulder' || mode === 'lip') bot.blockAt = p => {
+      const b = original(p)
+      const slab = mode === 'ceiling' ? b.position.x === 0 && b.position.z === 0
+        : mode === 'shoulder' && b.position.x === 1 && b.position.z === -1
+      if (slab && b.position.y === 1)
+        return { ...b, name: 'stone_slab', boundingBox: 'block', shapes: [[0, .5, 0, 1, 1, 1]] }
+      if (mode === 'lip' && b.position.y < 0 && b.position.x === 0 && b.position.z === 0)
+        return { ...b, name: 'air', boundingBox: 'empty', shapes: [] }
+      return b
+    }
+    const ctx: any = { bot, entity: f.foe, prof: { player: true }, session: { _reflexState: { active: mode === 'reflex' ? {} : null } },
+      AR: mode === 'outside arena' ? null : { x: 0, y: 0, z: 0, r: 20 }, set: bot.setControlState,
+      pathTo: () => assert.fail('the observed pursuit still has a dry direct route'), spearChargeFar: async () => false,
+      sleep: async () => {} }
+    const result = await farApproachTurn(ctx, { d, hp: 20, seesBody: true, noMelee: false } as any)
+    assert.equal(result, mode === 'melee' ? undefined : 'next')
+    assert.equal(!!controls.sneak, mode !== 'clear')
+    assert.equal(!!controls.sprint, mode === 'clear')
+    assert.equal(!!controls.forward, mode !== 'melee')
+  })
 })
 
 test('Q10 localOnly не выходит из арены, не бежит через яму и сравнивает путь с насестом', async t => {

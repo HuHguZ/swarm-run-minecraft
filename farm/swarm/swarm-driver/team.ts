@@ -113,8 +113,9 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     board.setMembers(membersOf(b))
     for (const e of sightings || []) if (hostile(b, e.id) && board.observe(b.name, at, e)) telemetry.observed++
     preempt(b)
-    sw.windFlank?.(b, sightings)
+    // Сначала воздушный эскорт: пеший фланг иначе резервировал всех элитровых до выбора облётчика.
     sw.windWing?.(b, sightings)
+    sw.windFlank?.(b, sightings)
     sw.sentries?.(b, sightings)
     sw.arrowBoost?.(b, sightings)
     sw.pearlUpTest?.(b, sightings)
@@ -185,13 +186,13 @@ export function swarmTeam (sw: SwarmDriverCtx) {
       const spare = members.reduce((s, a) => s + Object.entries(a.inventory || {}).filter(([n]) => n === 'sand' && !a.needs?.[n]).reduce((t, [n, c]: any) => t + Math.max(0, c - (a.reserve?.[n] ?? 16)), 0), 0)
       const onslaughtNow = aggressive || !!pvpState(board).strongFew
       const gather = onslaughtNow && sandSpot && need > spare ? { item: 'sand', deficit: need - spare, spot: sandSpot } : undefined
-      // Боты — по ленте смертей; люди — по публичному списку и отношениям команд, без списка их число неизвестно.
+      // Боты — по ленте смертей; один человек в соло — весь состав врага, а не повод отменять лут ради добивания.
       const rivals = bots.filter(o => teamOf(o) !== team && (!hostile || hostile(b, o.name)))
       const humans = [...new Set<string>(sw.humanNames?.() || [])].filter(name => !bots.some(o => o.name === name) && hostile?.(b, name))
       // Лента смертей раунда (открытое знание): кто сколько наших убил — рой учится, что навалом его не взять (race.ts strongFew).
       const killsBy: Record<string, number> = { ...sw.pastKills.get(team) }
       for (const d of sw.drops()) if (d.team === team && d.by) killsBy[d.by] = (killsBy[d.by] || 0) + 1
-      planned.set(team, planPvp(board, members, { foesLeft: rivals.length || humans.length ? rivals.filter(o => alive(o.name)).length + humans.length : undefined, killsBy, quorum: Math.min(2, Math.max(1, members.length)), doctrine: process.env.SWARM_DOCTRINE as any || undefined, aggressive, hideouts, perches, gather, edgeOf: edgeNear,
+      planned.set(team, planPvp(board, members, { foesLeft: rivals.length ? rivals.filter(o => alive(o.name)).length + humans.length : undefined, killsBy, quorum: Math.min(2, Math.max(1, members.length)), doctrine: process.env.SWARM_DOCTRINE as any || undefined, aggressive, hideouts, perches, gather, edgeOf: edgeNear,
         // Лестницы — выключены, пока столбы берутся из перемещения, а не подтверждённой кладки (арена 36: «стена кончилась»,
         // крафт рвут рефлексы — трое ботов вне боя впустую). ARENA_LADDERS=1 — включить.
         // Точки (стена лестницы, яма, засада) — закрыты, пока споткнувшийся на них стоит там же или у раскрытой засады враг

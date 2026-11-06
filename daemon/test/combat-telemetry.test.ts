@@ -56,13 +56,15 @@ function fixture () {
   }
   let hp = 28
   const telemetryHp = e => { assert.equal(e.id, foe.id); return hp }
-  return { bot, foe, clock, step, finish, telemetryHp, hp: value => { hp = value } }
+  const edges = { support: (_b, p) => ({ drop: p.y }),
+    afterPacket: (require('../src/edges') as typeof import('../src/edges')).afterPacket }
+  return { bot, foe, clock, step, finish, telemetryHp, edges, hp: value => { hp = value } }
 }
 
 test('mace push telemetry reads the explicit accessor while its target has no HP', async () => {
   const f = fixture()
   f.bot._ndMaceInstalled = true
-  const mace = load('mace', { './game-clock': f.clock, './edges': { support: (_b, p) => ({ drop: p.y }) } })
+  const mace = load('mace', { './game-clock': f.clock, './edges': f.edges })
   const tracker = mace.track(f.bot, { enemy: () => f.foe, telemetryHp: f.telemetryHp })
   try {
     tracker.notePush(f.foe, 'wind')
@@ -75,7 +77,7 @@ test('mace push telemetry reads the explicit accessor while its target has no HP
 
 test('mace descent keeps exact damage samples out of the observed target', async () => {
   const f = fixture()
-  const mace = load('mace', { './game-clock': f.clock, './edges': { support: (_b, p) => ({ drop: p.y }) } })
+  const mace = load('mace', { './game-clock': f.clock, './edges': f.edges })
   f.bot.entity.position.y = 17
   f.bot.entity.onGround = false
   const pending = mace.descend(f.bot, { aborted: false }, f.foe, { telemetryHp: f.telemetryHp, windMlg: false })
@@ -95,7 +97,7 @@ test('mace descent keeps exact damage samples out of the observed target', async
 test('a mace combo waits for an actual Wind Burst rebound and can smash a second visible target', async () => {
   const f = fixture(), attacks = []
   const second = { ...f.foe, id: 3, username: 'Second', metadata: [] }
-  const mace = load('mace', { './game-clock': f.clock, './read': { enchLevel: (_b, _i, n) => n === 'wind_burst' ? 2 : 0 }, './edges': { support: (_b, p) => ({ drop: p.y }) } })
+  const mace = load('mace', { './game-clock': f.clock, './read': { enchLevel: (_b, _i, n) => n === 'wind_burst' ? 2 : 0 }, './edges': f.edges })
   f.bot.inventory.items = () => [{ name: 'mace' }]
   f.bot.inventory.slots[36] = { name: 'mace' }
   f.bot.quickBarSlot = 0
@@ -268,8 +270,7 @@ test('mace threat sees a foe gliding in from beyond 5.5 blocks when he will land
   }
 })
 
-test('no wind push into a foe stuck in a cobweb: the web eats the knockback', () => {
-  // Пользователь 23.10: «ветром в паутине в меня кидаются, я всё равно не двигаюсь — просто ресурсы расходуют».
+test('a useful wind action is considered even when the target is in a cobweb', () => {
   for (const web of [false, true]) {
     const f = fixture()
     f.bot._ndMaceInstalled = true
@@ -277,7 +278,7 @@ test('no wind push into a foe stuck in a cobweb: the web eats the knockback', ()
     f.foe.position = new Vec3(5.5, 0, .5)
     f.bot.blockAt = p => ({ position: p.floored(), name: web && p.floored().x === 5 ? 'cobweb' : 'air', boundingBox: 'empty', shapes: [] })
     const mace = load('mace', { './game-clock': f.clock, './edges': { support: (_b, p) => ({ drop: p.y }), hazardAround: () => false } })
-    const plan = mace.pushPlan(f.bot, f.foe, { busy: 'в паутине' })
-    assert.equal(!!plan, !web, `web ${web}`)
+    const plan = mace.pushPlan(f.bot, f.foe, { busy: 'ест' })
+    assert.equal(plan?.why, 'ест', `web ${web}`)
   }
 })

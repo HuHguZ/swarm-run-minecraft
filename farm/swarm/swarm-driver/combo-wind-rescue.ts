@@ -19,7 +19,7 @@ export function startWindRescue(a: any, b: any, t: any, enabled: boolean, stop: 
   secondLauncher?: (bot: any, target: any, options: any) => Promise<any>) {
   const air: typeof import('../../../daemon/src/swarm/combos/air-ideas') = require('../../../daemon/src/swarm/combos/air-ideas')
   const track: typeof import('../../../daemon/src/bow/track') = require('../../../daemon/src/bow/track')
-  const { windLaunch }: typeof import('../../../daemon/src/combat/team-wind') = require('../../../daemon/src/combat/team-wind')
+  const { windLaunch, windMovement }: typeof import('../../../daemon/src/combat/team-wind') = require('../../../daemon/src/combat/team-wind')
   const ownA = a.entity, ownB = b.entity, targetId = t.entity.id
   const remote = actor => a.players?.[actor.username]?.entity ?? a.entities?.[actor.entity?.id]
   const bodyLife = remote(b), targetLife = remote(t)
@@ -58,7 +58,7 @@ export function startWindRescue(a: any, b: any, t: any, enabled: boolean, stop: 
     if (!receipt || !velocity || !confidence || ![velocity.x, velocity.y, velocity.z, velocity.ageTicks].every(Number.isFinite) ||
       velocity.ageTicks < 0 || velocity.ageTicks > 1.5 || body.onGround !== false || velocity.y >= 0)
       return { ms: Date.now(), why: 'body_motion_unknown', receipt: receipt ? { ...receipt } : null, ...extra }
-    const from = pick.eyeOf(a), moved = a.entity.velocity.clone(); if (a.entity.onGround) moved.y = 0
+    const from = pick.eyeOf(a), moved = windMovement(a)
     const shot = windLaunch(from, body.position.offset(0, .3, 0), moved)
     if (!shot) return { ms: Date.now(), why: 'no_flight_estimate' }
     const horizonTicks = 3 + Math.ceil(shot.time), projected = projectFall(body.position, velocity, horizonTicks), floor = knownFloor(projected)

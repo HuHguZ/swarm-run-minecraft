@@ -37,18 +37,20 @@ export function assignFighters(S: PvpPlan): void {
     const was = board.tasks().find(t => t.id === `pvp:${m.id}`)
     return was?.data?.shove && was.data.target === foe.id ? Number.MIN_VALUE : SHOVE
   }
-  const worthShove = (m: SwarmMember, foe: SharedEnemy, attack: number) => {
-    const edge = S.edgeAt(foe), gap = distance(m.position, foe.position)
-    if (!edge || shoveOf(foe) < shoveFloor(m, foe) || gap > 16) return false
-    const walk = Math.max(0, gap - 3) / 5.6, wind = count(m.inventory, 'wind_charge') > (count(m.inventory, 'mace') ? 2 : 0)
+  const worthShove = (m: SwarmMember, foe: SharedEnemy, attack: number, fight = memberFight(m, foe)) => {
+    const edge = S.edgeAt(foe), gap = distance(m.position, foe.position), value = shoveOf(foe)
+    if (!edge || value < shoveFloor(m, foe) || gap > 16) return false
+    const walk = Math.max(0, gap - 3) / 5.6
     const chain = shoveHits(foe, edge, { sprint: true, kb: m.ench?.knockback || 0 })
-    const work = (wind || (edge.at ?? 0) <= SHOVE_REACH ? damage.IFRAME_TICKS / 20 : chain * damage.IFRAME_TICKS / 20) + (wind ? 0 : walk)
-    return dislodgeSeconds(S, foe, 'shove', work, attack + walk) < attack + walk
+    const work = chain * damage.IFRAME_TICKS / 20 + walk
+    // Частичный урон оплачивается своей долей; слабый не меняет перевооружение на более быстрый проигрыш.
+    const alternative = aggressive && !S.endgame && (weak(m) || fight.rearm) ? Math.min(attack + walk, fight.survival) : attack + walk
+    return dislodgeSeconds(S, foe, 'shove', work, attack + walk) < alternative * value
   }
   // Враг у смертельного края, у меня заряды, до него не дальше полёта заряда и подъёма фланга — не прятаться и не «переигран»:
   // на сброс (стенд 25.10: Tester в незерите в 1 бл. от края гребня, у всех по 128 зарядов — «бой 0, сброс 0, лут/укрытие 8»,
   // 18 раз «проигрываем — прячусь»; пользователь: «не выкидывают с колизея ветром»).
-  const edgeWind = (m: SwarmMember, foe?: SharedEnemy) => !!foe && !!S.edgeAt(foe) && shoveOf(foe) >= shoveFloor(m, foe) && count(m.inventory, 'wind_charge') >= 2 && distance(m.position, foe.position) <= 48
+  const edgeWind = (m: SwarmMember, foe?: SharedEnemy) => !!foe && !!S.edgeAt(foe) && shoveOf(foe) >= shoveFloor(m, foe) && count(m.inventory, 'wind_charge') > 0
   // Цена бросить начатый бой, в блоках пути (как targetCost): перепрокладка — 4; урон, уже нанесённый цели (оценка хп по своим
   // попаданиям, board), пропадает, если её не добить: 0.8 бл. на каждое снятое хп (полцели ≈ 8 бл. ≈ 1.4 с бега); вплотную в бою —
   // ещё замах и перезапуск боя ~1.5 с ≈ 8 бл. (цикл 20, cl74–76: почти все смены цели — «новая ближе на 4+ бл.»).
@@ -68,7 +70,7 @@ export function assignFighters(S: PvpPlan): void {
     }
     const near = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
     const personal = near && memberFight(m, near), kit = killMeans(m)
-    const shoveUseful = near && worthShove(m, near, attackSeconds(m, near, personal!.attackSeconds))
+    const shoveUseful = near && worthShove(m, near, attackSeconds(m, near, personal!.attackSeconds), personal!)
     // Не пробивающий и проигрывающий размен получает другое дело; кирка нужна лишь у назначенной живой ямы.
     const rearm = aggressive && !S.endgame && personal?.rearm && !kit.smash && !kit.harm && !(kit.axe && comboMace) && !shoveUseful && !diggers.has(m.id)
     if (rearm) rearming.add(m.id)
@@ -118,7 +120,7 @@ export function assignFighters(S: PvpPlan): void {
     // Натиск, слабый (weak): ближний враг дальше 16 бл. — лут; 5–16 — к своим по открытому, за спины готовых (пользователь
     // 14.10: «не должны в замкнутые пространства бежать, когда игрок рядом за ними идёт» — комната-тупик с пустыми
     // сундуками); своих рядом нет — в укрытие колизея, там на шифте («если своих нет — прятаться в колизее, в блоках или
-    // на высоте, и шифт зажимать, чтобы мы не видели»); ближе 5 бл. не убежать (он быстрее) — драться со всеми.
+    // на высоте, и шифт зажимать, чтобы мы не видели»); близость сама по себе не доказывает, что выхода нет.
     // Перегруппировка после проваленного штурма — так же для всех, кто не в схватке. Голые — и в штурме (пользователь
     // 14.10: «бегут к игроку без вещей»): штурм — для снаряжённых, голому сперва лут.
     // Сброс (shove.ts): он у смертельного обрыва — толкают все, кто в 16 бл. и достаёт (пользователь 21.10: «вместе они
@@ -127,7 +129,8 @@ export function assignFighters(S: PvpPlan): void {
     const wind = count(m.inventory, 'wind_charge')
     const edge = S.edgeAt(foe)
     // Дальняя цепь оплачивается окнами удара: сравниваем с гонкой урона, а не запрещаем дальше трёх блоков.
-    const deadly = (foe === near ? !!shoveUseful : worthShove(m, foe, attackSeconds(m, foe))) || edgeWind(m, foe)
+    // Рефлекс ветра действует и при отходе; отказ броска не оплачивает кулачную цепь его ценой.
+    const deadly = foe === near ? !!shoveUseful : worthShove(m, foe, attackSeconds(m, foe))
     if (process.env.ND_SWARM_TRACE) {
       const was = board.tasks().find(t => t.id === `pvp:${m.id}`)
       if (was?.data?.target === foe.id && !!was.data.shove !== deadly) {
@@ -159,21 +162,28 @@ export function assignFighters(S: PvpPlan): void {
       // у одного бота): убегавший дерётся только вплотную (3.5), дерущийся уходит дальше 6.
       const prior = board.tasks().find(t => t.id === `pvp:${m.id}`)?.kind
       const edge = prior === 'flee' ? 3.5 : prior === 'fight' ? 6 : 5
-      const perch = gap > edge && (onPerch ? m.position : perchFor(m))
+      // Нечем драться — проверить выход даже вплотную; физический тупик решает тело (cornered).
+      const leave = weak(m) || gap > edge
+      const perch = leave && (onPerch ? m.position : perchFor(m))
       if (perch) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, perch: true, panic: true, reason: `на насест, нечем драться (враг в ${Math.round(gap)} бл.${fled ? ', убегал' : ''})` }, perch); continue }
       // От лучника — сперва за укрытие (своя кучка в чистом поле стрелу не остановит), потом к своим.
       // Только издали (> 8 бл.): вплотную бег «за укрытие» — спиной под его меч (игра пользователя 21.10).
       const cover = gap > Math.max(edge, 8) && archer(near) && hideoutFor(m)
       if (cover) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, hide: true, panic: true, reason: `за укрытие от лучника (враг в ${Math.round(gap)} бл.)` }, cover); continue }
-      const rearmHide = rearm && gap > edge && hideoutFor(m)
+      const rearmHide = rearm && leave && hideoutFor(m)
       if (rearmHide) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, hide: true, panic: true, reason: 'не пробиваю: укрытие и перевооружение' }, rearmHide); continue }
-      const group = gap > edge && rallyFor(m, near)
+      const group = leave && rallyFor(m, near)
       if (group) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, regroup: true, panic: true, reason: `к своим, нечем драться (враг в ${Math.round(gap)} бл.${fled ? ', убегал' : ''})` }, group); continue }
-      const hide = gap > edge && hideoutFor(m)
+      const hide = leave && hideoutFor(m)
       if (hide) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, hide: true, panic: true, reason: `прячусь, своих рядом нет (враг в ${Math.round(gap)} бл.${fled ? ', убегал' : ''})` }, hide); continue }
       // Бежать некуда (укрытия и свои — за врагом), а он ещё не вплотную — лут с отходом от него (исполнитель отходит на 8 бл.),
       // а не общий план боя: слабый шёл бы прямо на него.
-      if (gap > edge) { markFled(board, m.id); put(m, 'loot', { improvement: improvementOf(m), weak: true, reason: `лут: отхожу, укрыться негде (враг в ${Math.round(gap)} бл.)` }); continue }
+      if (leave) {
+        markFled(board, m.id)
+        if (gap <= edge) put(m, 'flee', { target: near.id, enemyPosition: near.position, kite: true, panic: true, reason: 'нечем драться: проверяю выход' }, m.position)
+        else put(m, 'loot', { improvement: improvementOf(m), weak: true, reason: `лут: отхожу, укрыться негде (враг в ${Math.round(gap)} бл.)` })
+        continue
+      }
     }
     const nearby = distance(m.position, foe.position) <= 4.5
     // Окно на сундуки и при натиске (пользователь 25.10: «в железке ходят, хотя в сундуках броня лучше, — могли бы выделить время»):
@@ -230,8 +240,7 @@ export function assignFighters(S: PvpPlan): void {
     // у кого он есть (иначе — только «волна» с запасом зарядов и без булавы).
     const shove = !search && deadly
     const slot = (aggressive || finishing || shove) && !search ? sectorOf(m, foe) : undefined
-    // Булавник толкает ветром только сверх двух зарядов: они — на взлёт (стенд 22.10: «нет заряда» — 59 отказов за 3 раунда).
-    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > (count(m.inventory, 'mace') ? 2 : 0) && (shove || doctrine === 'wave' && wind > 2 && !count(m.inventory, 'mace')), ...(shove ? { shove: true, shoveAt: { x: foe.position.x + edge!.x * (edge!.at ?? SHOVE_REACH), y: foe.position.y, z: foe.position.z + edge!.z * (edge!.at ?? SHOVE_REACH) } } : {}), ...(finishing ? { finishing: true } : {}), ...(covering ? { cover: covering.data!.cover } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
+    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > 0 && (shove || doctrine === 'wave'), ...(shove ? { shove: true, shoveAt: { x: foe.position.x + edge!.x * (edge!.at ?? SHOVE_REACH), y: foe.position.y, z: foe.position.z + edge!.z * (edge!.at ?? SHOVE_REACH) } } : {}), ...(finishing ? { finishing: true } : {}), ...(covering ? { cover: covering.data!.cover } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
     loads.set(foe.id, (loads.get(foe.id) || 0) + m.strength / meanStrength)
     if (melee) meleeOn.set(foe.id, (meleeOn.get(foe.id) || 0) + 1)
   }

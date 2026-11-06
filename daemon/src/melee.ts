@@ -162,6 +162,12 @@ function install (bot) {
     msPerTick: TICK_MS,
     listeners: new Set()
   }
+  // Producer catch-up may include ticks from before our packet. Preserve the
+  // public gameplay timestamp, but bound charge by continuous time since reset.
+  let resetAt = 0, resetObservedAt = -Infinity
+  Object.defineProperty(M, 'resetAt', { configurable: true, enumerable: true, get: () => resetAt,
+    set: at => { resetAt = at; resetObservedAt = gameClock.observationNow() } })
+  const elapsed = () => Math.min(gameClock.now() - M.resetAt, gameClock.observationNow() - resetObservedAt)
   bot._ndMelee = M
   // Сервер — Paper/Spigot (бренд minecraft:brand) или ванильный (мир по LAN):
   // у них разное со сбросом заряда (взмах в воздух — см. ниже).
@@ -169,6 +175,7 @@ function install (bot) {
   guardAngles(bot)
   bot.on('spawn', () => guardAngles(bot))
   const w0 = bot._client.write
+  let heldSlot = bot.quickBarSlot
   let nanAt = -Infinity
   bot._client.write = function (name, params) {
     // Ход с NaN/бесконечностью сервер не прощает: Paper кикает «Invalid move player packet received»
@@ -193,6 +200,13 @@ function install (bot) {
         // удар прошёл; прошёл ли — скажет звук или урон цели (ниже).
         if (M.srvSprint && c > 0.9) M.lastAttack.sprintTry = true
         for (const f of (M.listeners as any)) { try { f('attack', M.lastAttack) } catch {} }
+      } else if (name === 'held_item_slot' && Number.isInteger(params?.slotId) && params.slotId >= 0 && params.slotId < 9) {
+        const changed = params.slotId !== heldSlot
+        heldSlot = params.slotId
+        // Paper detects equipment on a real slot change, even sword→wind→sword within one physics tick.
+        // Player.detectEquipmentUpdates resets only for a different item type, not another stack of the same sword.
+        const held = bot.inventory?.slots?.[36 + heldSlot]?.name || null
+        if (changed && M.paperLike() && held !== M.held) { M.held = held; M.resetAt = gameClock.now() }
       } else if (name === 'entity_action' && params) {
         const a = params.actionId
         if (a === 'start_sprinting' || a === 3) M.srvSprint = true
@@ -231,13 +245,13 @@ function install (bot) {
   // always 50 nominal ms; estimating it again would stretch attack cooldowns.
   M.msPerTick = TICK_MS
   // Заряд, каким его увидит сервер, если удар уйдёт через aheadMs.
-  M.ticksSince = (aheadMs = 0) => Math.max(0, Math.floor((gameClock.now() + aheadMs - M.resetAt - SEND_MARGIN_MS) / M.msPerTick))
+  M.ticksSince = (aheadMs = 0) => Math.max(0, Math.floor((elapsed() + aheadMs - SEND_MARGIN_MS) / M.msPerTick))
   M.T = () => cooldownTicks(heldName(bot))
   M.charge = (aheadMs = 0) => Math.min(1, (M.ticksSince(aheadMs) + 0.5) / M.T())
   // Через сколько мс заряд дойдёт до need (1 — полный, 0.91 — крит/спринт).
   M.leftMs = (need = 1) => {
     const k = ticksFor(M.T(), need)
-    return Math.max(0, M.resetAt + SEND_MARGIN_MS + k * M.msPerTick - gameClock.now())
+    return Math.max(0, SEND_MARGIN_MS + k * M.msPerTick - elapsed())
   }
   // Звуки удара — правда сервера: чей удар — по тому, у кого ноги ближе к точке.
   // Имя — по номеру в реестре со сдвигом: в minecraft-data 1.21.11 номера

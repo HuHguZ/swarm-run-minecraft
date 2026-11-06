@@ -28,11 +28,24 @@ export function client (url) {
   const c: any = { ws }
   const settle = (rid, fn, value) => { const p = pending.get(rid); if (!p) return; pending.delete(rid); clearTimeout(p.timer); p[fn](value) }
   const failAll = (why) => { for (const rid of [...pending.keys()]) settle(rid, 'reject', new Error(why)) }
-  ws.on('message', raw => { const m = JSON.parse(raw.toString()); if (m.type === 'danger') { if (c.onDanger) c.onDanger(m); return } if (!pending.has(m.id)) return; m.ok ? settle(m.id, 'resolve', m.result) : settle(m.id, 'reject', new Error(m.error)) })
+  ws.on('message', raw => {
+    const m = JSON.parse(raw.toString())
+    if (m.type === 'danger') { c.onDanger?.(m); return }
+    if (m.type === 'wind_bid' || m.type === 'wind_bid_done') {
+      const granted = c.onWindBid?.(m) === true
+      if (m.type === 'wind_bid' && ws.readyState === 1) ws.send(JSON.stringify({ type: 'wind_bid_answer', id: m.id, granted }))
+      return
+    }
+    if (pending.has(m.id)) m.ok ? settle(m.id, 'resolve', m.result) : settle(m.id, 'reject', new Error(m.error))
+  })
   ws.on('close', () => failAll(`RPC ${url}: сокет закрыт`)); ws.on('error', () => {})
   // Демон с застрявшим циклом событий принимает TCP, но рукопожатие WebSocket не отвечает — без срока старт арены ждал вечно
   // (бой роя 24.10: час на «команды: 30 бойцов»).
   c.ready = new Promise<any>((res, rej) => { const t = setTimeout(() => { rej(new Error(`RPC ${url}: демон не отвечает 20 с`)); try { ws.terminate() } catch {} }, 20000); ws.once('open', () => { clearTimeout(t); res(undefined) }); ws.once('error', e => { clearTimeout(t); rej(e) }) })
+  c.windRadio = onBid => {
+    c.onWindBid = onBid
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'wind_radio' }))
+  }
   c.call = (method, params: any = {}) => new Promise<any>((resolve, reject) => {
     const rid = ++id, budget = (Number.isFinite(params?.timeoutSeconds) ? params.timeoutSeconds : 60) * 1000 + 30000
     pending.set(rid, { resolve, reject, timer: setTimeout(() => settle(rid, 'reject', new Error(`RPC ${method}: нет ответа ${Math.round(budget / 1000)} с`)), budget) })

@@ -12,6 +12,13 @@ import { stepSafe } from './body'
 import { findItem, potionOf } from './potions'
 import { EYE, FIX, HIT_REACH, PILLAR_MS, THEIR_REACH, TICK_MS } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
+import { observedCollision } from './search'
+import { standPositions } from '../navigation/geometry'
+import { executePlan, planJumpAsync, settledLanding } from '../navigation/parkour'
+import * as windLeap from '../wind-leap'
+import { windInside } from '../combat/team-wind'
+import { findItem as windItem, nextTick, offWind } from '../mace/hands'
+import { allowed } from '../reflex-lock'
 
 // Он выпал с поля — держу арену.
 export function holdArenaTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -105,14 +112,73 @@ export async function climbToHimTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
 }
 
+async function hiddenVent (ctx: DuelCtx, comparePunch = false) {
+  const { arena, bot, entity: foe, foeSeenPos, session } = ctx
+  const body = bot.entity, owner = session?.current
+  const capable = () => !!(offWind(bot) || windItem(bot, 'wind_charge'))
+  const owns = () => !ctx.ctl.aborted && session.bot === bot && session.current === owner && bot.entity === body && allowed(session)
+  const live = () => owns() && ctx.entity === foe && foe.isValid !== false && !ctx.killed
+  const stillHidden = () => !ctx.vision.visible(foe) && foe.position.equals(foeSeenPos)
+  if (!foeSeenPos || !owner || ctx.flankRoute || !body.onGround || !bot._ndLaunchMovement || bot.usingHeldItem || !capable() || !live() || !stillHidden()) return false
+  const from = body.position.clone(), cell = `${from.floored()}|${foeSeenPos.floored()}`
+  if (ctx.hiddenVentTried?.target !== foe) ctx.hiddenVentTried = { target: foe, cells: new Set() }
+  if (ctx.hiddenVentTried.cells.has(cell)) return false
+  if (comparePunch && await ctx.punchThrough(true)) return false
+  if (!live() || !body.position.equals(from) || !stillHidden()) return false
+  ctx.hiddenVentTried.cells.add(cell)
+  const delta = foeSeenPos.minus(from)
+  const walkCtl = { get aborted () { return !live() }, onAbort: ctx.ctl.onAbort }
+  const sight = observedCollision(bot), observed = { ...bot, blockAt: sight.blockAt }
+  const unknown = { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+  const knownOnly = { blockAt: p => sight.blockAt(p) || unknown }
+  const chest = foeSeenPos.offset(0, (foe.height || 1.8) * .55, 0)
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]].sort(([ax, az], [bx, bz]) => (bx - ax) * delta.x + (bz - az) * delta.z)
+  for (const [x, z] of dirs) {
+    if (x * delta.x + z * delta.z <= 0) continue
+    const upper = standPositions(sight, from.offset(x, 0, z), { rise: 5, drop: 0 }).find(p =>
+      p.y > from.y && windInside(p, arena) && p.distanceTo(foeSeenPos) < from.distanceTo(foeSeenPos))
+    if (!upper) continue
+    const eye = upper.offset(0, EYE, 0), ray = chest.minus(eye), length = ray.norm()
+    if (length > 1e-6 && pick.blockOnRay(knownOnly, eye, ray.scaled(1 / length), length)) continue
+    const tangent = from.offset(x ? 0 : upper.x - from.x, 0, z ? 0 : upper.z - from.z)
+    const walk = await planJumpAsync(observed, walkCtl, tangent, { allowWalk: true, sprint: false, maxFallDamage: 0, tolerance: .05, maxTicks: 12, maxFrames: 256, arena })
+    if (!live() || !body.position.equals(from) || !stillHidden()) return false
+    if (!walk || walk.steps.some(step => step.control.jump) || walk.states.some(state => !state.onGround)) continue
+    const rest = walk.states.at(-1)
+    if (!rest) continue
+    // Keep the original observer's world while pricing the hypothetical resting body.
+    const staged = { ...observed, entity: { ...body, position: rest.pos, velocity: rest.vel }, _ndLaunchMovement: () => rest.pos.minus(walk.states.at(-2)?.pos || from) }
+    if (!windLeap.plan(staged, upper, { arena, maxTries: 4 }).best || !live()) continue
+    const aim = ctx.aim
+    ctx.aim = 'free'
+    try {
+      if (ctx.pathing) { ctx.pathTo(false); ctx.pathing = false }
+      const walked = await executePlan(bot, walkCtl, { ...walk, arena }, state => settledLanding(bot, state, tangent, .08))
+      if (!walked.ok || !live() || !stillHidden() || !capable()) return true
+      const moved = bot._ndLaunchMovement()
+      if (moved && Math.hypot(moved.x, moved.y, moved.z) >= 1e-6 && !await nextTick(bot)) return true
+      const flightCtl = { get aborted () { return !owns() }, onAbort: ctx.ctl.onAbort }
+      const result = await windLeap.leap(session, flightCtl, upper, { arena, observedStationary: true, canLaunch: () => live() && stillHidden() })
+      if (result.ok && live()) ctx.used('обошёл скрытого соперника через видимый уступ')
+      return true
+    } finally { if (owns()) ctx.aim = aim }
+  }
+  return false
+}
+
 // Он скрыт: пробить, вскрыть коробку, обойти.
 export async function hiddenFoeTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { after, bot, clear, digWatch, holdWeapon, maceNow, mc, miningProgress, noticed, pathTo, punchThrough, ready, rest, routeInputs, style, throwAt, tt, used } = ctx
   const { d, hidden, me, now, r, theyEat, theyUp } = turn
   // Толпа «держит место»: к скрытой цели не пробиваюсь — бью тех, кто вошёл в руку.
   if (ctx.crowd?.hold) return
-  if (hidden && !ctx.perch && !ctx.reposition && after('hidden', true) && ctx.punches < style.punchLimit) {
-    if (await punchThrough()) { ctx.punches++; return NEXT }
+  const hiddenPursuit = hidden && !ctx.perch && !ctx.reposition
+  const reacted = hiddenPursuit && after('hidden', true)
+  if (hiddenPursuit && ctx.punches < style.punchLimit) {
+    if (reacted && await punchThrough()) { ctx.punches++; return NEXT }
+    const ellipse = ctx.arena?.ellipse
+    if (ctx.AR && ellipse && (reacted || !turn.inSight) && [ellipse.a, ellipse.b].every(axis => Number.isFinite(axis) && axis > 0) &&
+        await hiddenVent(ctx, !reacted)) return NEXT
   }
   if (!hidden) delete noticed.hidden
   if (ctx.exhaustedPunch && ctx.exhaustedPunch.inputs !== routeInputs()) { ctx.exhaustedPunch = null; ctx.punches = 0 }

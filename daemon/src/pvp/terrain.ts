@@ -7,7 +7,7 @@ export function createTerrain(ctx: CombatContext) {
 // Пробить его стенку, счёт падений у края, ямы: выбраться, лава ему в яму.
 function createPits (ctx: CombatContext) {
 let failedPunch = null
-const punchThrough = async () => {
+const punchThrough = async (availabilityOnly = false) => {
     const eye0 = ctx.bot.entity.position.offset(0, ctx.EYE, 0)
     const to = ctx.entity.position.offset(0, (ctx.entity.height || 1.8) * 0.6, 0)
     const delta = to.minus(eye0)
@@ -22,6 +22,7 @@ const punchThrough = async () => {
     const inputs = [ctx.bot.entity.position.floored(), hit.position, hit.stateId ?? hit.name, plan.item?.name, plan.ms,
       ctx.pick?.faceAim?.(ctx.bot, hit.position, new ctx.Vec3(0, 1, 0)), ctx.session?._reflexState?.active || null].join('|')
     if (failedPunch?.inputs === inputs) return false
+    if (availabilityOnly) return true
     ctx.pathTo(false); ctx.pathing = false
     ctx.clear()
     ctx.aim = 'free'

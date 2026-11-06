@@ -24,6 +24,20 @@ function scene() {
   return { bot, raw, setWall(value: boolean) { wall = value } }
 }
 const names = ['iron_sword', 'shield', 'iron_boots', 'iron_leggings', 'iron_chestplate', 'iron_helmet']
+
+test('the swarm sees a player as a combat target only in a playable game mode', () => {
+  const f = scene(); f.setWall(false)
+  const player = { entity: f.raw, gamemode: 3 }
+  f.bot.players = { Foe: player }
+  assert.deepEqual(swarmSightings(f.bot), [])
+  player.gamemode = 1
+  assert.deepEqual(swarmSightings(f.bot), [])
+  for (const gamemode of [0, 2]) {
+    player.gamemode = gamemode
+    assert.equal(swarmSightings(f.bot)[0]?.id, 'Foe')
+  }
+})
+
 function secretBody(raw: any) {
   for (let i = 0; i < 5; i++) Object.defineProperty(raw.equipment, i, { configurable: true, get() { throw new Error(`hidden gear ${i}`) } })
   raw.equipment[5] = { name: 'netherite_helmet', componentMap: new Map([['enchantments', {}]]) }

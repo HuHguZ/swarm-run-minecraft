@@ -15,17 +15,18 @@ export function swarmTurn (sw: SwarmDriverCtx) {
   // Раненый, которому велено отходить (recover), — тоже фаза: бой до 12 с добивал его (лаборатория 13.10, линия: 1 хп → смерть).
   // Отход раненого и бегство от неравного боя — одна фаза «уход»: переключения между ними рвали сам отход (лаборатория 13.10).
   const standCell = p => p ? `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` : ''
+  const pathDigs = (cells, at, to = at) => at ? (cells || []).filter(s => {
+    const feet = s.feetY ?? s.y + 1
+    return rayBox(at, { x: to.x - at.x, y: to.y - at.y, z: to.z - at.z },
+      { x: s.x - .3, y: feet - .6, z: s.z - .3 }, { x: s.x + 1.3, y: feet + .6, z: s.z + 1.3 }, 1) != null
+  }).map(cellKey).sort().join(';') : ''
   const vacatePhase = (t, at) => {
     // goto carries only its destination, not a frozen digAvoid snapshot. New neighbouring work cannot invalidate it.
     if (t.kind === 'goto' && !t.data?.dig) return t.data?.swarmStand ? `vacate:${t.data.swarmStand.x},${t.data.swarmStand.y},${t.data.swarmStand.z}` : ''
     if (!t.data?.digAvoid?.length) return ''
     const stand = t.data.swarmStand, to = stand || at
     // Дальние ямы не отменяют бой; новый резерв на пути рамки к стойке требует свежего digAvoid в RPC.
-    const cells = at ? t.data.digAvoid.filter(s => {
-      const feet = s.feetY ?? s.y + 1
-      return rayBox(at, { x: to.x - at.x, y: to.y - at.y, z: to.z - at.z },
-        { x: s.x - .3, y: feet - .6, z: s.z - .3 }, { x: s.x + 1.3, y: feet + .6, z: s.z + 1.3 }, 1) != null
-    }).map(cellKey).sort().join(';') : ''
+    const cells = pathDigs(t.data.digAvoid, at, to)
     // Ни ям на пути, ни стойки — то же, что без digAvoid: «vacate::» ↔ «» рвало бой каждую секунду (игра 25.10: 46 из 112
     // боёв оборвал goto, бот под мечом стоял).
     if (!cells && !stand) return ''
@@ -133,6 +134,21 @@ export function swarmTurn (sw: SwarmDriverCtx) {
         if (detail(r)?.accepted === true) b.swarmTask = task
         else reject()
       }, reject).finally(() => { fight.pending = false })
+      return false
+    }
+    // Обычный подход ещё идёт к прежней точке: новая стойка вокруг бегущей цели нужна следующему ходу, а не новому A*.
+    // Но новый подкоп на фактически выполняемом пути обрывает его сразу; native fight_guard и эвакуация выше держат своих хозяев.
+    const at = pos[b.name]?.p, to = b.last?.p
+    if (!move && !fight && !b.swarmTurnOwner?.cancelled && running.kind === 'fight' && task.kind === 'fight' &&
+        !targetChanged && !task.data?.commanded && b.last?.m === 'goto' && b.last.pending !== false &&
+        phase(running, null, false) === phase(task, null, false) && !!running.data?.shove === !!task.data?.shove &&
+        JSON.stringify(running.data?.shoveAt || null) === JSON.stringify(task.data?.shoveAt || null) &&
+        at && to && [to.x, to.y, to.z].every(Number.isFinite)) {
+      if (pathDigs(running.data?.digAvoid, at, to) !== pathDigs(task.data?.digAvoid, at, to)) {
+        stopForTask(b, running, task, before, after, 'подход: подкоп на пути изменился')
+        return true
+      }
+      b.swarmTask = task
       return false
     }
     // Идёт рукопашная и цель в досягаемости — не рвём её сменой цели, толчка или клетки: бой роя 24.10 — 33 из 35 боёв

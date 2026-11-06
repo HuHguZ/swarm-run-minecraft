@@ -2,36 +2,67 @@ import * as edges from '../edges'
 import * as flee from '../flee'
 import * as gameClock from '../game-clock'
 import * as hazards from '../hazards'
+import { bestWeapon } from '../items'
 import * as mace from '../mace'
 import * as melee from '../melee'
 import { blockName, keyDir, stepSafe as stepSafeRaw, wantsJump } from '../moves'
+import { dimensions, HAZARD, shapeBoxes } from '../navigation/geometry'
 import * as owShield from '../ow-shield'
+import * as pick from '../pick'
 import * as read from '../read'
 import * as tempo from '../tempo'
 import * as totemMod from '../totem'
-import { creeperSwelling, digStepSafe, edgeBurns, noteWindThrowers, onFire, reachFrom, stepSafe } from './body'
+import { creeperSwelling, digStepSafe, edgeBurns, noteWindThrowers, onFire, reachFrom, stepSafe, usingItem } from './body'
+import { effectAmp } from './combat-observe'
+import { afterDefense, defenseOf, IFRAME_TICKS, isMeleeWeapon, meleeRaw, throughIframes, ticksToCharge } from './damage-model'
+import { REGEN_FAST } from './hp-estimate'
+import { observedCollision } from './search'
 import { findItem } from './potions'
 import { CRIT_ANY_RISE, EYE, FIX, HIT_REACH, REACH_MARGIN, TICK_MS, cooldownMs, ticksToFall } from './rules'
 import { Vec3 } from './vec3'
 import { crowdSteer } from './turn-crowd'
-import { strikeSlot, strikeWait } from './strike-order'
+import { strikeSlot, strikeWait, WINDOW_MS } from './strike-order'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 
 // Моё место в очереди ударов по цели (раз в 250 мс): очередь — из fight RPC (strikeOrder: имена или { цель: имена };
 // combat.fight пока не передаёт её в бой — беру из параметров текущего намерения), присутствующие — видимые игроки
-// очереди в 6 бл. от цели.
+// очереди с готовой видимой рукой в честной досягаемости цели.
 function strikeSlotOf (ctx: DuelCtx, now: number) {
   if (now < (ctx.strikeSlotAt || 0)) return ctx.strikeSlot || 0
   ctx.strikeSlotAt = now + 250
   const order = ctx.opts.strikeOrder ?? ctx.session?.current?.params?.strikeOrder
   if (!order || !ctx.prof.player) return (ctx.strikeSlot = 0)
+  const list = Array.isArray(order) ? order : order[ctx.entity.username]
+  if (!Array.isArray(list)) return (ctx.strikeSlot = 0)
   const tp = ctx.entity.position
   const present = new Set<string>()
-  for (const pl of Object.values(ctx.bot.players || {}) as any[]) {
-    const e = pl && pl.entity
-    if (e && e.position && e.username !== ctx.bot.username && e.position.distanceTo(tp) <= 6 && ctx.vision.visible(e)) present.add(e.username)
+  const world = observedCollision(ctx.bot), unknown = { boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+  const sight = { entity: ctx.bot.entity, registry: ctx.bot.registry, blockAt: p => world.blockAt(p) || unknown }
+  for (const name of list) {
+    if (name === ctx.bot.username) continue
+    const player = ctx.bot.players?.[name], raw = player?.entity
+    if (!raw || raw.isValid === false || player.gamemode === 3) continue
+    const e = ctx.vision.observe(raw), hand = e?.equipment?.[0]
+    // У разных бойцов разные углы обзора: неизвестный союзник сохраняет место до видимого отказа.
+    if (!e || e._ndVisible === false || e._ndGearVisible?.[0] === false) { present.add(name); continue }
+    if (e.position.distanceTo(tp) > 6 || !isMeleeWeapon(hand?.name)) continue
+    const use = usingItem(ctx.bot, e)
+    if (use && use !== 'shield' || e._ndSwingAt != null && now - e._ndSwingAt < ticksToCharge(hand.name) * TICK_MS) continue
+    const eye = e.position.offset(0, pick.eyeHeight(ctx.bot, e), 0)
+    if (reachFrom(eye, ctx.entity) > pick.RANGE || !pick.aim(sight, ctx.entity, { eye, range: pick.RANGE })?.point) continue
+    present.add(name)
   }
   return (ctx.strikeSlot = strikeSlot(order, ctx.bot.username, ctx.entity.username || '', present, ctx.targetHurtBy))
+}
+
+export function targetStrikeWait (ctx: DuelCtx, now: number) {
+  const { bot, mf } = ctx
+  const known = ctx.foeEst?.iframe?.known
+  const raw = known && meleeRaw({ weapon: bot.heldItem?.name, sharpness: read.enchLevel(bot, bot.heldItem, 'sharpness'),
+    strength: effectAmp(bot, 'strength'), weakness: effectAmp(bot, 'weakness'), charge: mf.clock.charge?.(0) ?? 0 })
+  // hurtServer accepts damage above lastHurt inside the window; keep the allies' slot delay.
+  const excess = known && known.at === ctx.targetHurtAt && raw > known.raw && throughIframes(raw, { raw: known.raw, ago: (now - known.at) / TICK_MS }).raw > 0
+  return strikeWait(now, ctx.targetHurtAt - (excess ? WINDOW_MS : 0), strikeSlotOf(ctx, now))
 }
 
 // Топор по поднятому на меня щиту — сразу, без заряда меча и окна неуязвимости: любой удар топором выключает щит на 5 с
@@ -49,7 +80,7 @@ export function meleeIntentTurn (ctx: DuelCtx, turn: TurnFrame) {
   const axe = turn.axe = findItem(bot, i => /_axe$/.test(i.name))
 
   // Окно неуязвимости цели (10 тиков) и моё место в очереди ударов роя (strike-order: fight RPC strikeOrder).
-  const iframes = turn.iframes = strikeWait(now, ctx.targetHurtAt, strikeSlotOf(ctx, now))
+  const iframes = turn.iframes = targetStrikeWait(ctx, now)
   if (blocking) ctx.shieldUpAt = now
   else if (ctx.shieldUpAt && !ctx.shieldDownAt) ctx.shieldDownAt = now
   if (blocking) ctx.shieldDownAt = 0
@@ -153,6 +184,23 @@ export function steerTurn (ctx: DuelCtx, turn: TurnFrame) {
   else if (ctx.prof.player && !theyUp && duo.active()) ({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint } = duo.steer({ forward: turn.forward, back: turn.back, strafe: turn.strafe, sprint: turn.sprint }, { entity: ctx.entity, r, cooldownLeft }))
 }
 
+function coveredShoveFloor (bot, to: { x: number; y: number; z: number }) {
+  if (!Number.isInteger(to.y)) return false
+  const world = observedCollision(bot)
+  // Доска округляет клетку на луче до половины блока по каждой оси.
+  const half = .5 + dimensions(world).half
+  for (let x = Math.floor(to.x - half); x <= Math.floor(to.x + half); x++) {
+    for (let z = Math.floor(to.z - half); z <= Math.floor(to.z + half); z++) {
+      const at = new Vec3(x, to.y - 1, z)
+      const floor = world.blockAt(at)
+      if (!floor?.name || !floor.shapes?.length || HAZARD.test(floor.name) || !shapeBoxes(floor, at).some(box =>
+        box.minX === x && box.maxX === x + 1 && box.minY === at.y && box.maxY === to.y && box.minZ === z && box.maxZ === z + 1)) return false
+      if (!/^(?:(?:cave|void)_)?air$/.test(world.blockAt(at.offset(0, 1, 0))?.name || '')) return false
+    }
+  }
+  return true
+}
+
 // Край и опасности: толкнуть его, не стоять спиной к яме или стене.
 export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, ready, rest, st, used } = ctx
@@ -171,8 +219,11 @@ export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
     const p = ctx.entity.position, dx = to.x - p.x, dz = to.z - p.z, n = Math.hypot(dx, dz)
     if (Number.isFinite(n) && n > .3) {
       const aligned = ((p.x - me.x) * dx + (p.z - me.z) * dz) / (n * (Math.hypot(p.x - me.x, p.z - me.z) || 1)) > .9
-      push = { now: aligned ? 'sprint' : null, stand: { x: p.x - dx / n * 2.5, z: p.z - dz / n * 2.5 }, sure: true }
-      if (!aligned) turn.canHit = false
+      const covered = turn.canHit && !aligned && !pressing && p.y === to.y && coveredShoveFloor(bot, to)
+      if (!covered) {
+        push = { now: aligned ? 'sprint' : null, stand: { x: p.x - dx / n * 2.5, z: p.z - dz / n * 2.5 }, sure: !pressing }
+        if (!aligned && !pressing) turn.canHit = false
+      }
     }
   }
   if (push && d < 6 && !ctx.theirPit && !ctx.myPit) {
@@ -537,12 +588,31 @@ export async function strikeTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { TRACE, bot, combo, guard, holdItem, holdWeapon, mf, ready, rest, st, trace, used } = ctx
   const { axe, blocking, bowShield, canHit, cbShield, cdHit, closing, cooldownLeft, hisHand, hisReadyMs, iframes, inSight, intoShield, meInWeb, now, owMelee, r, race, shieldFresh, theirR } = turn
   const theirHand = hisHand
+  const order = ctx.session?.current?.params
+  const shove = order?.target && order.target === ctx.entity.username ? order.shoveAt : null
+  let bareShove: 'equip' | 'hold' | null = null
+  if (canHit && ctx.AR && ctx.prof.player && shove && !ctx.lastStand && !ctx.weapon &&
+      !isMeleeWeapon(bot.heldItem?.name) && ctx.entity._ndVisible === true && [shove.x, shove.y, shove.z].every(Number.isFinite)) {
+    if (bestWeapon(bot)) bareShove = 'equip'
+    else if (!ctx.push?.now) {
+      // A remote shove order is not a local knockoff. Price even the best bare hit with visible base armor.
+      const armor = (ctx.entity.equipment || []).slice(2, 6).map(item => item && { name: item.name })
+      const raw = meleeRaw({ crit: true, strength: effectAmp(bot, 'strength'), weakness: effectAmp(bot, 'weakness') })
+      const damage = afterDefense(raw, 'melee', defenseOf(armor))
+      if (damage < REGEN_FAST * IFRAME_TICKS && ctx.foeEst?.()?.hi > damage) bareShove = 'hold'
+    }
+  }
   const offShield = bot.inventory.slots[45] && bot.inventory.slots[45].name === 'shield'
   if (guard && guard.stats && guard.stats.worn && offShield) {
     const adv = owMelee === null ? mf.shield({ theirR, closing, hisReadyMs, hisHand: theirHand, myLeftMs: cdHit, inMyReach: r <= HIT_REACH }) : owMelee ? 'raise' : 'lower'
     if (adv === 'raise') guard.raise(true)
-    else if (adv === 'lower' && !cbShield && !(owShield.enabled(bot) && !ctx.prof.player && bowShield)) await guard.raise(false)
+    else if (!bareShove && adv === 'lower' && !cbShield && !(owShield.enabled(bot) && !ctx.prof.player && bowShield)) await guard.raise(false)
   }
+  if (bareShove === 'equip') {
+    await holdWeapon()
+    return NEXT
+  }
+  if (bareShove) return
 
   const edgeSpam = turn.edgeHit === 'hit' && iframes === 0 && r <= HIT_REACH && !intoShield && inSight && cooldownLeft > 0 && owMelee !== true && !ctx.owShot
   if (edgeSpam && ready('edgeSpamNote')) { rest('edgeSpamNote', 3000); used('бью у края, не дожидаясь заряда') }
@@ -572,9 +642,14 @@ export async function strikeTurn (ctx: DuelCtx, turn: TurnFrame) {
         if (swapTo < 0 && (await holdItem(axe))) swungWith = axe
       }
       if (guard) await guard.raise(false)
+      // A rescue or terrain action can leave a bucket/block in hand after the strike decision.
+      if (swapTo < 0 && swungWith && bot.heldItem?.name !== swungWith.name) { await holdWeapon(); return NEXT }
       const use = bot._ndUse
       if (!(use && (use.cur || gameClock.now() - (use.endedAt || 0) < mf.clock.msPerTick))) {
-        const sprintHit = mf.clock.srvSprint && mf.clock.charge(0) > 0.9
+        // canHit predates shield/equipment awaits; restoring even the same sword can reset its charge.
+        const charge = mf.clock.charge(0)
+        if (!turn.axeTap && !edgeSpam && !(charge >= (race ? .91 : 1))) return NEXT
+        const sprintHit = mf.clock.srvSprint && charge > 0.9
         ctx.swingCrit = falling && !mf.clock.srvSprint
         const after = sprintHit ? (closing > 0.1 && theirR < 3.2 && !turn.pushing ? 'stap' : 'wtap') : null
         mf.hit(ctx.entity, { swapTo, after, kind: ctx.hitKind, diag: { jumped: ctx.jumpedForCrit, race: race && theirR <= 2.6 } })

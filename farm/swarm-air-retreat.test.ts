@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createSwarmDriver } from './swarm/swarm-driver'
+import { swarmTurnTasks } from './swarm/swarm-driver/turn-tasks'
+import { swarmRetry } from './swarm/swarm-driver/retry'
 
 test('проигранный размен в контакте: на насест без хилки; выигранный — бой', async () => {
   for (const [hp, dy] of [[1, 0], [1, 4], [20, 0]]) {
@@ -46,4 +48,43 @@ test('полное хп против сильного (выжить < убить
     equipment: { weapon: 'netherite_sword', enchanted: true, armor: ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots'] } }])
   await driver.turn(bot)
   assert.equal(calls.find(c => c.method === 'fly_to'), undefined)
+})
+
+test('занятый насест закрывает только посадку, потолок над ботом — и следующий взлёт', async () => {
+  for (const [why, flights] of [
+    ['негде сесть у цели (под навесом или занято)', 2],
+    ['над головой блок, неба в 10 бл. нет', 1]
+  ] as const) {
+    const calls: any[] = [], m = { p: { x: 0, y: 64, z: 0 }, inv: { elytra: 1, firework_rocket: 10 } }
+    const b = { name: 'A', c: { async call(method, params) {
+      calls.push({ method, params })
+      return { status: 'done', detail: { ok: method === 'fly_to' && calls.filter(c => c.method === 'fly_to').length > 1, why } }
+    } } }
+    const sw: any = { now: () => 1000, generation: 1, alive: () => true, pos: { A: m },
+      arena: { x: 0, y: 64, z: 0, r: 100 }, log() {}, detail: r => r.detail,
+      rangedAdvantage: () => false }
+    Object.assign(sw, swarmRetry(sw))
+    const action = swarmTurnTasks(sw)
+    for (const x of [20, -20]) await action.turnFlee({ b, round: 1, m, enemies: [], context: { members: [] },
+      board: { recordFact() {} }, member: {}, task: { position: { x, y: 80, z: 0 }, data: { perch: true } } })
+    assert.equal(calls.filter(c => c.method === 'fly_to').length, flights, why)
+  }
+})
+
+test('преследователь у недоступного насеста: отрыв на элитрах до пешего отхода', async () => {
+  const calls: any[] = [], m = { p: { x: 0, y: 64, z: 0 }, inv: { elytra: 1, firework_rocket: 10 } }
+  const b = { name: 'A', c: { async call(method, params) {
+    calls.push({ method, params })
+    return { status: 'done', detail: calls.length === 1
+      ? { ok: false, why: 'негде сесть у цели (под навесом или занято)' } : { ok: true } }
+  } } }
+  const sw: any = { now: () => 1000, generation: 1, alive: () => true, pos: { A: m },
+    arena: { x: 0, y: 64, z: 0, r: 100 }, log() {}, detail: r => r.detail,
+    bounded: p => p, rangedAdvantage: () => false }
+  Object.assign(sw, swarmRetry(sw))
+  await swarmTurnTasks(sw).turnFlee({ b, round: 1, m, context: { members: [] },
+    enemies: [{ id: 'Foe', position: { x: 8, y: 64, z: 0 }, seenAt: 1000 }],
+    board: { recordFact() {} }, member: {}, task: { position: { x: 20, y: 80, z: 0 }, data: { perch: true } } })
+  assert.deepEqual(calls.map(c => c.method), ['fly_to', 'fly_to'])
+  assert.deepEqual(calls[1].params.at, { x: -30, y: 64, z: 0 }, 'полёт прочь от преследователя')
 })

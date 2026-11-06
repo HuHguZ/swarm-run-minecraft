@@ -93,14 +93,15 @@ test('a visible static third-body ray intercept is diagnostic only and does not 
 
 test('C2b still refuses a wall or cancellation appearing during look without activating', async () => {
   for (const change of ['wall', 'cancel']) {
-    const f = fixture(), ctl = { aborted: false }, look = f.bot.look
+    const f = fixture(), ctl = { aborted: false }, look = f.bot.look, charges = f.bot.heldItem.count
     try {
       f.bot.look = async (...args) => { await look(...args)
         if (change === 'wall') pick.blockOnRay = () => ({ name: 'stone' }); else ctl.aborted = true }
       const r: any = await windGravityAt(f.bot, f.target, { ctl })
       assert.equal(r.fired, false); assert.equal(f.bot.activations, 0)
-      assert.equal(r.why, change === 'wall' ? 'release_changed_or_unsafe' : 'cancelled_or_changed')
-      if (change === 'wall') assert.equal(r.check, 'block')
+      // The release target guard now sees the new wall before the narrower aim-ray guard.
+      assert.equal(r.why, 'cancelled_or_changed'); assert.equal(r.check, 'target')
+      assert.equal(f.bot.heldItem.count, charges); assert.equal(f.bot._ndWindCd, undefined)
     } finally { f.restore() }
   }
 })

@@ -43,16 +43,21 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     // «убил, хотя у него элитры и фейерверки» — пешком от «Скорости II» не уйти). С этого места не вышло — пешком, как раньше.
     const chaser = enemies.filter(e => now() - e.seenAt < 1000 && distance(e.position, m.p) <= 12)
       .sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
-    // Уже на насесте — только если он поднялся ко мне на 6 бл.: дальше насест держит лук (игра 25.10: на насесте 30 с стоял под ним, убит).
-    if (chaser && (!task.data?.perch || distance(m.p, task.position) <= 3 && distance(chaser.position, m.p) <= 6) && (m.inv?.elytra || m.armor?.torso === 'elytra') && (m.inv?.firework_rocket || 0) >= 5 && sw.blocked && !sw.blocked(b, `airflee:${b.name}`)) {
+    const airFlee = async () => {
+      if (!chaser || now() - chaser.seenAt >= 1000 || distance(chaser.position, m.p) > 12 || !(m.inv?.elytra || m.armor?.torso === 'elytra') || (m.inv?.firework_rocket || 0) < 5 || !sw.blocked || sw.blocked(b, `airflee:${b.name}`) || sw.blocked(b, `flyfrom:${b.name}`)) return false
       const d = Math.hypot(m.p.x - chaser.position.x, m.p.z - chaser.position.z) || 1
       const at = bounded({ x: m.p.x + (m.p.x - chaser.position.x) / d * 30, y: arena.y, z: m.p.z + (m.p.z - chaser.position.z) / d * 30 })
-      const f = detail(await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message })))
-      if (!currentTurn(sw, b, round)) return
+      const reply = await b.c.call('fly_to', { at, timeoutSeconds: 10, arena }).catch(e => ({ why: e.message }))
+      if (!currentTurn(sw, b, round) || reply?.code === 'RESCUE_BUSY') return true
+      if (reply?.status === 'interrupted') { b.swarmFightReply = reply; cooldown.set(`fight:${b.name}`, now() + 500); return true }
+      const f = detail(reply)
       log(`🪽↩ ${b.name}: ${chaser.id} в ${distance(chaser.position, m.p).toFixed(1)} бл. — улетаю на 30 бл. — ${f.ok ? 'сел' : f.why || f.error || '?'}`)
-      if (f.ok) return
+      if (f.ok) return true
       sw.failed(b, `airflee:${b.name}`)
+      return false
     }
+    // Уже на насесте — только если он поднялся ко мне на 6 бл.: дальше насест держит лук (игра 25.10: на насесте 30 с стоял под ним, убит).
+    if (chaser && (!task.data?.perch || distance(m.p, task.position) <= 3 && distance(chaser.position, m.p) <= 6) && await airFlee()) return
     // Догоняет (8 бл.), а элитр нет или не вышло — прыжок на заряде ветра прочь от него (пользователь 25.10: «пусть кидают ветер
     // себе под ноги, чтобы убегать, если догоняю»): разбег от него, заряд под ноги — толчок вперёд и вверх, до 2 подряд.
     if (chaser && distance(chaser.position, m.p) <= 8 && (m.inv?.wind_charge || 0) > 0 && sw.blocked && !sw.blocked(b, `windflee:${b.name}`)) {
@@ -94,7 +99,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       if (distance(m.p, task.position) > 3 && !landed) {
         // Не долетел — к тому же насесту с того же места снова не лететь (повтор по причине, а не через 8 с).
         const perch = cellKey({ x: Math.floor(task.position.x), y: Math.floor(task.position.y), z: Math.floor(task.position.z) })
-        // Отказ «не перелететь / негде сесть / над головой блок» — про место взлёта, а не про насест: с этого места не лететь ни к
+        // Отказ «не перелететь / над головой блок» — про место взлёта, а не про насест: с этого места не лететь ни к
         // какому (игра 25.10: 26 попыток к соседним насестам подряд, бот висел).
         if (!sw.blocked(b, `fly:${b.name}`, perch) && !sw.blocked(b, `flyfrom:${b.name}`)) {
           const reply = await b.c.call('fly_to', { at: task.position, timeoutSeconds: 15, arena }), r = detail(reply)
@@ -116,7 +121,7 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
           // Коротко запоминаем отказ полёта в плане: зигзаг на 2 бл. не делает тот же насест достижимым.
           board.recordFact(b.name, now(), { id: `perch-failed:${b.name}:${perch}`, kind: 'mark', position: task.position }, 15000)
           sw.failed(b, `fly:${b.name}`, perch)
-          if (/перелететь|негде сесть|над головой/.test(r.why || '')) sw.failed(b, `flyfrom:${b.name}`)
+          if (/перелететь|над головой/.test(r.why || '')) sw.failed(b, `flyfrom:${b.name}`)
         }
       } else {
         const rescue = b.webRescue
@@ -136,6 +141,8 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
         await b.c.call('swarm_hold', { sneak: true, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 2, arena })
         return
       }
+      // Посадка на насест закрыта — от преследователя всё ещё можно улететь к полю.
+      if (await airFlee()) return
     }
     // Укрытие без своих (пользователь 14.10: «если своих нет — прятаться в колизее, в блоках или на высоте, и шифт
     // зажимать, чтобы мы не видели его»): дошёл — сидеть на шифте, ник за блоками не виден.

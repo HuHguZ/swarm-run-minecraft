@@ -60,10 +60,10 @@ test('strong foe at a void edge: swords and wind lead him to the void, including
   assert.ok(plan.get('s5')!.data!.shove && plan.get('s5')!.data!.push, 'four blocks to the edge: the wind charge reaches')
   assert.equal(onHim(plan).filter(t => !t.data!.push).length, 5, 'несколько ударов ведут к краю в четырёх блоках: работают все пять мечников')
   assert.ok(onHim(plan).every(t => t.data!.shove && Math.cos(t.data!.slot * Math.PI / 4) > 0), 'и заряды, и цепь ударов направлены в пустоту')
-  const maceMan = [blue('mace', 0, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 2 } }), blue('m3', 1, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 3 } }), ...Array.from({ length: 4 }, (_, k) => blue(`c${k}`, k + 2))]
+  const maceMan = [blue('mace', 0, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 1 } }), blue('m3', 1, { inventory: { diamond_sword: 1, mace: 1, wind_charge: 3 } }), ...Array.from({ length: 4 }, (_, k) => blue(`c${k}`, k + 2))]
   const g = scene(maceMan)
   const pm = planPvp(g.board, maceMan, { ...STRONG, edgeOf: () => ({ x: -1, z: 0, drop: Infinity, at: 4 }) })
-  assert.ok(!pm.get('mace')!.data!.push && pm.get('m3')!.data!.push, 'a mace keeps two charges for its launch; the third may push')
+  assert.ok(pm.get('mace')!.data!.push && pm.get('m3')!.data!.push, 'a mace no longer imposes a fixed two-charge offensive reserve')
 })
 
 test('lava kills the naked, not netherite with Protection IV: no shove into a pit he walks out of', () => {

@@ -72,18 +72,18 @@ function publicRosterPlan(f: ReturnType<typeof fixture>, withRoster = true) {
   const board = sw.boardOf(f.helper)
   board.setMembers(sw.membersOf(f.helper))
   assert.equal(board.observe('helper', sw.now(), { id: 'humanFoe', visible: true,
-    position: { x: 640.5, y: 128, z: 600.5 }, equipment: { weapon: 'iron_sword' } }), true)
+    position: { x: 623.5, y: 128, z: 600.5 }, equipment: { weapon: 'iron_sword' } }), true)
   return sw.refresh(f.helper).task
 }
 
-test('public human opponent enters actual finishing plan without enemy health', () => {
+test('armed fighter engages a visible human in reach without enemy health or a fake finishing phase', () => {
   const f = fixture('living')
   f.ctx.humanNames = ['humanFoe', 'humanFoe', 'humanFoe', 'humanFoe', 'humanFriend', 'humanGone', 'helper', 'dead']
   f.ctx.humans.humanFoe = Object.defineProperty({}, 'hp', { get() { assert.fail('enemy health is not public roster data') } })
   const task = publicRosterPlan(f)
   assert.equal(task.kind, 'fight', JSON.stringify(task))
   assert.equal(task.data.target, 'humanFoe')
-  assert.equal(task.data.finishing, true)
+  assert.notEqual(task.data.finishing, true)
 })
 
 test('arena public roster callback follows replaced player lists', () => {

@@ -79,6 +79,44 @@ test('the arena status, panic, proximity alarm and freeze watcher respect native
   assert.deepEqual(calls, ['status', 'status', 'release', 'stop'], 'ordinary panic resumes after the actual rescue ends')
 })
 
+test('the proximity alarm preserves a pending wing while ordinary work and explicit stops remain interruptible', async t => {
+  t.mock.method(globalThis, 'setInterval', fn => fn as any)
+  const calls: string[] = [], p = { x: 0, y: 64, z: 0 }
+  const foe = { id: 'Enemy', seenAt: Date.now(), position: { x: 4, y: 65, z: 0 } }
+  let finishWing: (reply: any) => void
+  const b: any = { name: 'A', team: 'blue', swarmReserved: {}, c: { call(method) {
+    calls.push(method)
+    if (method === 'wing_orbit') return new Promise(resolve => { finishWing = resolve })
+    return Promise.resolve({ status: 'done' })
+  } } }
+  const ctx: any = { i: 31, bots: [b], names: ['A'], pos: { A: { p, gliding: true } }, humans: {},
+    busy: new Set(), out: new Set(), deadNow: new Set(), round: 1, between: false, teams: false, arms: false,
+    X: 0, Y: 64, Z: 0, R: 24, L: { map: 'flat' }, teamOf: () => 'blue', alive: () => true, home: () => '0 0',
+    hostile: () => true, rcon() { throw Error('No live actions') }, log() {} }
+  installSight(ctx)
+  ctx.swarmDriver = { enemies: () => [foe] }
+  ctx.enemiesOf = () => [{ n: foe.id, d: Math.sqrt(17), spd: 5.6, human: true }]
+  const alarm = watchAlarm(ctx) as unknown as () => void
+  const flight = b.c.call('wing_orbit', { target: foe.id }), action = b.last
+  try {
+    alarm()
+    b.looting = true
+    alarm()
+    assert.deepEqual(calls, ['wing_orbit'])
+    assert.equal(b.last, action)
+    await b.c.call('stop')
+    assert.deepEqual(calls, ['wing_orbit', 'stop'])
+  } finally {
+    finishWing?.({ status: 'done' })
+    await flight
+  }
+  delete b.swarmReserved
+  b.last = { m: 'chest_take', pending: true, p: {} }
+  alarm()
+  alarm()
+  assert.deepEqual(calls, ['wing_orbit', 'stop', 'stop'])
+})
+
 test('a stale ascent cannot stop rescue before the general freeze guard; an ordinary stalled ascent still stops', t => {
   t.mock.method(globalThis, 'setInterval', fn => fn as any)
   for (const rescuing of [true, false]) {

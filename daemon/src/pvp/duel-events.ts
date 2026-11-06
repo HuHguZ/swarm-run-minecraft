@@ -15,13 +15,16 @@ import { ANGRY_IF_HIT, EYE, HOSTILE_MOB, TICK_MS, isPlayer } from './rules'
 import { Vec3 } from './vec3'
 import { type DuelCtx } from './turn'
 import { isAlly } from '../combat/ally-safety'
+import { smashShieldAim } from '../combat/shield'
+import { shieldHold } from '../reflex-lock'
 
 // Удары и смерти, другие нападающие, мобы, двое на одного, утилиты, фаерболы, его лук.
 export function installEvents (ctx: DuelCtx) {
   const { attackers, bot, bowWatch, ctl, dead, mobHits, noteExchange, session, st, swatted, tt, used, vision } = ctx
   const onHurt = ctx.onHurt = (victim, source) => {
-    if (isAlly(bot, source) || isAlly(bot, victim)) return
+    if (isAlly(bot, victim)) return
     if (victim?.id === ctx.entity.id) { ctx.targetHurtAt = gameClock.now(); ctx.targetHurtBy = source ? (source.id === bot.entity?.id ? bot.username : source.username || null) : null; ctx.strikeSlotAt = 0 }
+    if (isAlly(bot, source)) return
     if (source && bot.entity && ((victim?.id === ctx.entity.id && source.id === bot.entity.id) || (victim === bot.entity && source.id === ctx.entity.id))) noteExchange()
     if (victim?.id === ctx.entity.id && source === bot.entity) {
       st.landed++
@@ -247,7 +250,11 @@ export function installFallAndAim (ctx: DuelCtx) {
         // Прогноз следящего бывает с NaN по x/z (s7-arms11, [nan-guard] lookAt({x:null,y:106,z:null})) — тогда смотрю на тело.
         const p0 = ctx.track.at(2)
         const p = [p0.x, p0.y, p0.z].every(Number.isFinite) ? p0 : ctx.entity.position
-        bot.lookAt(ctx.sightOff ? p.plus(ctx.sightOff) : p.offset(0, (ctx.entity.height || 1.8) * 0.75, 0), true).catch(() => {})
+        const lead = ctx.sightOff ? p.plus(ctx.sightOff) : p.offset(0, (ctx.entity.height || 1.8) * 0.75, 0)
+        const defense = bot._ndMaceDefense
+        const guardAim = defense?.ctl === ctx.ctl && defense.target === ctx.entity.username && shieldHold(session) && ctx.guard?.blocking?.()
+          ? smashShieldAim(bot, ctx.entity, lead) : null
+        bot.lookAt(guardAim ?? lead, true).catch(() => {})
       } else if (ctx.aim === 'away') {
         const me = bot.entity.position
         const yaw = yawTo(ctx.entity.position, me) // от него к нам — туда и бежим

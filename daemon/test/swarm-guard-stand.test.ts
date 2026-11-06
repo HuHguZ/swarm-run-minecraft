@@ -16,8 +16,9 @@ function scene() {
     data: { target: 'Champ', swarmStand: at(1.5) } })
   const task: any = { id: 'pvp:guard', kind: 'fight', data: { target: 'Champ' } }
   const S: any = { board, team: [member], enemies: [foe], state: {}, plan: new Map([['guard', task]]),
-    options: {}, edgeAt: () => null, diggers: new Map(), digVacate: new Map(), digAvoid: [at(10, 10, 119)],
-    sectorOf: () => 0, ringAt: () => at(3), weak: () => false }
+    options: {}, diggers: new Map(), digVacate: new Map(), digAvoid: [at(10, 10, 119)], weak: () => false }
+  pvpSectors(S)
+  S.sectorOf = () => 0; S.ringAt = () => at(3)
   return { S, task, foe, run: () => { assignFighters(S); return task.data.swarmStand } }
 }
 

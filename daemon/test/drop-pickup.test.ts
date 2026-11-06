@@ -86,24 +86,41 @@ test('known harvest waits for a delayed spawn packet within its pickup budget', 
   finally { clearTimeout(appear); clearInterval(pickup) }
 })
 
-test('750 TPS still waits for native spawn and pickup replies without counting a predicted drop', async () => {
+test('750 TPS still waits for native spawn and pickup replies without counting a predicted drop', async t => {
   const file = path.join(__dirname, '../src/actions.js')
   const realRequire = createRequire(file)
   const gameClock = realRequire('./game-clock')
+  let wallNow = 0
+  t.mock.method(gameClock.wall, 'monotonic', () => wallNow)
   const clock = new gameClock.GameClock({ manual: true, epoch: 1000 })
   clock.setState({ tick_rate: 750 }); clock.start(); gameClock.activate(clock)
   const drop = { id: 13, name: 'item', position: new Vec3(1.5, 64, .5), getDroppedItem: () => ({ name: 'string', count: 1 }) }
   const bot = fakeBot(drop); bot.version = '1.21.11'; delete bot.entities[13]
-  const ticks = setInterval(() => { for (let i = 0; i < 20; i++) clock.pulse() }, 2)
-  const appear = setTimeout(() => { bot.entities[13] = drop }, 100)
-  const pickup = setTimeout(() => { bot.emit('playerCollect', bot.entity, drop); delete bot.entities[13] }, 200)
   const context = { module: { exports: {} as Record<string, any> }, console, setTimeout, clearTimeout, setInterval, clearInterval, Date,
     process: { env: {} as Record<string, any> }, require: n => n === './pack' ? { fits: () => true, ignoreDrop: () => false } : realRequire(n) }
   vm.runInNewContext(bodySource(file), cjsContext(context))
   try {
-    const result = await context.module.exports.collectNearbyDrops(bot, { aborted: false }, { timeoutMs: 1500, appearMs: 1500 })
-    assert.equal(result, 1)
+    // Deliver the native inputs after loading the fixture. Wall timers scheduled
+    // before cold VM loading could both fire before the item was ever observed.
+    let settled = false
+    const pending = context.module.exports.collectNearbyDrops(bot, { aborted: false }, { timeoutMs: 1500, appearMs: 1500 })
+    pending.then(() => { settled = true })
+    const advance = async ticks => {
+      wallNow += ticks * 1000 / 750; clock.advanceTicks(ticks)
+      await new Promise<void>(resolve => setImmediate(resolve))
+    }
+    await advance(75)
+    assert.equal(settled, false, 'native spawn is still pending after the gameplay budget')
+    bot.entities[13] = drop
+    await advance(2)
+    assert.equal(bot._ndLastCollect.seen, 1)
+    await advance(73)
+    assert.equal(settled, false, 'a visible predicted pickup is not a native collect receipt')
+    assert.equal(bot._ndLastCollect.picked, 0)
+    bot.emit('playerCollect', bot.entity, drop); delete bot.entities[13]
+    await advance(1)
+    assert.equal(await pending, 1)
     assert.ok(clock.ticks * 50 > 1500, 'native replies can arrive after the original gameplay budget')
     assert.equal(bot.entities[13], undefined)
-  } finally { clearInterval(ticks); clearTimeout(appear); clearTimeout(pickup); clock.dispose(); gameClock.activate(null) }
+  } finally { clock.dispose(); gameClock.activate(null) }
 })

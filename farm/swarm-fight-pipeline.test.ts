@@ -34,10 +34,10 @@ function pipeline(at = { x: .5, y: 64, z: .5 }) {
   installSight({ i: 31, arms: false, bots: [b], names: ['A'], pos: sw.pos,
     humans: {}, X: 0, Y: 64, Z: 0, R: 24, arena: sw.arena, rcon() {}, log() {}, alive: () => true,
     deathAt: {}, home: () => '0 0', hostile: () => true } as any)
-  const start = async (initial = task) => {
+  const start = async (initial = task, contact = true) => {
     task = initial; b.swarmTask = task
     const running = work.turnFight({ b, board: {}, task, round: 1, m: sw.pos.A, enemies: [foe],
-      context: { members: [] }, foe, contact: true } as any)
+      context: { members: [] }, foe, contact } as any)
     await flush()
     return { running }
   }
@@ -57,6 +57,76 @@ test('actual turnFight -> arena wrapper -> real intent -> fight_guard keeps the 
     assert.equal(f.b.last, intent); assert.equal(f.b.swarmTask, next)
     assert.deepEqual(current.params.shoveAt, next.data.shoveAt)
   } finally { await f.done(running) }
+})
+
+test('armed fighter at 3-6 blocks delegates a stationary target to native combat after clearing a dig support', async () => {
+  for (const gap of [3, 4.5, 6]) {
+    const f = pipeline(), stand = { x: 2.5, y: 64, z: .5 }
+    f.foe.position.x = stand.x + gap
+    f.sw.pos.A.inv = { netherite_sword: 1 }
+    const task = f.fight({ digAvoid: [{ x: 0, y: 63, z: 0 }], swarmStand: stand })
+    const evacuation = await f.start(task, false)
+    try { assert.equal(f.session.current.name, 'goto', 'reserved support is vacated before combat') }
+    finally { await f.done(evacuation.running) }
+    f.sw.pos.A.p = stand
+    const combat = await f.start(task, false)
+    try {
+      assert.equal(f.session.current.name, 'fight', `${gap} blocks: no extra orbit or walk once clear of the dig`)
+      assert.equal(f.session.current.params.target, 'Champ')
+      assert.deepEqual(f.calls.map(c => c.method), ['goto', 'fight'])
+    } finally { await f.done(combat.running) }
+  }
+})
+
+for (const shove of [false, true]) test(`a real ${shove ? 'unchanged shove' : 'ordinary'} approach survives moving-target stand replans and then reaches native combat`, async () => {
+  const f = pipeline(), far = { x: 20, y: 63, z: 20 }, stand = { x: 10.5, y: 64, z: .5 }
+  const direction = shove ? { shove: true, shoveAt: { x: 20, y: 64, z: .5 } } : {}
+  f.foe.position = { x: 12.5, y: 64, z: .5 }
+  f.sw.pos.A.inv = { netherite_sword: 1 }
+  const approach = await f.start(f.fight({ ...direction, slot: 0, digAvoid: [far], swarmStand: stand }), false)
+  let next = f.b.swarmTask
+  try {
+    const current = f.session.current, intent = f.b.last
+    assert.equal(current.name, 'goto'); assert.equal(f.b.swarmReposition, undefined)
+    assert.equal(current.params.x, stand.x)
+    for (let k = 1; k <= 3; k++) {
+      f.sw.pos.A.p = { x: .5 + k, y: 64, z: .5 }
+      f.foe.position = { x: 12.5 + k * .5, y: 64, z: .5 }
+      next = f.fight({ ...direction, slot: 0, digAvoid: [far], swarmStand: { ...stand, x: stand.x + k * .5 } })
+      f.set(next)
+      assert.equal(f.preempt(), false, 'a clear executing path is not invalidated by a moving target sector')
+      assert.equal(current.ctl.aborted, false); assert.equal(f.b.last, intent)
+      assert.equal(f.b.swarmTask, next)
+    }
+    assert.deepEqual(f.calls.map(c => c.method), ['goto'])
+  } finally { await f.done(approach.running) }
+  f.sw.pos.A.p = { x: 8.5, y: 64, z: .5 }
+  const combat = await f.start(next, false)
+  try {
+    assert.equal(f.session.current.name, 'fight')
+    assert.deepEqual(f.calls.map(c => c.method), ['goto', 'fight'])
+  } finally { await f.done(combat.running) }
+})
+
+test('an actual approach still stops for new underfoot or path digging, target, retreat, shove and offensive phase changes', async () => {
+  for (const change of ['underfoot', 'path', 'path_outside_stand', 'target', 'retreat', 'shove', 'mode']) {
+    const f = pipeline(), far = { x: 20, y: 63, z: 20 }, stand = { x: 10.5, y: 64, z: .5 }
+    f.foe.position = { x: 12.5, y: 64, z: .5 }
+    const base = { slot: change === 'path_outside_stand' ? undefined : 0, digAvoid: [far],
+      swarmStand: change === 'path_outside_stand' ? { ...stand, z: 8.5 } : stand }
+    const { running } = await f.start(f.fight(base), false)
+    try {
+      const extra = change === 'underfoot' ? { digAvoid: [far, { x: 0, y: 63, z: 0 }] }
+        : change === 'path' || change === 'path_outside_stand' ? { digAvoid: [far, { x: 6, y: 63, z: 0 }], swarmStand: base.swarmStand }
+          : change === 'target' ? { target: 'Other' }
+          : change === 'shove' ? { shove: true, shoveAt: { x: -2, y: 64, z: .5 } }
+            : { fountain: 'close' }
+      f.set(change === 'retreat' ? { kind: 'flee', data: { target: 'Champ' } } : f.fight({ ...base, ...extra }))
+      assert.equal(f.preempt(), true, change)
+      assert.equal(f.session.current.ctl.aborted, true, change)
+      assert.deepEqual(f.calls.map(c => c.method), ['goto', 'stop'])
+    } finally { await f.done(running) }
+  }
 })
 
 for (const worn of [false, true]) test(`a fresh distant glider reaches body combat with ${worn ? 'worn' : 'carried'} elytra and flight fuel`, async () => {

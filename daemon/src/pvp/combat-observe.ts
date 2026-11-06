@@ -74,7 +74,7 @@ function usingOf (bot, e) {
 
 function effectAmp (bot, name) {
   try {
-    const ef = bot.registry.effectsByName[name]
+    const ef = bot.registry.effectsByName[name] || bot.registry.effectsByName[name.replace(/(^|_)([a-z])/g, (_m, _sep, c) => c.toUpperCase())]
     const e = ef && bot.entity.effects && bot.entity.effects[ef.id]
     return e ? e.amplifier : -1
   } catch { return -1 }
@@ -208,6 +208,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
     T.tick++
     const pos = entity.position
     const seen = !T.honestHp || visible()
+    if (!seen && T.iframe) T.iframe.known = null
     if (pos && seen) {
       if (T.prev) T.vel = { x: pos.x - T.prev.x, y: pos.y - T.prev.y, z: pos.z - T.prev.z }
       T.prev = { x: pos.x, y: pos.y, z: pos.z }
@@ -281,6 +282,7 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
   }
   const onDamage = (pk) => {
     if (!pk || pk.entityId !== entity.id) return
+    if (T.iframe) T.iframe.known = null
     const cause = pk.sourceCauseId > 0 ? pk.sourceCauseId - 1 : null
     if (bot.entity && cause === bot.entity.id) {
       const p = T.pending.shift()
@@ -310,7 +312,9 @@ function trackFoe (bot, entity, { honest = true, visible: isVisible = null, roun
       const [lo, hi] = ENV[type] || [0.5, 6]
       hp.env(lo, hi)
     }
-    T.iframe = { raw: 4, at: T.tick }
+    // Lava's native raw damage is 4. A packet alone cannot expose a hidden hazard.
+    const lava = type === 'lava' && (require('./search') as typeof import('./search')).observedCollision(bot).blockAt(entity.position)?.name === 'lava'
+    T.iframe = { raw: 4, at: T.tick, known: lava ? { raw: 4, at: now() } : null }
   }
   const onStatus = (p) => {
     if (!p || p.entityId !== entity.id || p.entityStatus !== dm.TOTEM.status) return
@@ -439,4 +443,4 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
   }
 }
 
-export { observe, trackFoe, readFoeEstimate, foeHpUpper, foeHitProof, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, ENV }
+export { observe, trackFoe, readFoeEstimate, foeHpUpper, foeHitProof, itemObs, usingOf, exactHpTelemetryOnly, reachTo, isPlayer, effectAmp, ENV }

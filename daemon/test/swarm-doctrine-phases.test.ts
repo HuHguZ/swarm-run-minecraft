@@ -338,7 +338,7 @@ test('hp estimate: the board keeps the lowest honest upper bound across allies, 
   assert.ok(hurt.ourLoss < fresh.ourLoss, 'a foe already at 7 dies sooner and hurts us less')
 })
 
-test('натиск против людей: пробивающие в бой, голый вплотную дерётся, издали прячется и перевооружается', () => {
+test('натиск против людей: пробивающие в бой, голый и вплотную ищет выход и перевооружается', () => {
   const naked = { weapon: undefined, armor: [], ench: { protection: 0, sharpness: 0 }, inventory: {} }
   const team = [member('a', { position: p(0) }), member('a2', { position: p(-4) }), member('a3', { position: p(-6) }),
     member('b', { ...naked, position: p(-2) }), member('c', { ...naked, position: p(30) }), member('d', { ...naked, position: p(8) }),
@@ -351,7 +351,8 @@ test('натиск против людей: пробивающие в бой, г
   assert.ok(plan.get('b')!.data!.hide && plan.get('b')!.data!.rearm, 'не пробивающий прячется и запрашивает комплект')
   assert.ok(plan.get('b')!.position.x < -4, 'за спины своих, по другую сторону от врага')
   assert.equal(plan.get('c')!.kind, 'loot')
-  assert.equal(plan.get('d')!.kind, 'fight', 'вплотную не убежать — драться')
+  assert.equal(plan.get('d')!.kind, 'flee', 'близость не доказывает, что безоружный физически зажат')
+  assert.ok(plan.get('d')!.data!.rearm, 'отход сохраняет запрос снаряжения')
   assert.equal(plan.get('w')!.kind, 'fight', 'раненый у врага под носом не бежит и не ест')
   assert.ok(!['false-weakness', 'false-retreat', 'cocoon', 'line', 'ring', 'weak-center'].includes(f.board.doctrineState()!.doctrine))
 })
@@ -593,16 +594,20 @@ test('переигранный: потеря видимости не превр�
   assert.equal(planPvp(f.board, team, options).get('b0')!.data!.kite, true, 'одиночка по-прежнему избегает сильного')
 })
 
-test('натиск: слабый у границы 5 бл. не мигает «бой ↔ укрытие» — убегавший дерётся с 3.5, дерущийся уходит дальше 6', () => {
+test('натиск: безоружный держит отход при смене дистанции, получивший комплект возвращается в бой', () => {
   const human = { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } }
   const team = [member('w', { weapon: undefined, armor: [], ench: { protection: 0, sharpness: 0 }, inventory: {}, position: p(0) })]
   const f = scene(team), options = { quorum: 1, aggressive: true, hideouts: [p(-40)] }
   const at = (t: number, x: number) => { f.at(t); f.see('human', p(x), human); return planPvp(f.board, team, options).get('w')!.kind }
-  assert.equal(at(1000, 4.5), 'fight', 'вплотную — бой')
-  assert.equal(at(1500, 5.5), 'fight', 'дерущийся не бросает бой на 5.5')
-  assert.equal(at(2000, 7), 'flee', 'дальше 6 — уходит')
+  assert.equal(at(1000, 4.5), 'flee', 'сначала проверяет выход')
+  assert.equal(at(1500, 5.5), 'flee', 'отход не мигает у прежней границы боя')
+  assert.equal(at(2000, 7), 'flee', 'снаряжение по-прежнему нужно')
   assert.equal(at(2500, 4.5), 'flee', 'убегавший на 4.5 продолжает уходить')
-  assert.equal(at(3000, 3), 'fight', 'вплотную (3.5) — бой')
+  assert.equal(at(3000, 3), 'flee', 'дистанция 3 сама по себе не закрывает выход')
+  Object.assign(team[0], member('w'))
+  f.board.setMembers(team)
+  assert.equal(at(3500, 3), 'fight', 'получил боевой комплект — атакует того же стоящего врага')
+  assert.equal(at(4000, 5.5), 'fight', 'готовый боец продолжает атаку')
 })
 
 test('fled: reset, departure and death clear the latch; child cancellation does not', () => {

@@ -13,6 +13,7 @@ import * as survival from '../../survival'
 import * as flee from '../../flee'
 import * as guard from '../../ne-guard'
 import * as movement from '../../movement'
+import { bodyClear, supportAt, type CollisionWorld } from '../../navigation/geometry'
 import * as pick from '../../pick'
 import { Vec3 } from 'vec3'
 import * as lavaNav from '../../lava-nav'
@@ -31,7 +32,7 @@ export class TacticalSystem {
   private unfitLow: number | null = null
   private state: TacticalState | null = null
   private bot: MinecraftEntity | null = null
-  private episode: Episode | null = null
+  private episode: (Episode & { lavaLandingCtl?: Controller }) | null = null
   private generation = 0
   private lastSample = -Infinity
   private substantive = false
@@ -140,6 +141,8 @@ export class TacticalSystem {
     this.level = decision.level
     // An arena duel (pvp.duel with tempo, fight { arena }) is to the death by design: a retreat at level 3 only interrupted
     // the losing side's fight (S7 20:08, arms race). Lava, a fall, a blast, a wall or water stay with the tactics.
+    const intent = this.session.current
+    const arenaFight = state.protectedEncounter && intent?.name === 'fight' && !!intent.params?.arena && !!intent.ctl && !intent.ctl.aborted
     const hazard = state.waterEmergency || state.lava || state.lavaAhead || state.dangerousFall || state.embedded || state.explosion || state.drowning || state.waterEscape
     const arena = state.protectedEncounter && !!this.session.current?.params?.arena && !hazard
     // The blaze skill under fire resistance keeps level 3 too (S1 21:01): at the spawner a crowd of 3+ blazes makes hp < 12
@@ -148,6 +151,12 @@ export class TacticalSystem {
     // Без огнестойкости — тоже (s1c 06.10, решение пользователя «FR — не допуск»): навык сам ведёт бой без неё (радар залпов, щит,
     // коробка с окном, отдых и возврат); перехват уровня 3 рвал его и кампания звала его снова — два хозяина одного боя.
     const blazeOwned = state.protectedEncounter && this.session.current?.name === 'blaze' && !hazard
+    // A projected lava landing can use Flee, but its all-clear is a dry landing, not distance from the arena opponent.
+    if (decision.level === 0 && !hazard && this.lavaLandingComplete(state)) {
+      locks.cancel(this.session)
+      this.release('safe')
+      return
+    }
     if (state.protectedEncounter && (decision.level < 3 && !state.waterEscape || arena || blazeOwned)) {
       // Защищённый навык (blaze/дракон/дуэль) забирает руки у начатого раньше эпизода уровня <3: иначе Fight тактики держал
       // аренду, lookAt навыка ждал её, а ифриты били в упор (s1-post05 06.10: blaze «меч» 0 взмахов, 30 урона, смерть).
@@ -207,7 +216,17 @@ export class TacticalSystem {
     const repelDuringClimb = active?.source === 'ClimbOut' && decision.selected.id === 'Fight' && canRepelLavaAttacker(state)
     const fluidHandoff = active?.source === 'fall-controller' && state.lava
     if (active?.owner === 'Emergency' && !state.waterEmergency && decision.selected.id !== 'FreeEmbedded' && !repelDuringClimb && !fluidHandoff) return
-    this.begin(decision.selected, decision.candidates, state, decision.level)
+    this.begin(decision.selected, decision.candidates, state, decision.level, arenaFight)
+  }
+
+  private lavaLandingComplete(state: TacticalState): boolean {
+    const ctl = this.episode?.lavaLandingCtl
+    if (!this.pending || !ctl || locks.owner(this.session)?.ctl !== ctl || state.health <= (this.session.cfg?.lowHealth ?? 8) ||
+        state.burning || state.hotFloor || state.lavaEscapePending || state.inWater || state.blast || state.enemies.some(enemy => enemy.threatening)) return false
+    const body = this.bot?.entity, world = this.bot as CollisionWorld
+    if (!body?.onGround || body.isInLava || !body.position) return false
+    const p = body.position, support = supportAt(world, p, .04)
+    return !!support && p.x >= support.box.minX && p.x <= support.box.maxX && p.z >= support.box.minZ && p.z <= support.box.maxZ && bodyClear(world, p)
   }
 
   private interruptSkill(level: ThreatLevel): void {
@@ -217,10 +236,13 @@ export class TacticalSystem {
     current.ctl.abort()
   }
 
-  private begin(action: Candidate, candidates: Candidate[], state: TacticalState, level: ThreatLevel): void {
+  private begin(action: Candidate, candidates: Candidate[], state: TacticalState, level: ThreatLevel, arenaFight = false): void {
     const previous = this.episode
     if (previous) { this.finish(previous, 'preempted', { by: action.id }); locks.cancel(this.session) }
-    const episode: Episode = { action, at: state.at, hp: state.health, level, candidates, token: ++this.generation, state: stateSnapshot(state, this.session.bot), intent: this.session.current?.ctl }
+    const lavaLanding = arenaFight && level === 4 && state.lavaAhead && (action.id === 'Flee' || action.id === 'CreateDistance') &&
+      !state.lava && !state.hotFloor && !state.burning && !state.lavaEscapePending && !state.inWater && !state.drowning &&
+      !state.waterEscape && !state.blast && threatLevel({ ...state, lavaAhead: false }) < 4
+    const episode: Episode & { lavaLandingCtl?: Controller } = { action, at: state.at, hp: state.health, level, candidates, token: ++this.generation, state: stateSnapshot(state, this.session.bot), intent: this.session.current?.ctl }
     this.episode = episode
     this.escapes.begin(action.id, this.escapeObservation(state))
     this.incident?.actions.add(action.id)
@@ -229,6 +251,7 @@ export class TacticalSystem {
       ...(state.lavaAhead ? { lavaAhead: true, health: state.health, position: this.session.bot.entity.position.clone() } : {}) })
     let ending = 'completed'
     const pending: Promise<unknown> = locks.start(this.session, async (ctl: Controller) => {
+      if (lavaLanding) episode.lavaLandingCtl = ctl
       try {
         const result = await (this.ports.execute ? this.ports.execute(action, ctl, state) : this.execute(action, ctl, state))
         if (result && typeof result === 'object' && 'failed' in result && result.failed) {
@@ -576,7 +599,14 @@ export class TacticalSystem {
     if (this.episode) { this.finish(this.episode, reason); this.episode = null; this.arbiter.finished() }
     if (this.substantive) {
       // A worker accepted after waitForRelease belongs to the next plan.
-      if (reason !== 'unavailable' && reason !== 'disconnected' && this.session.current?.ctl === this.incident?.intent) this.interruptSkill(this.level)
+      const current = this.session.current, incident = this.incident
+      if (reason !== 'unavailable' && reason !== 'disconnected' && current?.ctl === incident?.intent) {
+        // The level-two warning never took the controls. Keep the arena escort flying on all-clear.
+        const escort = reason === 'safe' && this.level === 0 && incident?.threat === 2 && incident.actions.size === 0 &&
+          current?.name === 'wing_orbit' && current.params?.arena && this.bot?.entity?.elytraFlying === true &&
+          !this.pending && !this.session.reflex && !locks.owner(this.session)
+        if (!escort) this.interruptSkill(this.level)
+      }
       this.substantive = false
       this.escapes.clear()
       this.needsObservation = true

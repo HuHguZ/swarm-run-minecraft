@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events'
 import { transformSync } from 'esbuild'
 import { Vec3 } from 'vec3'
 import { bodySource } from './source-fixture'
+import * as reflex from '../src/reflex-lock'
 
 function fixture ({ distant = false, hidden = false, shield = true, arrives = 0, abortAt = Infinity, walkerAt = Infinity, walkerHidden = false }: any = {}) {
   let now = 10000
@@ -63,6 +64,7 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
       const id = raw.startsWith('.') ? './' + path.posix.join(path.posix.dirname(name), raw) : raw
       if (id === './game-clock') return clock
       if (id === './movement') return movement
+      if (id === './reflex-lock') return reflex
       if (id === 'vec3') return (require('vec3') as typeof import('vec3').Vec3)
       if (id === 'mineflayer-pathfinder') return { goals: {} }
       if (id === './perception') return perception
@@ -92,8 +94,21 @@ function fixture ({ distant = false, hidden = false, shield = true, arrives = 0,
     now -= 50; shot.position.z -= .6; threats.incoming(bot)
     now += 50; shot.position.update(current)
   }
-  return { bot, ctl, events, intervals, threats, foe, run: () => guard.duel({ bot },ctl,foe,1000) }
+  const session = { bot }
+  return { bot, ctl, events, intervals, threats, foe,
+    allowed: () => reflex.run(session, ctl, () => reflex.allowed(session)),
+    run: () => reflex.run(session, ctl, () => guard.duel(session,ctl,foe,1000)) }
 }
+
+test('the fixture uses actual reflex permission and refuses an already aborted duel controller', async () => {
+  const f = fixture()
+  assert.equal(f.allowed(), true)
+  f.ctl.aborted = true
+  assert.equal(f.allowed(), false)
+  await f.run()
+  assert.equal(f.events.some(e => e.kind === 'up' || e.kind === 'attack'), false)
+  assert.equal(f.intervals.size, 0)
+})
 
 test('actual Nether duel shields a visible imminent fireball behind its melee target, then resumes swings', async () => {
   const f = fixture()

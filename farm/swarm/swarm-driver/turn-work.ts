@@ -168,6 +168,9 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
 
   async function turnFight (tc: TurnCtx) {
     const { b, board, task, round, m, enemies, contact, foe } = tc
+    // Observation can reserve an escort while this turn is awaiting earlier work.
+    const active = () => currentTurn(sw, b, round) && !(b.swarmReserved && b.last?.m === 'wing_orbit' && b.last.pending === true)
+    if (!active()) return
     if (b.cur !== foe.id) b.noReach = 0
     b.cur = foe.id
     // Ближний бой прежде игнорировал сектор: свои вставали на опоры уже назначенной ямы.
@@ -183,7 +186,7 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     const to = task.data.shoveAt
     if (task.data.push && now() - foe.seenAt < 500) {
       const push = detail(await b.c.call('wind_push', { target: foe.id, force: !!task.data.shove, arena, allies: tc.context.members.map(a => a.id).filter(id => id !== b.name) }))
-      if (!currentTurn(sw, b, round)) return
+      if (!active()) return
       if (push.fired) { log(`💨 ${b.name} → ${foe.id}: заряд ветра${task.data.shove ? ' — сброс' : ''}`); return }
     }
     const stale = now() - foe.seenAt > 1000, far = distance(m.p, foe.position) > 18 && !rangedAdvantage(b)
@@ -209,7 +212,7 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     // могли достать до конца раунда (стенд 15×15, 21.10).
     const reach = sw.onslaught(b) || !!task.data.finishing
     if (!flyer && reach && below > 3 && !contact && await climbTo(b, foe, slotAt)) return
-    if (!currentTurn(sw, b, round)) return
+    if (!active()) return
     // Рядом, ниже на 1.8+: шаг на его уровень (клетка рядом с ним, допуск 1 бл.); «дошёл», а всё ещё ниже (допуск 2.5 засчитывал
     // стоящего на 2 ниже — десятки попыток в секунду, удара нет) — 1.5 с без попыток, бить тем, что достаёт.
     // Шаг не вышел — повтор, когда он сдвинулся на другую клетку или я ушёл с места (retry.ts), а не через 1.5 с.
@@ -224,7 +227,7 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
       const at = { x: foe.position.x + (m.p.x - foe.position.x) / d * k, y: foe.position.y, z: foe.position.z + (m.p.z - foe.position.z) / d * k }
       b.climbing = true
       const r = detail(await b.c.call('goto', { ...bounded(at), range: 1, timeoutSeconds: 4, arena, climb: true, exactY: true, _hunt: true, _climb: true }).catch(e => ({ why: e.message })).finally(() => { if (round === sw.generation) b.climbing = false }))
-      if (!currentTurn(sw, b, round)) return
+      if (!active()) return
       if (!r.arrived || foe.position.y - (pos[b.name]?.p?.y ?? m.p.y) > 1.5) sw.failed(b, `step:${b.name}`, foeCell)
       else return
     }
@@ -234,10 +237,10 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     const reachGap = distance(m.p, foe.position), grounded = foe.position.y - m.p.y < 2.5
     if (!flyer && reach && reachGap < 10 && grounded && (stale || (b.noReach || 0) >= 2)) {
       const breached = await breach(b, foe.position)
-      if (!currentTurn(sw, b, round)) return
+      if (!active()) return
       if (breached) { b.noReach = 0; return }
     }
-    if (!currentTurn(sw, b, round)) return
+    if (!active()) return
     const canFly = (m.inv.elytra || m.armor?.torso === 'elytra') && m.inv.firework_rocket > 3
     const flyerAway = flyer && (stale || reachGap > 48 && !canFly)
     if (flyerAway || stale || !task.data.committed || far && !flyer) {
@@ -250,14 +253,14 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     if (!flyer && distance(m.p, place) > 6 && !contact && !rangedAdvantage(b)) { await go(b, place); return }
     if (!flyer && foe.position.y - m.p.y > 4 && (m.inv.elytra || m.armor?.torso === 'elytra') && m.inv.firework_rocket >= 5 && !sw.blocked(b, `fly:${b.name}`, foeCell)) {
       const r = detail(await b.c.call('fly_to', { at: foe.position, timeoutSeconds: 15, arena }).catch(e => ({ why: e.message })))
-      if (!currentTurn(sw, b, round)) return
+      if (!active()) return
       if (!r.ok) sw.failed(b, `fly:${b.name}`, foeCell)
       return
     }
     // Динамит к его ногам (пользователь 15.10: «под игрока прям ставить»): в 2.5–4.5 бл., он на нашем уровне ±1, своих у него
     // нет; поставил — отбежать (blast).
     if (!flyer && sw.onslaught(b) && reachGap >= 2.5 && reachGap <= 4.5 && Math.abs(foe.position.y - m.p.y) <= 1.2 && now() - foe.seenAt < 500 && await blast(b, foe.position, `к ногам ${foe.id}`)) return
-    if (!currentTurn(sw, b, round)) return
+    if (!active()) return
     // Он выше на 1.8+ рядом (край крыши): бой коротко — 3 с, дальше снова шаг/столбик к нему (бой сам на 2–2.5 не строится).
     // Очередь ударов по окнам неуязвимости (pvp/strike-order, поток enc 21.10): свои, кто бьёт ту же цель у неё (6 бл.), —
     // по имени, одинаково у всех; удар в чужое окно — пустой взмах и сброс своей зарядки.
@@ -270,7 +273,7 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
       fight.intent = b.last
       reply = await pending
     } finally { if (b.swarmFight === fight) delete b.swarmFight }
-    if (!currentTurn(sw, b, round)) return
+    if (!active()) return
     const result = detail(reply)
     // Бой перебит (тактика, отмена) — не повторять сразу тот же бой: до освобождения тактики (guardedTurn; Codex 15.10:
     // «fight → interrupted → fight» по 5–8 раз за секунду).

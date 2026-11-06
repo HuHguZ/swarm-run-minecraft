@@ -68,3 +68,18 @@ test('q9d: полезный смертельный подкоп и дальни�
   assert.deepEqual(calls, ['stop'])
   assert.match(logs[0], /shove:Champ → обычный бой/, 'строка fight → fight объясняет конкретный сброс, а не скрывает причину отмены')
 })
+
+test('a nearby edge still pays two native cooldown windows when netherite requires two shove hits', () => {
+  const armor = ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots']
+  const member: SwarmMember = { id: 'A', team: 'blue', position: { x: -2.5, y: 120, z: 0 }, health: 20,
+    strength: 100, role: 'fighter', weapon: 'stone_sword', armor, ench: { protection: 16 }, inventory: { stone_sword: 1 } }
+  const board = new SwarmBoard('blue', () => 1000, 8000); board.setMembers([member])
+  const foe = { id: 'Human', position: { x: 0, y: 120, z: 0 }, visible: true,
+    velocity: { x: 0, y: 0, z: 0 }, equipment: { weapon: 'netherite_sword', armor } }
+  Object.defineProperty(foe, 'health', { get() { throw Error('private enemy HP') } })
+  board.observe('A', 1000, foe)
+  const edge = { x: 1, z: 0, at: 2.9, drop: Infinity }
+  assert.equal(shoveHits(foe, edge), 2)
+  assert.equal(planPvp(board, [member], { aggressive: true, quorum: 1, edgeOf: () => edge }).get('A')?.data?.shove, true)
+  assert.equal(pvpState(board).dislodgeWork?.get('Human:shove')?.work, 1, 'both required hits retain their half-second native window')
+})

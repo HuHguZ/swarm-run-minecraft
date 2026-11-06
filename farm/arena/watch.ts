@@ -41,8 +41,8 @@ export function watchAlarm (ctx: ArenaContext) {
       // Но поход к его старому месту, когда он уже в другом и ближе цели похода (вбежал в комнату, спрыгнул), или когда он
       // уже рядом — не ответ: рвать (стенд бота-противника 22.10: лез ко мне наверх 5 с, а я стоял в 5 бл. от него).
       if (b.last?.p?._hunt && !b.swarmTask?.data?.dig && !huntOver(b, m.p)) continue
-      // Кемпер выходит из коробки (ранен) — не рвать выход (Codex 15.10).
-      if (b.campReacting) continue
+      // Выход из коробки и активный облёт уже отвечают на угрозу, даже если лут ещё числится за бойцом.
+      if (b.campReacting || b.last?.m === 'wing_orbit' && b.last.pending === true) continue
       if (busy.has(b.name) || (!b.looting && (/^(fight|drink_buffs|pearl_to|wind_jump|burrow|flee|block_behind|evade|douse_lava|fly_to|peek_shot|wind_leap|juke|take_cover|undercut)$/.test(b.last?.m || '') || b.waiting))) continue
       const en = ctx.enemiesOf(b, m.p)
       const t = (e) => Math.max(0, e.d - 3) / Math.max(e.spd, SPRINT)
@@ -221,6 +221,10 @@ export function installSight (ctx: ArenaContext) {
     home: b => { if (arms) return ctx.armsHome(b, 0); const [x, z] = ctx.home(b, 0).split(/\s+/).map(Number); return { x, y: Y, z } }, log,
     hostile: (b, name) => ctx.hostile(b, name) && (!names.includes(name) || !ctx.deadNow.has(name) && !ctx.out.has(name))
   })
+  if (arms && arena.ellipse) for (const b of bots) {
+    if (bots.some(o => o !== b && o.team === b.team) && b.team)
+      b.c?.windRadio?.(message => (message.type === 'wind_bid_done' || !ctx.between) && ctx.swarmDriver.windBid(b, message))
+  }
   ctx.enemiesOf = (b, at) => [
     ...ctx.swarmDriver.enemies(b).map(e => ({ n: e.id, p: e.position, spd: Math.hypot(e.velocity?.x || 0, e.velocity?.z || 0) * 20,
       geared: !!e.equipment?.weapon || !!e.equipment?.armor?.length, human: !names.includes(e.id),
@@ -270,7 +274,7 @@ export function installSight (ctx: ArenaContext) {
     // 11 из 50 засад — новый ход, реакция или stop за секунду до удара); проходят аварийные и запросы.
     // Враг вплотную (≤ 6 бл.) — засада уступает: бот стоял 5 с в «засаде», пока человек его рубил (игра пользователя 24.10).
     const punish = b.last?.pending !== false && /^(pearl_ambush|pearl_trap|boost_lance|boost_shot|wing_orbit)$/.test(b.last?.m || '') && !humanClose(b)
-    if (punish && !/^(status|observe|fight_guard|wind_report|enemy_wind_plan|swarm_pose|emote|look_at|armor|team_hint|mobs|rescue_config|watch_dangers|swarm_keep|items_near|blocks_around|cache_scan|pearl_plan|pearl_pop|pearl_potion|lava_escape|dodge_blast|evade|clear_web|douse_lava)$/.test(m) && !(m === 'stop' && ctx.between))
+    if (punish && !/^(status|observe|fight_guard|wind_report|enemy_wind_plan|wind_out|swarm_pose|emote|look_at|armor|team_hint|mobs|rescue_config|watch_dangers|swarm_keep|items_near|blocks_around|cache_scan|pearl_plan|pearl_pop|pearl_potion|lava_escape|dodge_blast|evade|clear_web|douse_lava)$/.test(m) && !(m === 'stop' && ctx.between))
       return Promise.resolve({ status: 'skipped', detail: { why: `занят: ${b.last.m}` } })
     return own || b.climbing && !b.grabbing && !p?._climb && !CLIMB_OK.test(m) && !(m === 'swarm_hold' && p?.whileSmash) && !(m === 'stop' && ctx.between) && !humanClose(b)
       ? Promise.resolve({ status: 'skipped', detail: { why: 'лезу к цели' } }) : raw0(m, p)

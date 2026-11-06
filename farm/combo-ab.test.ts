@@ -126,7 +126,8 @@ test('our damage never credits enemy friendly sweep or unattributed enemy HP los
     enemyUnknownDamage: 2, friendlyDamage: 1, unknownDamage: 1 })
 })
 
-test('fixture settles a real hop before measurement and releases jump even when ticks fail', async () => {
+test('fixture settles a real hop before measurement and releases jump even when ticks fail', async t => {
+  t.mock.method(require('./swarm/swarm-driver/combo-ideas'), 'stopped', () => false)
   const make = (landAt: number) => {
     let tick = 0
     const controls: boolean[] = []
@@ -146,4 +147,21 @@ test('fixture settles a real hop before measurement and releases jump even when 
   broken.waitForTicks = async () => { throw new Error('disconnected') }
   await assert.rejects(settleFixtureTeleport([broken]), /disconnected/)
   assert.deepEqual(broken.controls, [true, false])
+})
+
+test('fixture refuses AUTO-STOP after releasing jump without waiting for landing', async t => {
+  const fs: typeof import('node:fs') = require('node:fs'), exists = fs.existsSync
+  const sentinel = require('node:path').join(require('../daemon/src/paths').REPO_ROOT, 'codex-lab/AUTO-STOP')
+  let checks = 0, ticks = 0
+  t.mock.method(fs, 'existsSync', file => {
+    if (file === sentinel) { checks++; return true }
+    return exists(file)
+  })
+  const controls: boolean[] = [], bot = { entity: { onGround: true },
+    setControlState(key: string, value: boolean) { assert.equal(key, 'jump'); controls.push(value) },
+    async waitForTicks(n: number) { assert.equal(n, 1); ticks++; this.entity.onGround = false } }
+  await assert.rejects(settleFixtureTeleport([bot]), /AUTO-STOP/)
+  assert.equal(checks, 1, 'the real stop guard reads its sentinel')
+  assert.equal(ticks, 1, 'no landing tick runs after the stop guard refuses')
+  assert.deepEqual(controls, [true, false])
 })

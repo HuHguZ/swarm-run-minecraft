@@ -56,6 +56,7 @@ export interface DuelCtx {
   releaseFightItems: any; strategicRequest: any; finish: any; crowd: any; throwWhy: any; targetHurtBy: any; strikeSlotAt: any; strikeSlot: any; planText: any; planVerdict: any; replanAt: any;
   retarget: any; maceChain: any; seesNow: any; buffUp: any; splashFirst: any; spearChargeFar: any; sleep: any;
   glideChase: any; arenaExitCheck?: { inputs: string; at: number } | null;
+  hiddenVentTried?: { target: object; cells: Set<string> };
 }
 
 export interface TurnFrame {

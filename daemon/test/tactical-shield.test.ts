@@ -66,6 +66,15 @@ function actor() {
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
 
+function nativeItemUse(a) {
+  a.bot.setControlState = () => {}; a.bot.getControlState = () => false; a.bot.look = async () => {}
+  a.bot.physics = { simulatePlayer: s => s }; a.bot._client.write = () => {}
+  const activate = a.bot.activateItem, deactivate = a.bot.deactivateItem
+  a.bot.activateItem = off => { activate(off); a.bot.usingHeldItem = true; a.bot._client.write('use_item', { hand: off ? 1 : 0 }) }
+  a.bot.deactivateItem = () => { deactivate(); a.bot.usingHeldItem = false; a.bot._client.write('block_dig', { status: 5 }) }
+  return (require('../src/itemuse') as typeof import('../src/itemuse')).install(a.bot)
+}
+
 function drawingSkeleton(a) {
   const e = a.bot.entities[2]
   e.name = 'skeleton'; e.position = new Vec3(.5, 64, -9.5); e.yaw = Math.PI
@@ -335,6 +344,304 @@ test('shared shield reports actual ready blocking and a server block sound, then
     assert.equal(guard.report().disabled, 1)
     assert.equal(a.tactics.observeTactics(a.session).shield, false, 'the graph cannot select a disabled shield')
   } finally { guard.close(); a.close() }
+})
+
+for (const duringLook of ['unchanged', 'cross over', 'release', 'lost sight', 'abort'])
+test(`a confirmed shield with uncertain age faces a late descent only while its use and fight are live (${duringLook})`, async () => {
+  const a = actor(), use = nativeItemUse(a)
+  const guard = a.combat.makeShield(a.session, a.ctl, { shield: 'always' })
+  const { maceDefenseTurn }: typeof import('../src/pvp/turn-mace') = require('../src/pvp/turn-mace')
+  const { installFallAndAim }: typeof import('../src/pvp/duel-events') = require('../src/pvp/duel-events')
+  const { track }: typeof import('../src/mace/track') = require('../src/mace/track')
+  const { trackTarget }: typeof import('../src/bow/track') = require('../src/bow/track')
+  const { smashShieldAim }: typeof import('../src/combat/shield') = require('../src/combat/shield')
+  const foe = a.bot.entities[2]
+  Object.assign(foe, { name: 'player', type: 'player', username: 'RedPReplay', _ndVisible: true,
+    onGround: false, equipment: [{ name: 'wind_charge' }] })
+  const mc = track(a.bot, { enemy: () => foe, telemetryHp: () => null })
+  const controls: Record<string, boolean> = {}, notes: string[] = []
+  a.bot.blockAt = p => ({ position: p.floored(), name: p.y < 120 ? 'stone' : 'air',
+    boundingBox: p.y < 120 ? 'block' : 'empty', shapes: p.y < 120 ? [[0, 0, 0, 1, 1, 1]] : [] })
+  a.bot.look = async (yaw, pitch) => { a.bot.entity.yaw = yaw; a.bot.entity.pitch = pitch }
+  a.bot.lookAt = async point => {
+    const delta = point.minus(a.bot.entity.position)
+    await a.bot.look(Math.atan2(-delta.x, -delta.z), 0)
+    if (duringLook === 'release') a.bot.deactivateItem()
+    if (duringLook === 'lost sight') foe._ndVisible = false
+    if (duringLook === 'abort') a.ctl.abort()
+  }
+  a.session.current = { name: 'fight', ctl: a.ctl }
+  try {
+    assert.equal(await guard.wear(), true)
+    const raised = guard.raise(true)
+    await turn()
+    a.metadata(3)
+    a.bot.emit('entityUpdate', a.bot.entity)
+    a.c.advanceTicks(1)
+    await turn()
+    await raised
+    a.age(1020)
+    assert.equal(use.cur?.confirmed, true)
+    assert.deepEqual(guard.nativeUse(), { useConfirmed: true, confirmedTicks: 0 })
+    assert.equal(guard.blocking(), false)
+
+    // DT A2's positions, and DV A3's relative receipts while crossing over the defender.
+    const crossover = duringLook === 'cross over'
+    const me = a.bot.entity.position
+    const positions = crossover ? [
+      [604.089111328125, 129.62190428376198, 0], [604.3671875, 128.51155272126198, 100.9886],
+      [604.3671875, 128.51155272126198, 100.9886], [604.597412109375, 127.13484373688698, 199.3255],
+      [604.597412109375, 127.13484373688698, 199.3255], [604.7880859375, 125.50227537751198, 299.6941]
+    ] : [
+      [604.182373046875, 128.48762694001198], [604.182373046875, 128.48762694001198],
+      [604.43408203125, 127.10920897126198], [604.642578125, 125.47517576813698]
+    ]
+    const z = crossover ? 600.4609375 : 600.47802734375
+    me.set(crossover ? 604.9436286605934 : 604.345202075822, 120, crossover ? 600.5423042462245 : 600.5414834180015)
+    let observed = 0, receipt
+    foe._ndObservationNow = () => observed
+    const aimTracker = trackTarget(foe)
+    for (const [x, y, t] of positions) {
+      foe.position.set(x, y, z)
+      if (crossover && t !== receipt?.t) {
+        const next = { x, y, z, t, kind: 'entity_move_look', grounded: false }
+        foe._ndPositionReceipts = [receipt, next]
+        receipt = next
+      }
+      observed = (t ?? observed) + 25
+      if (crossover) aimTracker.update()
+      a.c.advanceTicks(1)
+      a.bot.emit('physicsTick')
+    }
+    if (crossover) {
+      assert.equal(aimTracker.hasPhysicalVelocity(), true)
+      const projected = smashShieldAim(a.bot, foe)
+      assert.ok(projected && Math.abs(projected.x - 605.025634161499) < 1e-6, 'same trusted crossover seen on the DV trace')
+    }
+    const threat = mc.threat()
+    assert.equal(threat?.kind, 'air')
+    assert.equal(threat?.eta, 3)
+    threat.webTried = true
+    const ctx: any = { session: a.session, ctl: a.ctl, bot: a.bot, entity: foe, guard, prof: { player: true },
+      opts: { maceIntent: a.session.current }, mc,
+      track: crossover ? aimTracker : { vel: () => ({ x: .104248046875, z: 0 }), at: () => foe.position },
+      holdWeapon: async () => {}, pathTo() {}, pvpSkills: { itemReady: () => false }, ready: () => true, rest() {},
+      set: (key, value) => { controls[key] = value }, st: { swings: 0 }, used: note => notes.push(note),
+      nextReady: Infinity, sleep: async () => {}, vision: { observe: () => foe }, tt: { state: () => ({}) }, ovl: { at: clock.now() } }
+    await maceDefenseTurn(ctx, { hp: 20, now: clock.now(), r: 3.52 } as any)
+    assert.equal(guard.blocking(), false)
+    assert.equal(a.writes.length, 1, 'the aim change does not restart shield use')
+    if (duringLook === 'abort') {
+      assert.deepEqual(controls, {}, 'a cancelled fight cannot start a dodge after turning')
+      return
+    }
+    if (duringLook !== 'unchanged' && !crossover) {
+      assert.equal(ctx.aim, 'point', 'a lost use or target returns to the ordinary retreat')
+      assert.equal(controls.forward, true)
+      assert.equal(threat.shielded, false)
+      return
+    }
+    installFallAndAim(ctx)
+    me.set(crossover ? 604.9424725677278 : 604.2843063818032, 120, crossover ? 600.5639721681893 : 600.5481634754478)
+    a.c.advanceTicks(1)
+    await turn()
+    const dx = (crossover ? 605.0144241993461 : 604.8900015730826) - me.x
+    const dz = (crossover ? 600.4608757305566 : 600.4780754268633) - me.z
+    assert.ok(-Math.sin(a.bot.entity.yaw) * dx - Math.cos(a.bot.entity.yaw) * dz > 0,
+      'the native source must stay in front after both the fight turn and its aim timer')
+    assert.equal(controls.back, true, 'use the safe backward step while facing the source')
+    assert.equal(threat.shielded, false, 'aiming does not claim an unproven block')
+  } finally { mc.close(); guard.close(); a.close() }
+})
+
+for (const state of ['ready', 'late-visible', 'late-hidden', 'young', 'disabled', 'lost', 'wrong-angle', 'released', 'adopted-disabled', 'adopted-lost', 'adopted-released', 'adopted-wrong-angle'])
+  test(`fresh late mace defence respects a real ${state} offhand guard`, async () => {
+    const a = actor(), notes: string[] = []
+    nativeItemUse(a)
+    const guard = a.combat.makeShield(a.session, a.ctl, { shield: 'always' })
+    const foe = a.bot.entities[2]
+    Object.assign(foe, { name: 'player', type: 'player', username: 'RedPReplay', position: new Vec3(603.7179700625796, 123.68262020949392, 600.4406512177436) })
+    Object.assign(a.bot.entity, { position: new Vec3(605.2671456546208, 121.25220334025373, 600.5079851304929), onGround: false,
+      velocity: new Vec3(0, -.07544406518948656, 0) })
+    const late = state === 'late-visible' || state === 'late-hidden'
+    if (late) {
+      foe.position.set(604.79248046875, 124.83088865876198, 600.59912109375)
+      Object.assign(foe, { _ndVisible: state === 'late-visible', onGround: false })
+      a.bot.entity.position.set(604.9447816325196, 120, 600.4209948355688)
+      a.bot.entity.onGround = true
+      a.bot.lookAt = async (point: import('vec3').Vec3) => {
+        const delta = point.minus(a.bot.entity.position)
+        a.bot.entity.yaw = Math.atan2(-delta.x, -delta.z)
+      }
+    }
+    a.bot.blockAt = p => ({ position: p.floored(), name: p.y < 120 ? 'stone' : 'air',
+      boundingBox: p.y < 120 ? 'block' : 'empty', shapes: p.y < 120 ? [[0, 0, 0, 1, 1, 1]] : [] })
+    a.bot.look = async (yaw, pitch) => { a.bot.entity.yaw = yaw; a.bot.entity.pitch = pitch }
+    const delta = foe.position.minus(a.bot.entity.position), facing = Math.atan2(-delta.x, -delta.z)
+    const threat: any = { kind: 'air', dy: 2.43, dh: 1.55, eta: 3, peak: 129.09, launched: true, mace: true, webTried: true }
+    const adopted = state.startsWith('adopted-')
+    const mode = adopted ? state.slice('adopted-'.length) : state
+    const ctx: any = { session: a.session, ctl: a.ctl, bot: a.bot, entity: foe, guard, prof: { player: true }, opts: {},
+      mc: { threat: () => threat, st: { shieldUps: 0, dodges: 0 } }, track: { vel: () => ({ x: .18, y: -.8, z: 0 }) },
+      holdWeapon: async () => {}, pathTo() {}, pvpSkills: { itemReady: () => false }, ready: () => true, rest() {},
+      set: (k, v) => a.bot.setControlState(k, v), st: { swings: 0 }, used: note => notes.push(note), nextReady: Infinity, sleep: async () => {} }
+    const { maceDefenseTurn }: typeof import('../src/pvp/turn-mace') = require('../src/pvp/turn-mace')
+    try {
+      assert.equal(await guard.wear(), true)
+      const raised = guard.raise(true)
+      await turn(); a.metadata(3); a.age(1001); a.c.advanceTicks(1); await turn(); await raised
+      a.age(mode === 'young' ? 1005 : 1016)
+      a.bot.entity.yaw = facing
+      guard.watch(foe, 3.2)
+      if (mode !== 'young') assert.equal(guard.blocking(), true, 'actual ACK and fifteen native ticks are ready')
+      if (adopted) threat.shielded = true
+      else assert.equal(threat.shielded, undefined, 'fresh fight/target markers know no previous defence')
+      if (mode === 'disabled') a.bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:shield', cooldownTicks: 100 })
+      if (mode === 'lost') { a.bot.inventory.slots[45] = null; a.bot.inventory.emit('updateSlot', 45) }
+      if (mode === 'released') a.bot.deactivateItem()
+      if (mode === 'wrong-angle' || late) a.bot.entity.yaw += Math.PI
+      await maceDefenseTurn(ctx, { hp: 20, now: clock.now(), r: 2.66 } as any)
+      if (mode === 'ready' || mode === 'late-visible') {
+        assert.equal(ctx.aim, 'target', 'preserve the already mature frontal shield instead of turning its back')
+        assert.ok(Math.cos(a.bot.entity.yaw - facing) >= 0)
+        assert.equal(a.writes.length, 1, 'adopting existing use cannot reset its native delay')
+        if (late) {
+          const native = new Vec3(604.9668768915933, 122.97755082327646, 600.5991429717766).minus(a.bot.entity.position)
+          assert.ok(-Math.sin(a.bot.entity.yaw) * native.x - Math.cos(a.bot.entity.yaw) * native.z > 0)
+          assert.ok(notes.includes('щит к булаве сверху'))
+        }
+      } else {
+        assert.equal(ctx.aim, 'point', 'the old marker cannot make an unavailable or backwards shield ready forever')
+        assert.ok(notes.includes('бегу из-под булавы'))
+      }
+    } finally { guard.close(); a.close() }
+  })
+
+test('the shield request survives a fall rescue only by raising again after its hand is released', async () => {
+  const a = actor(), reflex: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
+  const guard = a.combat.makeShield(a.session, a.ctl, { shield: 'always' })
+  let pending
+  try {
+    assert.equal(await guard.wear(), true)
+    reflex.install(a.session)
+    pending = guard.raise(true)
+    assert.equal(a.writes.length, 1)
+    assert.equal(await guard.raise(true), false)
+    assert.equal(a.writes.length, 1, 'a delayed ACK cannot restart the five-tick use each loop')
+    // Native H: clutch takes the hand at15145002..005; the shield never
+    // received USING_ITEM before take()/cleanup() released the item.
+    reflex.emergency(a.session, () => {}, 200)
+    a.c.advanceTicks(4); await turn()
+    assert.equal(reflex.owner(a.session), null)
+    const resumed = guard.raise(true)
+    assert.equal(a.writes.length, 2, 'the old unconfirmed request was physically cancelled by the rescue')
+    a.metadata(3); a.age(1001); a.c.advanceTicks(1); await turn()
+    await resumed
+    a.age(1006)
+    assert.equal(guard.blocking(), true, 'the resumed request still needs its own native five-tick proof')
+  } finally { guard.close(); a.ctl.abort(); await pending; a.close() }
+})
+
+test('a foreign rescue and an aborted skill cannot create a pending shield request', async () => {
+  const a = actor(), reflex: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
+  const guard = a.combat.makeShield(a.session, a.ctl, { shield: 'always' })
+  let blocked
+  try {
+    assert.equal(await guard.wear(), true)
+    reflex.install(a.session)
+    reflex.emergency(a.session, () => {}, 200)
+    const owner = reflex.owner(a.session)
+    blocked = guard.raise(true)
+    assert.equal(guard.traceState().want, false, 'the rescue owns the hand; a suppressed packet is not a request')
+    assert.equal(reflex.owner(a.session), owner, 'shield defence preserves the actual emergency lease')
+    assert.equal(a.writes.length, 0)
+    a.c.advanceTicks(4); await turn()
+    const stale = { aborted: true }
+    assert.equal(await reflex.run(a.session, stale, () => guard.raise(true)), false)
+    assert.equal(guard.traceState().want, false)
+    assert.equal(a.writes.length, 0, 'an old aborted skill cannot send use after the rescue')
+  } finally { guard.close(); a.ctl.abort(); await blocked; a.close() }
+})
+
+test('passive smash shield reissues once after rescue without taking the rescue hand', async t => {
+  const a = actor(), reflex: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
+  const threats: typeof import('../src/threats') = require('../src/threats')
+  const out: typeof import('../src/combat/wind-out') = require('../src/combat/wind-out')
+  a.bot.setControlState = () => {}
+  a.session._ndFoes = ['Foe']; a.session._rescue = { arena: { x: .5, z: .5, r: 30 } }
+  t.mock.method(threats, 'smashes', () => [{ name: 'Foe', ticks: 12, from: { x: 1, y: 74, z: 1 }, at: { x: .5, y: 64, z: .5 } }] as any)
+  try {
+    reflex.install(a.session); out.installWindOut(a.session)
+    a.bot.emit('physicsTick'); a.bot.emit('physicsTick')
+    assert.equal(a.writes.length, 1, 'a pending native ACK is not a reason to resend every tick')
+    reflex.emergency(a.session, () => {}, 200)
+    const owner = reflex.owner(a.session)
+    for (let i = 0; i < 4; i++) { a.bot.emit('physicsTick'); a.c.advanceTicks(1) }
+    assert.equal(a.writes.length, 1, 'no shield use can steal the active rescue hand')
+    assert.equal(reflex.owner(a.session), owner)
+    await turn(); assert.equal(reflex.owner(a.session), null)
+    a.bot.emit('physicsTick'); a.bot.emit('physicsTick')
+    assert.equal(a.writes.length, 2, 'the cancelled passive request must resume on the first free body tick')
+  } finally { a.close() }
+})
+
+test('passive smash shield renews a physically released use during a same-epoch skill handoff', async t => {
+  const a = actor(), reflex: typeof import('../src/reflex-lock') = require('../src/reflex-lock')
+  const threats: typeof import('../src/threats') = require('../src/threats')
+  const out: typeof import('../src/combat/wind-out') = require('../src/combat/wind-out')
+  const use = nativeItemUse(a)
+  const work = sourceModule('swarm-position-work', { './combat': a.combat })
+  const holdCtl = { aborted: false, onAbort: [] as Array<() => void>, abort() { this.aborted = true; for (const f of [...this.onAbort]) f() } }
+  let holding
+  a.session._ndFoes = ['Foe']; a.session._rescue = { arena: { x: .5, z: .5, r: 30 } }
+  t.mock.method(threats, 'smashes', () => [{ name: 'Foe', ticks: 9, from: { x: 1, y: 73, z: 1 }, at: { x: .5, y: 64, z: .5 } }] as any)
+  try {
+    reflex.install(a.session); out.installWindOut(a.session)
+    a.bot.emit('physicsTick')
+    assert.equal(a.writes.length, 1)
+    const pending = use.cur
+    a.bot.usingHeldItem = false // stock MF does this even for unrelated entity_status
+    a.bot._client.emit('entity_status', { entityId: 2, entityStatus: 2 })
+    a.bot.emit('physicsTick')
+    assert.equal(use.cur, pending)
+    assert.equal(a.writes.length, 1, 'another entity status and a delayed ACK cannot restart shield use')
+    a.c.advanceTicks(7); a.bot.emit('physicsTick')
+    assert.equal(use.cur, null, 'itemuse expires an unconfirmed intent after its existing 300ms leash')
+    assert.equal(a.writes.length, 1, 'that expiry is not a real release packet and cannot restart the block delay')
+    const epoch = a.session._reflexState.epoch, tick = a.c.ticks
+    // Native J31p: cancelled swarm_hold.close() releases item use, followed
+    // by fight in the same reflex epoch while the real smash is still nine ticks away.
+    holding = work.swarmHold(a.session, holdCtl, { shield: true, requireShield: true, whileSmash: 'Foe', seconds: 20 })
+    await turn()
+    const before = a.writes.length
+    holdCtl.abort(); await holding
+    assert.equal(use.cur, null, 'real swarmHold cleanup sends the native release packet')
+    assert.ok(use.stats.ended['отпустил'] > 0)
+    assert.equal(a.session._reflexState.epoch, epoch)
+    assert.equal(a.c.ticks, tick, 'request and cancellation can happen in the same game tick')
+    a.bot.emit('physicsTick'); a.bot.emit('physicsTick')
+    assert.equal(a.writes.length, before + 1, 'a real release cancels the remembered use; a delayed ACK alone does not')
+  } finally { holdCtl.abort(); await holding; a.close() }
+})
+
+test('shared shield replaces an unconfirmed request after a real release in the same game tick', async () => {
+  const a = actor(), use = nativeItemUse(a)
+  const guard = a.combat.makeShield(a.session, a.ctl, { shield: 'always' })
+  let pending, resumed
+  try {
+    await guard.wear(); pending = guard.raise(true)
+    const tick = a.c.ticks
+    a.bot.deactivateItem()
+    assert.equal(use.stats.ended['отпустил'], 1)
+    resumed = guard.raise(true)
+    assert.equal(a.c.ticks, tick)
+    assert.equal(a.writes.length, 2, 'a same-tick release cancels even a use whose ACK never arrived')
+    a.metadata(3); a.age(1001); a.c.advanceTicks(1); await turn()
+    a.age(1006)
+    assert.equal(guard.blocking(), true)
+    a.bot._client.write('block_dig', { status: 5 })
+    assert.equal(guard.blocking(), false, 'a sent release invalidates protection before delayed self metadata changes')
+  } finally { guard.close(); a.ctl.abort(); await Promise.all([pending, resumed]); a.close() }
 })
 
 test('Shield keeps protection after native five ticks while still admissible, and completes when the threat clears', async () => {

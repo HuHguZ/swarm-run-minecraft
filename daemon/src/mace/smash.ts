@@ -148,9 +148,11 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
   if (jump && bot.entity.onGround) {
     await nextTick(bot)
   }
+  const release = { packetAim: bot.version === '1.21.11', canFire: () => !ctl.aborted && (!stillOk || stillOk()) &&
+    !bot._ndHandLock?.on?.() && (!bot._ndReflexSession || (require('../reflex-lock') as typeof import('../reflex-lock')).allowed(bot._ndReflexSession)) }
   const fired: any = await fireWind(bot, moved => selfWindAim(bot, {
     moved, yaw: toward, back: bot.entity.onGround || bot.entity.velocity.y < .2 ? 0 : LAUNCH_BACK
-  }), { swap, hand: swap ? 'main' : 'off', before: () => { try { bot.setControlState('jump', jump && bot.entity.onGround); dg.off = bot.inventory.slots[45] ? bot.inventory.slots[45].name : null; dg.vy0 = bot.entity.velocity.y; dg.web = webOnBody(bot) } catch {} } })
+  }), { ...release, swap, hand: swap ? 'main' : 'off', before: () => { try { bot.setControlState('jump', jump && bot.entity.onGround); dg.off = bot.inventory.slots[45] ? bot.inventory.slots[45].name : null; dg.vy0 = bot.entity.velocity.y; dg.web = webOnBody(bot) } catch {} } })
   if (fired.fired && jump) await nextTick(bot)
   try { bot.setControlState('jump', false) } catch {}
   if (!fired.fired) { unDiag(); await restoreOff(); out.note = 'булава: заряд не ушёл — ' + fired.why; return out }
@@ -185,7 +187,7 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
     const why1 = diagText(dg)
     const t1 = gameClock.now()
     while (gameClock.now() < (bot._ndWindCd || 0) && gameClock.now() - t1 < 700) await sleep(25)
-    const f2: any = await fireWind(bot, moved => selfWindAim(bot, { moved }), { swap, hand: swap ? 'main' : 'off' })
+    const f2: any = await fireWind(bot, moved => selfWindAim(bot, { moved }), { ...release, swap, hand: swap ? 'main' : 'off' })
     if (f2.fired) {
       bot._ndWind = { impactY: bot.entity.position.y, until: gameClock.now() + 2000 }
       launched = await waitLift()

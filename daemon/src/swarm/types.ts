@@ -41,6 +41,8 @@ export interface EnemyObservation {
   nametag?: boolean
   position: SwarmPosition
   velocity?: SwarmPosition
+  // Physical forecast for this observation only; the long-lived board never retains it.
+  peakY?: number | null
   equipment?: { weapon?: string; armor?: string[]; enchanted?: boolean; unknownArmorSlots?: number }
   threat?: ThreatKind
   // Верх оценки его хп (с поглощением) по нашим подтверждённым попаданиям и видимому лечению — не метаданные (AGENTS.md):
@@ -48,7 +50,7 @@ export interface EnemyObservation {
   hpEstimate?: number
   hitProof?: HitProof
 }
-export interface SharedEnemy extends Omit<EnemyObservation, 'visible'> {
+export interface SharedEnemy extends Omit<EnemyObservation, 'visible' | 'peakY'> {
   seenAt: number
   source: string
   sources: string[]

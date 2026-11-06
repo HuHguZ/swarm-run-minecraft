@@ -75,6 +75,8 @@ test('swarm positions never use supplied hidden coordinates, enemy HP or packet-
 
 test('swarm positions price cover and escape distance from honestly seen enemies', async () => {
   const { bot } = fixture([[0, 1, 2, 'stone'], [0, 2, 2, 'stone']])
+  // Keep native-width clearance on the walking corridor past the cover's corner.
+  bot.entity.position.x = .25
   bot.entities[1] = { id: 1, username: 'enemy', type: 'player', position: new Vec3(4.5, 1, .5), height: 1.8, width: .6 }
   const result = await swarmPositions(bot, { purpose: 'escape', enemies: [{ id: 'enemy' }], radius: 4, methods: ['walk'], limit: 12 })
   assert.ok(result.candidates.length)

@@ -10,6 +10,20 @@ const p = (x = 0, y = 64, z = 0) => ({ x, y, z })
 const armor = ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots']
 const member = (id: string, strong = false): SwarmMember => ({ id, team: 'blue', position: p(10), health: 20, strength: 40, role: 'fighter', weapon: strong ? 'netherite_sword' : 'stone_sword', armor: strong ? armor : [], ench: strong ? { sharpness: 5, protection: 16 } : {}, inventory: { [strong ? 'netherite_sword' : 'stone_sword']: 1 } })
 
+test('solo driver keeps rearming against its only human instead of finishing from round start', () => {
+  const bots = Array.from({ length: 30 }, (_, i) => ({ name: `blue${i}`, team: 'blue' }))
+  const pos = Object.fromEntries(bots.map((b, i) => [b.name, { p: p(24, 64, i % 5), hp: 20, inv: { bow: 1, arrow: 64 }, armor: {} }]))
+  const sw: any = createDriverState({ bots, pos, alive: () => true, now: () => 1000, log: () => {},
+    arms: true, aggressive: true, hostile: () => true, humanNames: () => ['HuHguZ'], hideouts: [p(48)] })
+  Object.assign(sw, swarmRetry(sw), swarmTeam(sw), { preempt: () => {} })
+  sw.boardOf(bots[0]).observe(bots[0].name, 1000, { id: 'HuHguZ', position: p(), visible: true,
+    equipment: { weapon: 'netherite_sword', armor, enchanted: true } })
+  sw.refresh(bots[0])
+  const tasks = [...sw.planned.get('blue').values()] as any[]
+  assert.ok(tasks.every(t => !t.data?.finishing), 'one human is the original opposition, not the last survivor of a bot team')
+  assert.ok(tasks.some(t => t.kind === 'loot' || t.data?.rearm || t.data?.hide), 'unarmoured archers retain equipment preparation')
+})
+
 test('q9: личный размен отправляет слабых за снаряжением, улучшившихся возвращает; лишнее доезжает от свободного союзника', () => {
   assert.equal(typeof (fight as any).memberFight, 'function')
   let time = 1000

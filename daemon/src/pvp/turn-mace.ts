@@ -6,11 +6,13 @@ import * as pick from '../pick'
 import * as read from '../read'
 import * as tempo from '../tempo'
 import * as throwMod from '../throw'
-import { stepSafe } from './body'
+import { livingFlags, stepSafe } from './body'
 import { findItem, potionOf } from './potions'
 import { HIT_REACH, TICK_MS, cooldownMs } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 import { webSmash } from '../mace/web'
+import { isMeleeWeapon } from './damage-model'
+import { smashShieldAim } from '../combat/shield'
 
 // Булава сверху: тотем, щит, жемчуг или бег.
 export async function maceDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -18,7 +20,8 @@ export async function maceDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { hp, now, r } = turn
   let maceThreat = ctx.prof.player ? mc.threat() : null
   if (maceThreat && ctx.opts?.maceIntent && ctx.session.current === ctx.opts.maceIntent && !ctx.ctl.aborted)
-    bot._ndMaceDefense = { ctl: ctx.ctl, current: ctx.opts.maceIntent, until: gameClock.now() + 1000 }
+    bot._ndMaceDefense = { ctl: ctx.ctl, current: ctx.opts.maceIntent, target: ctx.entity.username, until: gameClock.now() + 1000 }
+  else if (bot._ndMaceDefense?.ctl === ctx.ctl) delete bot._ndMaceDefense.target
   if (maceThreat && !ctx.maceTotem && bot.inventory.slots[45]?.name !== 'totem_of_undying' && bot.heldItem?.name !== 'totem_of_undying') {
     const tt0 = findItem(bot, i => i.name === 'totem_of_undying')
     if (tt0) { ctx.maceTotem = true; bot.equip(tt0, 'hand').then(() => used('тотем в правую руку: булава сверху')).catch(() => { ctx.maceTotem = false }) }
@@ -58,10 +61,43 @@ export async function maceDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
       if (web.attempted) { maceThreat.webTried = true; maceThreat = mc.threat() || maceThreat }
       if (web.placed) used('паутина в точку его посадки')
     }
+    // Новый бой может унаследовать уже готовый щит тела, но не метку этой угрозы.
+    // К близкому удару старого ответа мало: нужны текущие native-use и передняя полусфера.
+    const blocking = shieldWorn && guard.blocking?.()
+    const target = ctx.entity
+    const visibleAir = () => target === ctx.entity && target._ndVisible === true && target.onGround === false
+    const closeAir = maceThreat.kind === 'air' && maceThreat.eta < 6
+    const self = bot.entity, off = bot.inventory.slots[45], use = bot._ndUse?.cur
+    const sameShield = () => bot.entity === self && bot.inventory.slots[45] === off && bot._ndUse?.cur === use &&
+      (livingFlags(bot, self) & 3) === 3 && (bot._ndShieldDisabledUntil || 0) <= gameClock.now()
+    // The first native age after the ACK proves no elapsed ticks. Keep the
+    // shield facing the source during a dodge while maturity is still unknown.
+    const holdAim = !blocking && shieldWorn && closeAir && visibleAir() && use?.hand === 1 &&
+      use.name === 'shield' && use.confirmed && sameShield()
+    let aim = (blocking || holdAim) && maceThreat.kind === 'air' ? smashShieldAim(bot, target) : null
+    if (!aim && (blocking || holdAim) && closeAir && visibleAir()) {
+      // A ready shield can still turn toward the last visible source inside the raise window.
+      aim = target.position.offset(0, pick.eyeHeight(bot, target), 0)
+    }
+    if (aim) {
+      if (holdAim) ctx.aim = 'free'
+      await bot.lookAt(aim, true)
+      if (ctx.ctl.aborted) return NEXT
+    }
+    const me = bot.entity.position, foe = aim || ctx.entity.position, yaw = bot.entity.yaw
+    const frontal = Number.isFinite(yaw) && -Math.sin(yaw) * (foe.x - me.x) - Math.cos(yaw) * (foe.z - me.z) >= 0
+    if (blocking && guard.blocking?.() && frontal) maceThreat.shielded = true
+    else if (maceThreat.eta < 6) maceThreat.shielded = false
     const shieldOk = shieldWorn && (maceThreat.eta >= 6 || maceThreat.shielded)
+    const shieldDodge = holdAim && visibleAir() && sameShield()
     let how = null
-    if (maceThreat.kind === 'above' || shieldOk) {
+    if (maceThreat.kind === 'above' || shieldOk || shieldDodge) {
       how = mace.defend(bot, maceThreat, { guard, entity: ctx.entity, vel: () => ctx.track.vel(), set, keyDir, stepSafe: dir => stepSafe(bot, dir), stats: mc.st })
+      if (shieldDodge) {
+        if (!how) for (const key of ['forward', 'back', 'left', 'right']) set(key, false)
+        set('sprint', false)
+        set('jump', false)
+      }
     } else {
       const pearlOut = findItem(bot, i => i.name === 'ender_pearl')
       if (pearlOut && pvpSkills.itemReady(pearlOut) && maceThreat.eta >= 12 && hp > 7) {
@@ -98,7 +134,8 @@ export async function maceDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
       }
     }
     if (how && ready('maceDef:' + how)) { rest('maceDef:' + how, 2500); used(how) }
-    if (how !== 'щит к булаве сверху' && maceThreat.kind === 'air' && now >= ctx.nextReady && r <= HIT_REACH && pick.canHit(bot, ctx.entity, { range: HIT_REACH })) {
+    if (!ctx.ctl.aborted && isMeleeWeapon(bot.heldItem?.name) && how !== 'щит к булаве сверху' && maceThreat.kind === 'air' &&
+        now >= ctx.nextReady && r <= HIT_REACH && pick.canHit(bot, ctx.entity, { range: HIT_REACH })) {
       try { bot.attack(ctx.entity) } catch {}
       st.swings++
       mc.st.counterHits++
