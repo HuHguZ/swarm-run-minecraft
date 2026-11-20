@@ -7,7 +7,7 @@ import { keepDoctrine } from './doctrine'
 import { type PvpOptions, type PvpPlan, pvpFrame } from './plan-frame'
 import { pvpAssault } from './plan-assault'
 import { pvpFlee, pvpRecover } from './plan-flee'
-import { pvpTargets, ringShields, pvpBuilders, falseWeakness, falseRetreat, fountain } from './plan-doctrines'
+import { pvpTargets, pvpLoot, ringShields, pvpBuilders, falseWeakness, falseRetreat, fountain } from './plan-doctrines'
 import { pvpSectors, pvpGather, coverHurt, pvpDiggers, pvpLadders, pvpCampers } from './plan-jobs'
 import { assignFighters, commitPlan } from './plan-assign'
 import { strongFew, ineffectiveDamage } from './race'
@@ -43,6 +43,7 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: PvpO
   pvpAntidotes(S)
   // Цели и приёмы строя.
   pvpTargets(S)
+  pvpLoot(S)
   ringShields(S)
   pvpBuilders(S)
   falseWeakness(S)

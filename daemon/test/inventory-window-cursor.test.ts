@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events'
 
 import * as invsync from '../src/invsync'
 import * as ranged from '../src/ranged'
+import { withdrawPass } from '../src/containers/chest'
 const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const Item: any = (require('prismarine-item') as typeof import('prismarine-item').default)(registry)
 const windows: any = (require('prismarine-windows') as typeof import('prismarine-windows').default)(registry as any)
@@ -78,6 +79,38 @@ function fixture () {
   }
   return { bot, packets, player, menus, open, send, item, carriedRockets, finish }
 }
+
+for (const replacement of [false, true]) test(`a stale chest cannot send native cleanup clicks to ${replacement ? 'another chest with the same id' : 'player slot zero'}`, async t => {
+  const f = fixture(); t.after(f.finish)
+  const { bot } = f
+  const chest = f.open(7)
+  chest.updateSlot(12, f.item('splash_potion'))
+  f.send(chest)
+  const win = bot.currentWindow
+  const write = bot._client.write.bind(bot._client)
+  let wrongClicks = 0, closed = false
+  bot._client.write = (name, packet) => {
+    if (closed && name === 'window_click' && packet.slot === 0) {
+      if (++wrongClicks === 32) throw new Error('offline reproduction stopped at 32 wrong clicks')
+      return
+    }
+    write(name, packet)
+    if (name === 'window_click' && packet.windowId === 7 && packet.slot === chest.inventoryStart) {
+      // Paper closes while a transfer has just used its last item. Mineflayer
+      // keeps its captured chest and still tries to put its carried item away.
+      win.selectedItem = f.item('fishing_rod')
+      bot._client.emit('close_window', { windowId: 7 })
+      closed = true
+      if (replacement) f.send(f.open(7))
+    }
+  }
+  const outcome = await withdrawPass(bot, registry, win, ['splash_potion'])
+  assert.equal(wrongClicks, 0)
+  assert.equal(bot.inventory.slots[0], null)
+  if (replacement) assert.equal(bot.currentWindow.slots[0], null)
+  else assert.equal(bot.inventory.selectedItem?.name, 'fishing_rod')
+  assert.match(outcome.left['splash_potion'], /закры|closed/i)
+})
 
 for (const closure of ['client', 'server']) {
   test(`real ${closure} chest close releases the carried shadow and permits rocket loading`, async t => {

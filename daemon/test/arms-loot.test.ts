@@ -4,8 +4,8 @@ import * as Loot from '../src/pvp/arms-loot'
 import * as AL from '../arena/arms-layout'
 const room = () => Array(36).fill(null)
 
-async function withdrawAll(reward: any[], storage: any[]) {
-  const { withdrawPass }: typeof import('../src/containers') = require('../src/containers')
+async function withdrawAll(reward: any[], storage: any[], makeRoom = null) {
+  const { withdrawPass, chestTake }: typeof import('../src/containers') = require('../src/containers')
   const clock: typeof import('../src/game-clock') = require('../src/game-clock'), data = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
   const game = clock.activate(new clock.GameClock({ manual: true, epoch: 1000 }))
   const slots = [...reward, ...storage].map(item => item && structuredClone(item))
@@ -31,15 +31,59 @@ async function withdrawAll(reward: any[], storage: any[]) {
         if (!item.count) slots[i] = null
       }
     } }
+  const bag = Array(46).fill(null)
+  slots.slice(start).forEach((it, k) => { if (it) bag[k + 9] = { ...it, type: data.itemsByName[it.name].id, slot: k + 9 } })
+  const Vec3 = require('vec3')
+  const bot: any = { currentWindow: null, registry: data, entity: { position: new Vec3(.5, 64, .5) },
+    inventory: { slots: bag, items: () => bag.slice(9, 45).filter(Boolean), emptySlotCount: () => bag.slice(9, 45).filter(it => !it).length },
+    async tossStack(it) { assert.equal(bot.currentWindow, null, 'close the old container before using player slot numbers'); bag[it.slot] = null; slots[start + it.slot - 9] = null },
+    blockAt: () => ({ name: 'chest', position: new Vec3(1, 64, 0) }), async lookAt() {},
+    async openContainer() { bot.currentWindow = win; return win }, pathfinder: { setGoal() {} }, clearControlStates() {} }
+  win.close = () => { slots.slice(start).forEach((it, k) => { bag[k + 9] = it }); bot.currentWindow = null }
+  let strayClosed = false
+  if (makeRoom) bot.currentWindow = { close() { strayClosed = true; bot.currentWindow = null } }
   try {
     let settled = false
     const names = [...new Set(win.containerItems().map(item => item.name))]
-    const pending = withdrawPass({ currentWindow: win }, data, win, names, {}).finally(() => { settled = true })
+    const pending = (makeRoom ? chestTake({ bot, mcData: data, journal: { state: {} } }, { aborted: false, onAbort: [] },
+      { item: names.join(','), x: 1, y: 64, z: 0, stay: true, makeRoom }) : withdrawPass({ currentWindow: win }, data, win, names, {})).finally(() => { settled = true })
     for (let i = 0; !settled && i < 40; i++) { await new Promise(resolve => setImmediate(resolve)); game.advanceTicks(5) }
     assert(settled, 'actual withdrawPass must finish under the fixture clock')
-    return { receipt: await pending, inventory: slots.slice(start).filter(Boolean) }
+    return { receipt: await pending, inventory: slots.slice(start).filter(Boolean), strayClosed }
   } finally { game.dispose() }
 }
+
+test('a full J-shaped bag makes native room for missing armour without losing rescue or weapon supplies', async () => {
+  const data = require('minecraft-data')('1.21.11')
+  const stock = { bow: 2, arrow: 64, respawn_anchor: 1, iron_helmet: 1, glowstone: 4, iron_chestplate: 2, iron_spear: 1,
+    soul_sand: 8, smooth_quartz: 2, water_bucket: 3, tipped_arrow: 16, milk_bucket: 2, honey_bottle: 4, golden_apple: 2,
+    cooked_beef: 8, oak_log: 6, tnt: 3, shield: 1, potion: 4, fermented_spider_eye: 2, stone_pickaxe: 1, iron_axe: 1,
+    chainmail_chestplate: 1, flint_and_steel: 1, fire_charge: 3, splash_potion: 1, cobblestone: 7 }
+  const storage: any[] = []
+  for (const [name, count] of Object.entries(stock)) {
+    let left = count
+    while (left > 0) { const n = Math.min(left, data.itemsByName[name].stackSize); storage.push({ name, count: n }); left -= n }
+  }
+  const arrow = storage.find(it => it.name === 'tipped_arrow'); arrow.count = 8; storage.push({ name: 'tipped_arrow', count: 8 })
+  assert.equal(storage.length, 36, 'explicit occupied slots; aggregated names alone do not prove capacity')
+  const actual = await withdrawAll([{ name: 'netherite_leggings', count: 1 }, { name: 'netherite_boots', count: 1 }], storage,
+    { slots: 2, forItem: 'netherite_leggings' })
+  assert.equal(actual.strayClosed, true)
+  assert.deepEqual(actual.receipt.took, { netherite_leggings: 1, netherite_boots: 1 })
+  assert.equal(actual.receipt.full, false)
+  for (const name of ['water_bucket', 'milk_bucket', 'iron_spear', 'stone_pickaxe', 'cooked_beef', 'cobblestone'])
+    assert.equal(actual.inventory.filter(it => it.name === name).reduce((n, it) => n + it.count, 0), stock[name], name)
+})
+
+test('native capacity recovery reports full when only reserved gear and supplies remain', async () => {
+  const storage = [{ name: 'ladder', count: 32 }, { name: 'wind_charge', count: 2 }, { name: 'mace', count: 1 },
+    { name: 'water_bucket', count: 1 }, { name: 'stone_pickaxe', count: 1 }, { name: 'cooked_beef', count: 2 },
+    { name: 'cobblestone', count: 16 }, ...Array.from({ length: 29 }, () => ({ name: 'potion', count: 1 }))]
+  const actual = await withdrawAll([{ name: 'netherite_boots', count: 1 }], storage, { slots: 1, forItem: 'netherite_boots' })
+  assert.deepEqual(actual.receipt.took, {})
+  assert.equal(actual.receipt.full, true)
+  assert.deepEqual(actual.inventory.map(it => [it.name, it.count]), storage.map(it => [it.name, it.count]))
+})
 
 function contentsReceipt(reward: any[]) {
   const contents = {}

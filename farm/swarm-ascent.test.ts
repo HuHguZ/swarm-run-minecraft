@@ -19,6 +19,7 @@ function fixture({ inventory = { stone: 64, iron_pickaxe: 1 }, reply = null, lad
     detail: r => r?.detail || r || {}, bounded: p => p, blast: async () => false,
     failed: (_b, key, sig = '') => refusals.add(key + '|' + sig),
     blocked: (_b, key, sig = '') => refusals.has(key + '|' + sig), cleared() {}, alive: () => true, generation: 0 }
+  sw.go = (_b, at, range, seconds, arena) => b.c.call('goto', { ...at, range, timeoutSeconds: seconds, arena })
   const foe = { id: 'Foe', position: { x: 6, y: 68, z: 0 } }
   return { b, frame, calls, refusals, sw, foe, setTime: value => { time = value },
     run: () => swarmClimb(sw).climbTo(b, foe, foe.position) }
@@ -70,7 +71,45 @@ test('сторож остановил зависший ветер: тот же �
 test('отказ готовой лестницы под луком уводит, а не заканчивает ход на месте', async () => {
   const f = fixture({ ladder: true })
   await f.run()
-  assert.deepEqual(f.calls.map(c => c.method), ['goto', 'take_cover', 'flee'])
+  assert.deepEqual(f.calls.map(c => c.method), ['ladder_up', 'take_cover', 'flee'])
+})
+
+test('a ready combat route approaches its base then climbs natively with no ladder inventory', async () => {
+  const f = fixture({ inventory: {}, reply: (method, params, _b, frame) => {
+    if (method === 'goto') {
+      if (params.y !== 64) return { status: 'failed', error: 'stuck at the upper air neighbor' }
+      frame.p = { x: params.x, y: params.y, z: params.z }
+      return { status: 'done', detail: { arrived: frame.p } }
+    }
+    if (method === 'ladder_up') {
+      assert.deepEqual(frame.inv, {})
+      assert.deepEqual(params.wall, { x: 6, y: 64, z: 0 }); assert.deepEqual(params.face, { x: -1, z: 0 })
+      frame.p = { x: 6.5, y: 68, z: .5 }
+      return { status: 'done', detail: { ok: true, complete: true, placed: 0, at: frame.p } }
+    }
+    return null
+  } })
+  f.sw.ladderRoutes.push({ key: 'ready', base: { x: 5.5, y: 64, z: .5 }, top: { x: 6.5, y: 68, z: .5 } })
+  f.foe.position = { x: 6.5, y: 68, z: .5 }
+  f.sw.go = (_b, at, range, seconds, arena) => f.b.c.call('goto', { ...at, range, timeoutSeconds: seconds, arena })
+  assert.equal(await f.run(), true)
+  assert.deepEqual(f.calls.map(c => c.method), ['goto', 'ladder_up'])
+  assert.ok(f.calls.every(c => c.climbing && c.ascent))
+  assert.equal(f.refusals.size, 0)
+})
+
+test('an interrupted or stale ladder approach cannot start its native climb', async () => {
+  for (const stale of [false, true]) {
+    const f = fixture({ inventory: {}, reply: method => {
+      if (method !== 'goto') return null
+      if (stale) { f.sw.generation++; return { status: 'done', detail: { arrived: { x: 5.5, y: 64, z: .5 } } } }
+      return { status: 'interrupted', by: { type: 'tactical', requireObservation: true } }
+    } })
+    f.sw.ladderRoutes.push({ key: 'ready', base: { x: 5.5, y: 64, z: .5 }, top: { x: 6.5, y: 68, z: .5 } })
+    await f.run()
+    assert.deepEqual(f.calls.map(c => c.method), ['goto'])
+    assert.equal(f.b.swarmAscent, undefined)
+  }
 })
 
 test('tactical interruption не отбирает тело у аварийного владельца новым побегом', async () => {

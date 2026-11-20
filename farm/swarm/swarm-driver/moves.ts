@@ -1,7 +1,11 @@
 // Рой: ход тела — к точке в арене, лут по пути, исполнение команды, засада кемпера, отпуск тела.
 import { WEAPON, distance, cellKey, blockCount } from './common'
 import { currentTurn } from './lifecycle'
+import { ladderEntry, readyLadder, runAscent } from './ascent'
 import type { SwarmDriverCtx } from './common'
+
+// prismarine-physics 1.11.1 moves before applying the ladder impulse, gravity and air drag.
+const LADDER_BPS = (.2 - .08) * Math.fround(.98) * 20
 
 export function swarmMoves (sw: SwarmDriverCtx) {
   const { arena, pos, now, log, alive, boxed, boxTries, cooldown, plannedAt, blueprints, placed, boardOf, teamOf } = sw
@@ -31,14 +35,18 @@ export function swarmMoves (sw: SwarmDriverCtx) {
   // через дверь мимо врага давал «лут → бегство» (стенд rush 15.10, 3 из 3 оставшихся).
   // Цена пути, а не запрет по дальности: взлёт/посадка и дефицит ракет против ходьбы и подъёма.
   // shortcut: время полёта оценочное; заменить замерами маршрутов, когда появится телеметрия лут-полётов.
-  const travelCost = (b, at) => {
+  const travelCost = (b, at, from = pos[b.name]?.p, threat?) => {
     const m = pos[b.name], rockets = m?.inv?.firework_rocket || 0
-    if (!m?.p) return { walk: Infinity, fly: Infinity }
-    const d = distance(m.p, at), key = 'lootFly:' + b.name + ':' + cellKey(bounded(at))
+    if (!m || !from) return { walk: Infinity, fly: Infinity }
+    const d = distance(from, at), key = 'lootFly:' + b.name + ':' + cellKey(bounded(at))
     const kit = m.inv?.elytra > 0 || m.armor?.torso === 'elytra'
-    const blocks = at.climbFrom === undefined || m.p.y >= at.y - 1 || m.inv?.ender_pearl > 0 ? 0 : Math.max(0, at.y - Math.max(m.p.y, at.climbFrom)) + 3
-    return { walk: blockCount(m.inv) >= blocks ? d / 5.6 + Math.max(0, at.y - m.p.y) : Infinity,
-      fly: kit && rockets >= 5 && !sw.blocked(b, key, String(rockets)) && sw.lootSafe(b, at) ? 4 + d / 20 + 8 / rockets : Infinity }
+    const ladder = readyLadder(sw, b, at, from), last = ladder?.top || from
+    const blocks = at.climbFrom === undefined || last.y >= at.y - 1 || m.inv?.ender_pearl > 0 ? 0 : Math.max(0, at.y - Math.max(last.y, at.climbFrom)) + 3
+    const leg = (a, c) => distance(a, c) / 5.6 + Math.max(0, c.y - a.y)
+    const entry = ladder && ladderEntry(ladder, from)
+    const walk = ladder ? leg(from, entry) + (ladder.top.y - entry.y) / LADDER_BPS + leg(ladder.top, at) : leg(from, at)
+    return { walk: blockCount(m.inv) >= blocks ? walk : Infinity,
+      fly: kit && rockets >= 5 && !sw.blocked(b, key, String(rockets)) && sw.lootSafe(b, at, false, threat) ? 4 + d / 20 + 8 / rockets : Infinity }
   }
   const go = async (b, at, range = 2, seconds = 4, pathArena = b.swarmTask?.kind === 'loot' ? lootArena(b) : arena, air = false) => {
     lootStep(b, at)
@@ -60,7 +68,34 @@ export function swarmMoves (sw: SwarmDriverCtx) {
     }
     const down =(pos[b.name]?.p?.y ?? at.y) - at.y > 4
     const up = at.climbFrom !== undefined && at.y - (pos[b.name]?.p?.y ?? at.y) > 1
-    return b.c.call('goto', { ...bounded(at), range, timeoutSeconds: up ? 20 : down ? Math.max(seconds, 10) : seconds, arena: pathArena, ...(down || up ? { climb: true } : {}), ...(up ? { exactY: true, _climb: true } : {}), _hunt: true })
+    // A walkable upper gallery still needs the travel time priced by the selector.
+    const ascentSeconds = at.y - (pos[b.name]?.p?.y ?? at.y) > 1 && Number.isFinite(cost.walk) ? Math.ceil(cost.walk) : 0
+    const params = { ...bounded(at), surface: at.surface ?? false, range, timeoutSeconds: Math.max(seconds, up ? 20 : down ? 10 : 0, ascentSeconds), arena: pathArena, ...(down || up ? { climb: true } : {}), ...(up ? { exactY: true, _climb: true } : {}), _hunt: true }
+    const started = now(), pending = b.c.call('goto', params), action = b.last
+    const reply = await pending, here = reply?.state?.pos || pos[b.name]?.p
+    if (reply?.status === 'failed' && /^(ARENA_BOUNDARY|AVOID_NO_PATH)$/.test(reply.code) &&
+        currentTurn(sw, b, round) && b.last === action && b.swarmTask?.kind === 'loot' && !b.swarmTask.data?.commanded &&
+        !b.webRescue && !pos[b.name]?.rescuing && here && pathArena?.avoid?.some(e => distance(here, e) < lootThreat(b).r)) {
+      // A fixed no-closer route can reject even idle momentum; escape prices the same memory without claiming arrival.
+      const threat = lootThreat(b), escape = await b.c.call('flee', { from: threat.foes.map(e => e.id), timeoutSeconds: 3,
+        safeDist: threat.r, reason: b.swarmTask.data?.reason, arena: pathArena })
+      const end = detail(escape).at || escape?.state?.pos
+      if (currentTurn(sw, b, round) && end) pos[b.name].p = { ...end }
+    }
+    const frame = pos[b.name], inv = reply?.state?.inventory || frame?.inv || {}
+    const remaining = params.timeoutSeconds - (now() - started) / 1000
+    // Native goto clamps to five seconds; another mode must fit the same caller budget.
+    if (!params.climb && !params._climb && !params.walkOnly && params.surface !== 'strict' && !detail(reply).arrived &&
+        reply?.status === 'failed' && !/^(DAMAGE|ARENA_BOUNDARY|AVOID_NO_PATH)$/.test(reply?.code || detail(reply).code || '') &&
+        !/^(Tactical|Emergency)$/.test(reply?.state?.tactics?.owner || '') &&
+        currentTurn(sw, b, round) && b.last === action && b.swarmTask?.kind === 'loot' && !b.swarmTask.data?.commanded &&
+        !b.climbing && !b.webRescue && !frame?.rescuing && (reply?.state?.health ?? frame?.hp) > 0 && here && at.y - here.y > 1 && remaining >= 5 &&
+        (blockCount(inv) > 0 || Object.keys(inv).some(n => inv[n] > 0 && /_(pickaxe|axe|shovel)$/.test(n)))) {
+      const result = await runAscent(b, { ...frame, p: here, inv }, at,
+        () => b.c.call('goto', { ...params, timeoutSeconds: remaining, climb: true, exactY: true, _climb: true }), now)
+      return currentTurn(sw, b, round) ? result : { status: 'interrupted', detail: { interrupted: true } }
+    }
+    return reply
   }
   const buildGo = (b, at, range = .25) => b.c.call('goto', { ...at, range, timeoutSeconds: 4, surface: 'strict', arena, _hunt: true })
   const detail = r => r?.detail || r || {}
@@ -110,9 +145,9 @@ export function swarmMoves (sw: SwarmDriverCtx) {
   // бот уже ближе — не ближе, чем он сейчас (стенд rush 15.10: красный стоит, синий ходит маятником 25 → 14 → 25 бл. каждые
   // 5 с — цель за 22 бл. от него, а путь к ней мимо него; Codex 15.10: сундук, куча, подбор и обход выбирали цель каждый
   // по-своему, обход — только по ближнему врагу). Все свежие враги доски, а не один.
-  const lootThreat = b => {
+  const lootThreat = (b, sightings = boardOf(b).enemies()) => {
     const naked = !Object.keys(pos[b.name]?.inv || {}).some(n => WEAPON.test(n)) || !!b.swarmTask?.data?.weak
-    const foes = boardOf(b).enemies().filter(e => now() - e.seenAt < (naked ? 10000 : 3000))
+    const foes = sightings.filter(e => now() - e.seenAt < (naked ? 10000 : 3000))
     // Лучник достаёт дальше: у сундука стоишь мишенью (игра пользователя 25.10: o открывал сундук на гребне, лук в 31 бл. — одна стрела, 20 хп).
     return { r: foes.some(e => e.threat === 'bow') ? 34 : naked ? 22 : 14, foes }
   }

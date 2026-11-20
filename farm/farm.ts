@@ -53,6 +53,7 @@ const crypto: typeof import('crypto') = require('crypto')
 const { spawn, execFileSync }: typeof import('child_process') = require('child_process')
 const { tickRate, tickAction, checkedReply, configureTick, runEnv, disablePacketLimiter }: typeof import('./tick-control') = require('./tick-control')
 const { acceleratedDigArgs }: typeof import('./accelerated-dig') = require('./accelerated-dig')
+const { listenerOwners }: typeof import('./listeners') = require('./listeners')
 
 const ROOT = REPO_ROOT
 const FARM = path.join(REPO_ROOT, 'farm')
@@ -149,22 +150,13 @@ async function waitPort (port, want, ms) {
   return false
 }
 
-// Кто слушает порт (netstat) — убивать только владельца своего порта.
-// Снимок один на всё дело: execFileSync стоит цикл событий, и параллельные
-// portOpen в это время ловят свой таймаут 1.5 с раньше, чем «connect» —
-// сервер «не слушает» (2026-09-28: down 1-13 не остановил слоты 1–8).
-function listeners () {
-  const map = new Map()
-  try {
-    const out = execFileSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8' })
-    for (const line of out.split(/\r?\n/)) {
-      const m = line.trim().split(/\s+/)
-      if (m.length >= 5 && m[3] === 'LISTENING') map.set(Number(m[1].slice(m[1].lastIndexOf(':') + 1)), Number(m[4]))
-    }
-  } catch {}
-  return map
+const farmIds = Array.from({ length: MAX_SLOTS }, (_, k) => k + 1)
+const serverPorts = [25569, ...farmIds.map(i => slot(i).mc)]
+async function listeners (ports: number[]) {
+  const owners = await listenerOwners(ports)
+  if (!owners) throw new Error('не удалось проверить владельцев портов фермы')
+  return owners
 }
-function pidOnPort (port) { return listeners().get(port) || 0 }
 // Приоритет «ниже обычного» и ядра AFFINITY (FARM_AFFINITY=off — не трогать ядра).
 function gentle (pid = process.pid) {
   try { os.setPriority(pid, os.constants.priority.PRIORITY_BELOW_NORMAL) } catch {}
@@ -182,12 +174,12 @@ function prioSlots () {
   return out
 }
 const slotOfPort = p => (p > 25600 && p <= 25600 + MAX_SLOTS) ? p - 25600 : (p > 8800 && p <= 8800 + MAX_SLOTS) ? p - 8800 : (p > 8900 && p <= 8900 + MAX_SLOTS) ? p - 8900 : 0
-function applyPrio () {
+async function applyPrio () {
   const prio = prioSlots()
   if (!prio.size) return []
   const done = []
-  for (const [p, pid] of listeners()) {
-    if (!prio.has(slotOfPort(p))) continue
+  for (const [p, pid] of await listeners(farmIds.filter(i => prio.has(i)).flatMap(i => [slot(i).mc, slot(i).ws, 8900 + i]))) {
+    if (!pid || !prio.has(slotOfPort(p))) continue
     try { os.setPriority(pid, os.constants.priority.PRIORITY_NORMAL); done.push(pid) } catch {}
   }
   return done
@@ -284,7 +276,7 @@ function parseSlots (arg, fallback) {
   }
   return [...out].filter((i: any) => i >= 1 && i <= MAX_SLOTS).sort((x: any, y: any) => x - y)
 }
-function upSlots () { const st = readState(); return Object.keys(st.slots || {} as Record<string, any>).map(Number).sort((a, b) => a - b) }
+function upSlots () { const st = readState(); return farmIds.filter(i => Object.hasOwn(st.slots || {}, i)) }
 function randomSeed () { return BigInt.asIntN(64, BigInt('0x' + crypto.randomBytes(8).toString('hex'))).toString() }
 
 function prepareSlot (s, { seed, fresh, world }: any) {
@@ -398,7 +390,7 @@ async function cmdUp (args) {
   const n = Number(args._[0] || 4)
   const from = Number(args.from || 1)
   const ids = []; for (let i = from; i < from + n && i <= MAX_SLOTS; i++) ids.push(i)
-  const up = worldsUp(listeners())
+  const up = worldsUp(await listeners(serverPorts))
   const extra = ids.filter(i => !up.includes(slot(i).mc)).length
   if (up.length + extra > MAX_UP) throw new Error(`лимит ${MAX_UP} миров разом (farm/limits.json — играет ли пользователь): уже подняты порты ${up.join(', ') || '—'}, просишь ещё ${extra}. Сначала down лишних.`)
   if (lockstep && extra < ids.length) throw new Error('--lockstep: сервер слота уже поднят, а режим задаётся агентом при старте — сначала down')
@@ -461,10 +453,10 @@ async function cmdDaemons (args) {
     for (const i of ids) if (st.slots?.[i]) { if (args.code === 'live') delete st.slots[i].code; else st.slots[i].code = args.code }
     writeState(st)
   }
-  const owners = listeners()
+  const owners = await listeners(ids.map(i => slot(i).ws))
   for (const i of ids) {
     const pid = owners.get(slot(i).ws)
-    if (!pid) continue
+    if (!pid) { if (owners.has(slot(i).ws) || await portOpen(slot(i).ws)) throw new Error(`порт ${slot(i).ws}: владелец не подтверждён`); continue }
     const command = cmdLine(pid)
     if (!/node/i.test(command) || !/src[\\/]index\.js/.test(command)) throw new Error(`порт ${slot(i).ws} занят чужим процессом — отменяю`)
   }
@@ -488,7 +480,16 @@ async function cmdDown (args) {
   const spec = args._[0] || (typeof args.slots === 'string' ? args.slots : null)
   if (!spec && !args.all) throw new Error('down: укажи слоты (down 3-5 или --slots 3-5); все разом — down --all')
   const ids = parseSlots(spec || undefined, upSlots())
-  const lis = listeners()
+  const ports = ids.flatMap(i => [slot(i).mc, slot(i).rcon, slot(i).ws])
+  const lis = await listeners(ports)
+  await Promise.all(ports.map(async port => {
+    if (!lis.get(port) && (lis.has(port) || await portOpen(port))) throw new Error(`порт ${port}: владелец не подтверждён, остановка отменена`)
+  }))
+  for (const i of ids) {
+    const s = slot(i), java = lis.get(s.mc), daemon = lis.get(s.ws)
+    if (java && lis.get(s.rcon) !== java) throw new Error(`слот ${i}: игровой и RCON-порт не подтверждают один процесс`)
+    if (daemon && !/\bsrc[\\/]index\.js\b/i.test(cmdLine(daemon))) throw new Error(`слот ${i}: неизвестный процесс на порту ${s.ws}`)
+  }
   // Сперва серверы (RCON stop: сохранить и выйти), потом демоны — синхронных вызовов посреди ожиданий нет.
   await Promise.all(ids.map(async i => {
     const s = slot(i)
@@ -500,9 +501,11 @@ async function cmdDown (args) {
       while (Date.now() < until) { try { process.kill(spid, 0) } catch { break } await sleep(1000) }
       try { process.kill(spid, 0); log(`слот ${i}: java ${spid} жив через 120 с — убиваю`); killPid(spid) } catch {}
     }
-    log(`слот ${i}: сервер остановлен`)
   }))
   for (const i of ids) { const dpid = lis.get(slot(i).ws); if (dpid) killPid(dpid) }
+  const after = await listeners(ports)
+  await Promise.all(ports.map(async port => { if (after.has(port) || await portOpen(port)) throw new Error(`порт ${port} всё ещё занят после остановки`) }))
+  for (const i of ids) log(`слот ${i}: сервер остановлен`)
   const st = readState()
   for (const i of ids) if (st.slots) delete st.slots[i]
   writeState(st)
@@ -723,10 +726,11 @@ if (typeof module !== 'undefined') module.exports = { reupPlan } // фиксту
     if (cmd === 'tick') tickSelection(a)
     if (['up', 'daemons', 'run', 'nice'].includes(cmd)) gentle()
     if (cmd === 'nice') {
-      const pids = [...new Set([...listeners()].filter(([p]: any) => farmPort(p)).map(([, pid]: any) => pid))]
+      const owners = await listeners(farmIds.flatMap(i => [slot(i).mc, slot(i).ws, 8900 + i]))
+      const pids = [...new Set([...owners].filter(([p, pid]) => pid > 0 && farmPort(p)).map(([, pid]) => pid))]
       for (const pid of pids) gentle(pid)
       log(`ниже обычного, ядра ${AFFINITY}: ${pids.join(', ') || 'некому'}`)
-      const pr = applyPrio()
+      const pr = await applyPrio()
       if (pr.length) log(`обычный приоритет (prio ${readLimits().prio}): ${pr.join(', ')}`)
     } else if (cmd === 'up') {
       // --reup (S8b 07.10): свои слоты диапазона сперва down — под тем же замком up, чтобы между сидами серии место не ушло
@@ -737,14 +741,14 @@ if (typeof module !== 'undefined') module.exports = { reupPlan } // фиксту
         if (a.reup) {
           const f = Number(a.from || 1), n = Number(a._[0] || 4)
           const ids = []; for (let i = f; i < f + n && i <= MAX_SLOTS; i++) ids.push(i)
-          const up = worldsUp(listeners())
+          const up = worldsUp(await listeners(serverPorts))
           const r = reupPlan(ids, readState().slots || {}, a.code, i => up.includes(slot(i).mc))
           if (r.refuse.length) throw new Error(`--reup: слоты ${r.refuse.join(', ')} подняты не твоим снимком (--code ${a.code || '—'}, в slots.json ${r.refuse.map(i => readState().slots?.[i]?.code || 'без снимка').join(', ')}) — чужой мир не гашу`)
           if (r.down.length) await cmdDown({ _: [r.down.join(',')] })
         }
         return cmdUp(a)
-      }); applyPrio()
-    } else if (cmd === 'daemons') { await cmdDaemons(a); applyPrio() }
+      }); await applyPrio()
+    } else if (cmd === 'daemons') { await cmdDaemons(a); await applyPrio() }
     else if (cmd === 'down') await cmdDown(a)
     else if (cmd === 'status') await cmdStatus()
     else if (cmd === 'rcon') await cmdRcon(a)

@@ -10,6 +10,37 @@ const p = (x = 0, y = 64, z = 0) => ({ x, y, z })
 const armor = ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots']
 const member = (id: string, strong = false): SwarmMember => ({ id, team: 'blue', position: p(10), health: 20, strength: 40, role: 'fighter', weapon: strong ? 'netherite_sword' : 'stone_sword', armor: strong ? armor : [], ench: strong ? { sharpness: 5, protection: 16 } : {}, inventory: { [strong ? 'netherite_sword' : 'stone_sword']: 1 } })
 
+test('helmet-only glint survives the board without inventing weapon Sharpness in the S/V contact', () => {
+  let now = 1000
+  const own: SwarmMember = { ...member('S'), position: p(), weapon: 'iron_sword', inventory: { iron_sword: 1 },
+    armor: ['chainmail_helmet', 'chainmail_chestplate', 'iron_leggings', 'iron_boots'], ench: { sharpness: 0, protection: 2 } }
+  const board = new SwarmBoard('blue', () => now)
+  board.setMembers([own])
+  const raw: any = { id: 'V', position: p(1), visible: true, equipment: { weapon: 'iron_sword', weaponEnchanted: false,
+    armor: ['iron_boots', 'chainmail_chestplate', 'iron_helmet'], armorVisible: [true, true, true, true], armorEnchanted: [false, false, false, true], enchanted: true } }
+  Object.defineProperty(raw, 'health', { get() { throw Error('hidden player HP') } })
+  board.observe('S', now, raw)
+  let foe = board.enemies()[0]
+  assert.equal(foe.equipment?.weaponEnchanted, false)
+  const plain = fight.memberFight(own, foe), risk = fight.assessSwarmFight(own, [foe], [own])
+  assert.equal(risk.unsafe, false, 'the actual plain sword must not acquire helmet enchantments')
+  assert.deepEqual(risk.enemySharpness, [0, 0])
+  now++
+  board.observe('S', now, { ...raw, equipment: { ...raw.equipment, weaponEnchanted: true } })
+  foe = board.enemies()[0]
+  assert.ok(fight.memberFight(own, foe).survival < plain.survival, 'a real weapon glint retains its conservative damage range')
+  now++
+  board.observe('S', now, raw)
+  assert.equal(board.enemies()[0].equipment?.weaponEnchanted, false, 'fresh false replaces old true')
+  now++
+  board.observe('S', now, { ...raw, visible: false, nametag: true, equipment: { weapon: 'diamond_sword', weaponEnchanted: true } })
+  assert.equal(board.enemies()[0].equipment?.weapon, 'iron_sword', 'hidden packets cannot refresh the visible weapon')
+  assert.equal(board.enemies()[0].equipment?.weaponEnchanted, false)
+  const legacy = { ...foe, equipment: { ...foe.equipment } }
+  delete legacy.equipment.weaponEnchanted
+  assert.equal(fight.memberFight(own, legacy).survival, fight.memberFight(own, foe).survival)
+})
+
 test('solo driver keeps rearming against its only human instead of finishing from round start', () => {
   const bots = Array.from({ length: 30 }, (_, i) => ({ name: `blue${i}`, team: 'blue' }))
   const pos = Object.fromEntries(bots.map((b, i) => [b.name, { p: p(24, 64, i % 5), hp: 20, inv: { bow: 1, arrow: 64 }, armor: {} }]))

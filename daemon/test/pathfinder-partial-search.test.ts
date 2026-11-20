@@ -267,3 +267,59 @@ test('external path invalidation and Emergency still revoke a consumed search', 
     assert.equal(typeof after,'function')
   } finally { walk.cancel(); await assert.rejects(walk,{name:'PathStopped'}) }
 })
+
+for (const variant of ['airborne','unknown physics','ordinary airborne walk','grounded publication','mining','placing','first break','first placement']) {
+  test(`a different native terminal construction route rebases only an idle plain prefix: ${variant}`, async () => {
+    const previous=process.env.ND_ASTAR_SLICE_NODES
+    process.env.ND_ASTAR_SLICE_NODES='1'
+    const bot: any=new EventEmitter(), controls={forward:false,jump:false}
+    bot.entity={position:new Vec3(650.3,150,554.33),onGround:true}
+    const start=new Move(650,150,554,7,0), ghost=new Move(649,151,555,7,Math.SQRT2+1)
+    const tower=[151,152,153,154].map((y,i)=>new Move(650,y,554,6-i,2,[],[{x:650,y:y-2,z:554,dx:0,dy:1,dz:0,jump:true}]))
+    const terminal=new Move(649,154,555,3,Math.SQRT2), goal=new goals.GoalBlock(649,154,555)
+    const search=new AStar(start,{getNeighbors(n){
+      if(n===start)return[ghost,tower[0]]
+      const i=tower.indexOf(n)
+      return i<0?[]:i===3?[terminal]:[tower[i+1]]
+    }},goal,5000)
+    let currentPath=[],calls=0
+    bot.pathfinder={goal:null,isMoving:()=>currentPath.length>0,isMining:()=>variant==='mining',isBuilding:()=>variant==='placing',canMove:()=>true,
+      setGoal(g){this.goal=g;calls++;currentPath=[];controls.forward=false;controls.jump=false;bot.emit('goal_updated',g)}}
+    if(variant==='unknown physics')delete bot.pathfinder.canMove
+    const walk=gotoGoal(bot,goal);walk.catch(()=>{})
+    try {
+      const partial=search.compute()
+      assert.equal(partial.status,'partial');assert.deepEqual(partial.path,[ghost])
+      bot.emit('path_update',partial);currentPath=partial.path
+      bot.entity.position.set(650.1149766831819,150.41999998688698,554.6001058427306)
+      bot.entity.onGround=false;controls.forward=true;controls.jump=true
+      if(variant==='first break')ghost.toBreak.push({x:649,y:151,z:555})
+      if(variant==='first placement')ghost.toPlace.push({x:649,y:150,z:555,dx:0,dy:1,dz:0})
+      let success
+      for(let i=0;i<20;i++){success=search.compute();if(success.status!=='partial')break}
+      assert.equal(success.status,'success');assert.equal(success.path[0],tower[0]);assert.equal(success.path[0].toPlace.length,1)
+      if(variant==='ordinary airborne walk')success.path[0].toPlace.length=0
+      if(variant==='grounded publication') {
+        // V11 native receipt: the failed walk's jump reports ground for the exact
+        // SUCCESS tick, then repeats its unreachable old prefix instead of building.
+        bot.entity.position.set(650.2856291954586,150,554.3510406838491)
+        bot.entity.onGround=true
+      }
+      bot.emit('path_update',success);currentPath=success.path
+      if(variant==='airborne'||variant==='unknown physics'||variant==='grounded publication') {
+        assert.equal(currentPath.length,0,'rebase the complete construction route without requiring a weak or missing canMove predicate')
+        bot.emit('physicsTick')
+        assert.equal(calls,2,'the existing native goal reset rebases from the actual body')
+        assert.deepEqual(controls,{forward:false,jump:false},'native reset releases the old jump; no synthetic movement or landing')
+        assert.equal(tower[0].toPlace.length,1,'an unexecuted construction action was not consumed')
+      } else {
+        assert.equal(currentPath[0],ghost,'an ordinary airborne walk or active dig/place keeps its existing action')
+        bot.emit('physicsTick');assert.equal(calls,1)
+        assert.deepEqual(controls,{forward:true,jump:true},'keep the native steering of the retained prefix')
+      }
+    } finally {
+      walk.cancel();await assert.rejects(walk,{name:'PathStopped'})
+      if(previous===undefined)delete process.env.ND_ASTAR_SLICE_NODES;else process.env.ND_ASTAR_SLICE_NODES=previous
+    }
+  })
+}

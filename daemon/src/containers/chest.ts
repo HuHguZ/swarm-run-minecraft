@@ -1,5 +1,6 @@
 'use strict'
 import * as gameClock from '../game-clock'
+import { inTransferWindow } from '../invsync'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import { goals } from 'mineflayer-pathfinder'
 import { sleep, xyz } from '../movement'
@@ -178,7 +179,7 @@ async function depositPass (bot, mcData, win, names, { budget = Infinity, caps =
     if (want > 0) {
       const before = win.containerCount(data.id, null)
       try {
-        await win.deposit(data.id, null, want, null)
+        await inTransferWindow(bot, win, () => win.deposit(data.id, null, want, null))
       } catch (err) {
         // Belt and braces: the cursor may still be loaded, and closing the
         // window then makes the server drop it on the ground. Put it back
@@ -233,7 +234,7 @@ async function withdrawPass (bot, mcData, win, names, { budget = Infinity, caps 
     if (want > 0) {
       const before = win.count(data.id, null)
       try {
-        await win.withdraw(data.id, null, want, null)
+        await inTransferWindow(bot, win, () => win.withdraw(data.id, null, want, null))
       } catch (err) {
         // Whatever went wrong, the cursor may still be holding the stack, and
         // a window closed on a full cursor drops it. Back into the chest first.
@@ -323,7 +324,7 @@ function resolveFromContainer (win, name) {
   return [...out]
 }
 
-async function chestTake (session, ctl, { item, count = null, x, y, z, timeoutSeconds, visibleOnly = false, stay = false }: any = {}) {
+async function chestTake (session, ctl, { item, count = null, x, y, z, timeoutSeconds, visibleOnly = false, stay = false, makeRoom = null }: any = {}) {
   const bot = session.bot
   const mcData = session.mcData
   if (!String(item || '').trim()) throw new Error('не сказано, что брать')
@@ -331,6 +332,16 @@ async function chestTake (session, ctl, { item, count = null, x, y, z, timeoutSe
   let budget = budgetOf(count)
 
   const deadline = gameClock.now() + chestTakeMs(timeoutSeconds)
+  if (makeRoom) {
+    if (!Number.isInteger(makeRoom.slots) || makeRoom.slots < 1 || makeRoom.slots > 36 || !mcData.itemsByName[makeRoom.forItem]) throw new Error('invalid chest capacity request')
+    if (ctl.aborted) throw new Error('прервано')
+    await closeStray(bot)
+    if (ctl.aborted) throw new Error('прервано')
+    const preserve = new Set(bot.inventory.items().filter(it => /_spear$|^(mace|wind_charge|ladder)$/.test(it.name)).map(it => it.name))
+    await (require('../pack') as typeof import('../pack')).makeRoom(bot, { slots: makeRoom.slots, forItem: makeRoom.forItem, preserve, ctl, deadline })
+    if (ctl.aborted) throw new Error('прервано')
+    if (gameClock.now() >= deadline) throw new Error('время взятия сундука вышло')
+  }
   const { block, win } = await findAndOpen(session, ctl, { x, y, z, visibleOnly, stay }, deadline)
   const shut = guardWindow(ctl, win)
 
@@ -351,6 +362,7 @@ async function chestTake (session, ctl, { item, count = null, x, y, z, timeoutSe
     at: xyz(block.position),
     kind: block.name,
     took: pass ? pass.took : {},
+    full: !!pass?.full,
     left: pass && Object.keys(pass.left).length ? pass.left : undefined,
     contents: facts ? facts.contents : undefined,
     free: facts ? facts.free : undefined,

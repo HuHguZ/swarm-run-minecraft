@@ -10,7 +10,7 @@ export function installReport (ctx: DuelCtx) {
   const { aimTimer, blk, bm, bot, clear, combo, ctl, cx, duo, edgeGuard, foodFire, guard, hm, kills, mc, mf, onCrack, onCrackEnd, onDead, onHurt, onMlg, onMobHurt, onRoutePath, onSelfDeath, onTickArcher, onTickDmg, onTickFall, onTickSwat, opts, ovl, pathTo, pearlResponse, pendingLava, quiet, restoreMoves, scoop, session, sky, st, strategicTargetId, tt, use0, util, vision } = ctx
   const releaseFightItems = ctx.releaseFightItems = async () => {
     if (guard && !ctx.selfDied) await guard.raise(false)
-    if (!ctx.selfDied) for (const cell of pendingLava.splice(0)) await scoop(cell)
+    if (!ctx.selfDied) for (const { cell } of pendingLava.splice(0)) await scoop(cell)
   }
   ctx.strategicRequest = () => !ctl.aborted && !ctx.selfDied && (bot.health ?? 20) > 0 && ctx.prof.player &&
     ctx.entity.id === strategicTargetId && bot.entity?.onGround && !bot.entity.elytraFlying && !edges.falling(bot) &&

@@ -84,6 +84,7 @@ export function installServices (ctx: DuelCtx) {
     return best ? new Vec3(best.x, fy + 1, best.z) : null
   }
   const edgeGuard = ctx.edgeGuard = edges.guard(bot, {
+    arena: AR,
     margin: () => (ctx.entity && ctx.entity.isValid && ctx.entity.position && bot.entity && ctx.entity.position.distanceTo(bot.entity.position) < 6 ? 0.35 : 0)
   })
   const mc = ctx.mc = mace.track(bot, { enemy: () => ctx.entity, telemetryHp })

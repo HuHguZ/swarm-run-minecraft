@@ -2,19 +2,19 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { createRecovery } from '../src/pvp/recovery'
+import { install, testClock } from './tick-plugins-fixture'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import * as projectiles from '../src/throw'
 const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const resistanceId = registry.effectsByName.Resistance.id
 const fireResistanceId = registry.effectsByName.FireResistance.id
 
-function fixture(hp = 7, name = 'ender_pearl') {
+function fixture(hp = 7, name = 'ender_pearl', bot: any = new EventEmitter()) {
   const item = { name, type: 2, slot: 36, count: 1 }
-  const bot: any = new EventEmitter()
   bot.health = hp
   bot.registry = registry
   bot.game = { gameMode: 'survival' }
-  bot.entity = { type: 'player', position: new Vec3(0, 20, 0), onGround: false, metadata: [], effects: {} }
+  bot.entity = { ...bot.entity, type: 'player', position: bot.entity?.position?.set(0, 20, 0) || new Vec3(0, 20, 0), onGround: false, metadata: [], effects: {} }
   bot.inventory = { slots: [], items: () => [item] }
   bot.heldItem = item
   bot.look = async () => {}
@@ -117,5 +117,33 @@ test('the pearl health guard leaves other throwables and creative use unchanged'
     await f.aim(); f.release()
     assert.equal((await work).thrown, true)
     assert.deepEqual(f.releases, [1])
+  }
+})
+
+test('short rescue confirms the native self-teleport packet, while walking and no teleport cannot confirm it', async () => {
+  for (const mode of ['teleport', 'walk', 'still']) {
+    const f = fixture(20, 'ender_pearl', install(testClock()))
+    const listeners = f.bot.listenerCount('forcedMove')
+    let elapsed = 0
+    f.ctx.gameClock = { now: () => elapsed }; f.ctx.TICK_MS = 50; f.ctx.ctl = { aborted: false }
+    // Fix only the trajectory fixture; receipt still passes through the native position handler.
+    f.ctx.throwMod.throwAt = async (bot, target, options) => ({ ...await projectiles.throwAt(bot, target, options), land: { x: 1.5, y: 20, z: 0 } })
+    f.ctx.sleep = async ms => {
+      elapsed += ms
+      if (elapsed !== 50) return
+      if (mode === 'teleport') f.bot._client.emit('position', {
+        teleportId: 2, x: 1.5, y: 20, z: 0, dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, flags: {}
+      })
+      if (mode === 'walk') { f.bot.entity.position.set(1.5, 20, 0); f.bot.emit('move') }
+    }
+    try {
+      const work = createRecovery(f.ctx).escapePearl({ jump: false, rescue: true })
+      await f.aim(); f.release()
+      const out = await work
+      assert.equal(out?.thrown, true, mode)
+      assert.equal(out?.clear, mode === 'teleport', mode)
+      if (mode === 'teleport') assert.equal(elapsed, 50, 'a server-confirmed short TP must not wait out the flight budget')
+      assert.equal(f.bot.listenerCount('forcedMove'), listeners, 'each completed attempt releases its teleport observer')
+    } finally { f.bot.emit('end') }
   }
 })

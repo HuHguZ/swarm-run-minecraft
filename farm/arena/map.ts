@@ -3,7 +3,8 @@ import { DIST_ROOT } from '../../daemon/src/paths'
 // Поле и карта: гонка — раскладка arms-layout или Колизей (сброс арены каждый раунд, насесты), точки старта бойцов и
 // падение с арены.
 import { ROOT } from './context'
-import { LAN_NAME } from './server'
+import { LAN, LAN_NAME } from './server'
+import { leaveForRestore } from './fleet'
 import { makeStockChests } from './loot'
 import type { ArenaContext } from './context'
 import * as fs from 'fs'
@@ -79,6 +80,10 @@ export async function setupArmsMap (ctx: ArenaContext) {
   // catch: при первой постройке сервер занят генерацией, а часы драйвера шлют запрос раз в секунду — RCON закрывается
   // (21.10, слот 30: «rcon closed» ронял запуск); следующая команда переподключится.
   for (const b of bots) await rcon(i, `gamemode spectator ${b.name}`).catch(() => {})
+  if (!LAN && COLOS_MAP && process.env.ARMS_RESET !== '0') {
+    const exited = await leaveForRestore(i, bots, rcon)
+    if (exited) log(`гонка: до восстановления Колизея вышли бойцы прошлого матча (${exited})`)
+  }
   await ctx.restoreArena()
   await rcon(i, `kill @e[type=!minecraft:player,x=${X - L.half},y=${Y + L.y0},z=${Z - L.half},dx=${2 * L.half},dy=${L.y1 - L.y0},dz=${2 * L.half}]`).catch(() => {})
   // Насесты (10.10: «жемчуг высоко на Колизей — никто не достанет»): клетки, где можно стоять, на крышах ярусов и
@@ -111,12 +116,18 @@ export function installPlaces (ctx: ArenaContext) {
   ctx.armsHome = (b, k) => { const s0 = L.spawns[b.team === 'red' ? 0 : 1]; return { x: X + s0.x + 0.5, y: Y + s0.y, z: Z + s0.z + ((k >> 1) % 12) - 6 + 0.5 } }
 }
 
+export function configureRescue (ctx: ArenaContext, b) {
+  const { X, Y, Z, L } = ctx
+  return b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: Y + L.y0 - 3,
+    arena: { x: X + 0.5, z: Z + 0.5, r: L.half, ellipse: L.ellipse } }).catch(() => {})
+}
+
 export function guardFalls (ctx: ArenaContext) {
   const { i, arms, bots, X, Y, Z, L, rcon } = ctx
   // Упал с Колизея — сразу смерть (12.10: «упал — лень подниматься наверх»): ниже нижнего яруса постройки на 3 бл., раз в секунду,
   // кроме зрителей; дальше обычный ход смерти (боец — в зрители, человек — набор и на свою сторону).
   // guardFalls runs after every body connected: install rescue/wind before the first fight, then refresh reconnecting bodies.
-  const configure = () => { for (const b of bots) b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: Y + L.y0 - 3, arena: { x: X + 0.5, z: Z + 0.5, r: L.half, ellipse: L.ellipse } }).catch(() => {}) }
+  const configure = () => { for (const b of bots) configureRescue(ctx, b) }
   if (arms) configure()
   const rescueT = arms ? setInterval(configure, 20000) : null
   // Улетел за Колизей (элитры, заряд, жемчуг) дальше 8 бл. за границу арены — как упавший: оттуда путь в арену не строится

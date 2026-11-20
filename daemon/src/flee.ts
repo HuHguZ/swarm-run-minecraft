@@ -307,13 +307,14 @@ function descentCost(bot, hs, end, goals, hurt, ticks, states = []) {
   }
   return cost
 }
-function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [], arena = null, extra: ((o: { dir: { x: number, z: number }, run: number, end: any }) => number) | null = null, drops = false) {
+function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [], arena = null, extra: ((o: { dir: { x: number, z: number }, run: number, end: any }) => number) | null = null, drops = false, allowStay = false) {
   bot = cells(bot)
   const me = bot.entity.position
   let best = null
   const options = []
   const wetStart = inWater(bot)
   const arenaExit = drops && arena && hs.some(h => h.e.username)
+  if (allowStay && !arenaExit) return null
   for (let k = 0; k < 24; k++) {
     const yaw = (k / 24) * Math.PI * 2
     const dir = { x: -Math.sin(yaw), z: -Math.cos(yaw) }
@@ -369,6 +370,10 @@ function pickDirection (bot, hs, prevYaw: number | null = null, goals: any[] = [
     return descentCost(bot, hs, end, goals, hurt, plan.ticks, plan.states) + (best.drop.riskCost ?? 0) / hp +
       (best.drop.inspect ? 0 : edgeRisk(bot, end) * 3 + enclosure(bot, end) * 2) <
       descentCost(bot, hs, bot.entity.position, [], 0, best.drop.inspect ? 60 : plan.ticks)
+  }
+  if (allowStay && best && !best.drop) {
+    const ticks = best.run * 20 / SPRINT_BPS
+    if (best.cost >= descentCost(bot, hs, me, [], 0, ticks)) return null
   }
   return best
 }
@@ -457,6 +462,7 @@ function shaken (bot, hs, safeDist) {
 // считаем, что оторвались.
 async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reason = null, foes = [], chaseExit = false, goals = [], arena = null }: any = {}) {
   const bot = session.bot
+  if (arena?.avoid !== undefined && (!Array.isArray(arena.avoid) || !arena.avoid.every(e => e && [e.x, e.y, e.z, e.r].every(Number.isFinite) && e.r >= 0))) throw new Error('invalid arena avoid')
   try { bot.pathfinder.setGoal(null) } catch {}
   const deadline = gameClock.now() + timeoutMs
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
@@ -490,8 +496,14 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
       if (!bot.entity || (bot.health ?? 20) <= 0) return { mode: 'погиб на бегу', from: [...fromNames] }
       // Стрелки — до дальности их оружия по jar (гаст 64): «оторвался» — когда ни один не видит или все дальше своей дальности.
       const hs = hostilesAround(bot, 64, foes)
-      for (const h of hs) if (h.d < 16) fromNames.add(h.e.username || h.e.name)
-      const walker = hs.find(h => h.doc.radius > 0)
+      // Overlapping loot exclusions are remembered risk, not physical walls or live hidden entities.
+      for (const e of arena?.avoid || []) {
+        const position = new Vec3(e.x, e.y, e.z)
+        if (!hs.some(h => h.e.position.equals(position))) hs.push({ e: { name: 'player', position },
+          doc: { ...playerDoctrine({}), radius: e.r }, d: position.distanceTo(bot.entity.position), remembered: true })
+      }
+      for (const h of hs) if (!h.remembered && h.d < 16) fromNames.add(h.e.username || h.e.name)
+      const walker = hs.find(h => !h.remembered && h.doc.radius > 0)
       if (chase && walker) {
         chase.d0 ??= walker.d
         // (S4d опыт «прижат к краю»: преследователь в 3 бл. у обрыва — конец бега как погоня. Натив s4d-ab3: без брони падений B 3 против
@@ -567,7 +579,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
         const pitch = hs.some(h => h.e.name === 'enderman' && h.d < 24) ? -0.35 : 0
         // Рывок в сторону (10.10: «догоняю и бью одним ударом — пусть стрейфит резко»): быстрый преследователь (игрок, паук)
         // в 6 бл. — раз в 0.4–0.9 с (случайно, чтобы не читался ритм) уход на 50–80° туда, где свободно и тише, на 0.25–0.4 с.
-        const fastNear = hs.find(h => h.doc.radius && h.doc.fast && h.d < 6)
+        const fastNear = hs.find(h => !h.remembered && h.doc.radius && h.doc.fast && h.d < 6)
         if (fastNear && now >= jukeNext) {
           const turn = (50 + Math.random() * 30) * Math.PI / 180
           const side = [1, -1].map(sg => { const y = plan.yaw + sg * turn; const run = runLength(bot, { x: -Math.sin(y), z: -Math.cos(y) }, 4, 3, arena)

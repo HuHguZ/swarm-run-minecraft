@@ -18,6 +18,33 @@ test('status distinguishes the active autonomous rescue from an ordinary or fini
   assert.equal((await rpc.status({})).detail.rescuing, false)
 })
 
+test('the live water-recovery lease reaches plan preemption through the shared rescue status', async () => {
+  const ctl = { aborted: false }, active = { source: 'UseWater', owner: 'Tactical', ctl }
+  const session: any = { current: { name: 'goto', params: {}, ctl: { aborted: false } },
+    _reflexState: { active }, immediate: async fn => ({ detail: await fn() }) }
+  const rpc = observationMethods({ session, cfg: {} } as any), calls: string[] = []
+  const m: any = { p: { x: 17994.59, y: 261, z: 17994.38 } }
+  const running = { kind: 'loot', data: {} }, task = { kind: 'recover', data: {} }
+  const b: any = { name: 'A', swarmExecuting: true, swarmTask: running,
+    last: { m: 'goto', pending: true }, c: { call: async method => { calls.push(method) } } }
+  const sw: any = { now: () => 1000, alive: () => true, pos: { A: m }, log() {},
+    refresh: () => ({ task }) }
+  const actions = swarmTurn(sw)
+  m.rescuing = (await rpc.status({})).detail.rescuing
+  assert.equal(actions.preempt(b), false, 'loot to recover must not stop the actual UseWater pickup owner')
+  assert.equal(m.rescuing, true)
+  assert.deepEqual(calls, [])
+  for (const ended of ['aborted', 'replaced', 'finished']) {
+    ctl.aborted = ended === 'aborted'
+    session._reflexState.active = ended === 'finished' ? null : { ...active, source: ended === 'replaced' ? 'Shield' : 'UseWater' }
+    m.rescuing = (await rpc.status({})).detail.rescuing
+    b.swarmTask = running
+    assert.equal(m.rescuing, false, ended)
+    assert.equal(actions.preempt(b), true, `${ended}: ordinary plan preemption resumes`)
+  }
+  assert.deepEqual(calls, ['stop', 'stop', 'stop'])
+})
+
 test('a busy rescue is not a failed perch and does not issue another escape order', async () => {
   const calls: string[] = [], m: any = { p: { x: 0, y: 64, z: 0 }, inv: { elytra: 1, firework_rocket: 10 } }
   const b: any = { name: 'A', c: { async call(method) { calls.push(method); return { status: 'failed', code: 'RESCUE_BUSY' } } } }

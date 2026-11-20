@@ -4,6 +4,7 @@ import { powerOf } from '../../../daemon/src/pvp/arms-graph'
 import { WEAPON, distance, cellKey, withOffHand } from './common'
 import { currentTurn } from './lifecycle'
 import { antidoteDeliveryValue } from './antidotes'
+import { withinArena } from '../../../daemon/src/navigation/parkour/model'
 import type { SwarmDriverCtx } from './common'
 
 // Своё у получателя — с ракетами и зарядами во второй руке (подобранная ракета ложится туда).
@@ -125,22 +126,32 @@ export function swarmPosition (sw: SwarmDriverCtx) {
     const team = teamOf(b), marks = visited.get(team) || new Map()
     visited.set(team, marks)
     const m = pos[b.name], index = context.members.findIndex(o => o.id === b.name)
+    const pathArena = b.swarmTask?.kind === 'loot' ? lootArena(b) : arena
     const candidates = [], behind = []
     for (let k = 0; k < 8; k++) {
       const a = (k + index) * Math.PI / 4, r = 8
       const at = { x: Math.max(arena.x - arena.r + 3, Math.min(arena.x + arena.r - 3, m.p.x + Math.cos(a) * r)), y: m.p.y, z: Math.max(arena.z - arena.r + 3, Math.min(arena.z + arena.r - 3, m.p.z + Math.sin(a) * r)) }
       const key = `${Math.round(at.x / 4)},${Math.round(at.z / 4)}`
       if (distance(at, m.p) < 3 || (b.badSpots || []).some(p => p.from && distance(p.from, m.p) < 2 && distance(p, at) < 1)) continue
+      // Match goto's endpoint and snapped-cell checks; away from one foe can enter another's exclusion.
+      if (![at, { ...at, x: Math.floor(at.x) + .5, z: Math.floor(at.z) + .5 }].every(p => withinArena(b, p, pathArena))) continue
       const toward = away.filter(e => (at.x - m.p.x) * (e.position.x - m.p.x) + (at.z - m.p.z) * (e.position.z - m.p.z) > 0).length
       ;(toward ? behind : candidates).push({ at, key, seen: marks.get(key) || 0, toward })
     }
     // Враги с двух сторон — все направления к кому-то: наименее плохое (к меньшему числу), а не стоять (DeepSeek, ревью 21.10).
     const chosen = candidates.sort((a, c) => a.seen - c.seen)[0] ?? behind.sort((a, c) => a.toward - c.toward || a.seen - c.seen)[0]
-    if (!chosen) return
+    if (!chosen) return false
     marks.set(chosen.key, now())
     if (marks.size > 256) marks.delete(marks.keys().next().value)
     telemetry.searches++
-    await go(b, chosen.at, 2)
+    const from = { ...m.p }, round = sw.generation
+    const reply = await go(b, chosen.at, 2, 4, pathArena).catch(() => null)
+    if (!currentTurn(sw, b, round) || reply?.status === 'interrupted') return
+    if (reply?.status !== 'done' || !detail(reply).arrived) {
+      (b.badSpots ||= []).push({ ...chosen.at, from }); b.badSpots = b.badSpots.slice(-32)
+      return false
+    }
+    return true
   }
   async function pairedWind(b, context, at, attack: { enemy?: string; incomingDps?: number } = {}) {
     const { board } = context, m = pos[b.name], round = sw.generation

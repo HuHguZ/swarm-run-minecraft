@@ -52,11 +52,27 @@ export function stuckGuard (bot, ctl, stagnantLimitMs = 8000) {
   let last = bot.entity.position.clone()
   let stagnant = 0
   let timer = null
+  const digBudgets = new Map<string, number>()
   const promise = new Promise<any>((_resolve, reject) => {
     timer = gameClock.setInterval(() => {
       const now = bot.entity.position
+      let working = false
+      try {
+        const target = bot.targetDigBlock, current = target && bot.blockAt(target.position, false)
+        if (target && current?.stateId === target.stateId && bot.canDigBlock?.(target) === true) {
+          const key = `${target.position},${target.stateId}`
+          if (!digBudgets.has(key)) {
+            const ms = bot.digTime(target)
+            if (Number.isFinite(ms) && ms > 0) digBudgets.set(key, gameClock.now() + ms)
+          }
+          working = gameClock.now() <= (digBudgets.get(key) ?? -Infinity)
+        }
+      } catch {}
       if (now.distanceTo(last) > 0.6) {
         last = now.clone()
+        stagnant = 0
+      } else if (working) {
+        // Wrong-tool sandstone takes 10s. The unchanged target buys its native work once, not an eternal mining flag.
         stagnant = 0
       } else {
         stagnant += 1500

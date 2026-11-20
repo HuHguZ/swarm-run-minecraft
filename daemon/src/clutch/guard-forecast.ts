@@ -3,6 +3,7 @@
 // рядом (waterStep: план parkour, шаги по тикам).
 import { IDLE, copyState } from './blocks'
 import { type ClutchGuard, available, controls, climbing, emit, releaseSteering } from './guard-state'
+import { worldOf } from '../edges/forecast'
 
 function intentional (g: ClutchGuard, s) {
   const { opts, session, bot, st } = g
@@ -15,7 +16,7 @@ function intentional (g: ClutchGuard, s) {
   })
 }
 function context (g: ClutchGuard, s) {
-  const { bot, st, opts, session, api, world, simulate, now } = g
+  const { bot, st, opts, session, api, simulate, now } = g
   const marker = bot._ndParkourForecast
   // Physics listeners can run before or after the movement controller has
   // advanced its marker to the next native tick. Both observed endpoints
@@ -26,6 +27,8 @@ function context (g: ClutchGuard, s) {
   // already owns its trajectory; reforecasting it at750TPS starves the clock.
   // An active water rescue still needs actual fluid/landing observations.
   const predict = !!st.waterPlan || !s.onGround && !guardAllow
+  // All trajectories in this synchronous forecast see the same blocks; the next tick gets a fresh view.
+  const world = predict ? worldOf(bot) : g.world
   const forecast = copyState(s, s.control)
   let ticksToWater = Infinity; let settled = false
   for (let t = 0; predict && t < 24; t++) {

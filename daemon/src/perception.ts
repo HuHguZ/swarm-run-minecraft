@@ -143,6 +143,7 @@ function stateSummary (bot, extra: any = {}) {
     legs: wornNow.legs ? wornNow.legs.item : null,
     feet: wornNow.feet ? wornNow.feet.item : null
   }
+  const ranged: typeof import('./ranged') = require('./ranged')
   return {
     connected: true,
     pos: round(p),
@@ -174,7 +175,8 @@ function stateSummary (bot, extra: any = {}) {
     offHand: readOffHand(bot),
     inventory: items,
     antidote: require('./pvp/antidotes').antidoteReport(bot),
-    attackArrows: (require('./ranged') as typeof import('./ranged')).arrowCount(bot),
+    attackArrows: ranged.arrowCount(bot),
+    loadedCrossbow: ranged.crossbows(bot).some(({ item, info }) => info.loaded && ranged.offensiveLoaded(bot, item) && (info.ammo !== 'firework' || info.stars > 0)),
     // Зелья в рюкзаке — по действию, а не «potion×3»: кампании нужно знать,
     // сколько огнестойкости (бартер бастиона → блейзы), а вода из бартера — тоже
     // «potion». Поле есть, только если зелья есть.

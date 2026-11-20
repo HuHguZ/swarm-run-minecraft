@@ -3,6 +3,42 @@ import assert from 'node:assert/strict'
 import { pvpParts } from './pvp-parts'
 import { Vec3 } from 'vec3'
 import * as ct from '../src/pvp/crowd-threat'
+import * as flee from '../src/flee'
+import { inspect } from '../src/combat-safety'
+import { worldOf } from './parkour-fixture'
+
+test('раненый бот уходит от меча по ярусу, возвращает бой при блокировке и перестаёт бежать вдали', async () => {
+  const cells: Array<[number, number, number, string]> = []
+  for (let x = -14; x <= 14; x++) for (let z = -14; z <= 14; z++) cells.push([x, 69, z, 'stone'])
+  const { bot } = worldOf(cells)
+  Object.assign(bot.entity, { id: 1, position: new Vec3(.5, 70, .5), name: 'player', height: 1.8, metadata: [] })
+  bot.health = 8
+  const enemy = { id: 2, username: 'Enemy', name: 'player', position: new Vec3(3.5, 70, .5), height: 1.8,
+    equipment: [{ name: 'netherite_sword' }], heldItem: { name: 'netherite_sword' } }
+  bot.entities = { 2: enemy }
+  const safety = inspect(bot, { target: enemy, entities: [enemy] })
+  assert.equal(safety.action, 'recover')
+  const calls = []
+  let cornered = false
+  const ctx: any = { bot, arenaStay: true, safeMedical: false, safety, hp: bot.health, now: 1000, deadline: 5000,
+    AR: { x: 0, y: 70, z: 0, r: 14, killY: 60 }, session: { bot }, ctl: { aborted: false },
+    tt: { threats: () => [enemy] }, strategicRequest: () => null, pathTo() {}, clear() {}, holdWeapon: async () => {},
+    flee: { ...flee, smartFlee: async (_session, _ctl, params) => { calls.push(params); return { cornered } } } }
+  const { safetyTurn } = pvpParts(ctx, ['turn-escape'], ['safetyTurn'])
+  assert.equal(await safetyTurn(ctx, ctx), 'next')
+  assert.equal(calls.length, 1)
+  assert.deepEqual(Array.from(calls[0].foes), [enemy.id])
+  assert.equal(calls[0].arena, ctx.AR)
+  cornered = true
+  ctx.lastStand = true
+  ctx.now += 500
+  assert.equal(await safetyTurn(ctx, ctx), undefined)
+  assert.equal(await safetyTurn(ctx, ctx), undefined)
+  assert.equal(calls.length, 2)
+  enemy.position.x = 16
+  assert.equal(await safetyTurn(ctx, ctx), undefined)
+  assert.equal(calls.length, 2)
+})
 
 test('проверка отсутствующего выхода не тормозит каждый тик боя; урон и новая клетка требуют нового расчёта', async () => {
   let quotes = 0

@@ -5,6 +5,47 @@ import { swarmTurnWork } from './swarm/swarm-driver/turn-work'
 import { installSight } from './arena/watch'
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve))
+function upperResourceFight(extra: Record<string, any> = {}) {
+  const at = { x: 664.1060944422893, y: 150.875, z: 622.7026567195837 }
+  const foe = { id: 'NeuroFarm31d', seenAt: 1794574773049, position: { x: 667.5, y: 150.5, z: 615.5 } }
+  const task: any = { kind: 'fight', position: { x: 635.1936338631134, y: 150.875, z: 612.2475696717926 }, data: { target: foe.id, committed: true, ...extra } }
+  const calls: any[] = [], b: any = { name: 'NeuroFarm31e', swarmTask: task, c: { async call(method, params) { calls.push({ method, params }); return { status: 'done', detail: { landed: 1, swings: 1 } } } } }
+  const sw: any = { generation: 0, now: () => 1794574773049, bots: [b], pos: { [b.name]: { p: at } }, alive: () => true,
+    log() {}, home: () => at, teamOf: () => 'blue', onslaught: () => false, rangedAdvantage: () => false, cooldown: new Map(),
+    detail: r => r.detail, go: async (_b, point, range) => { calls.push({ method: 'goto', params: { ...point, range } }); return { status: 'done', detail: { arrived: point } } } }
+  const tc: any = { b, board: {}, task, round: 0, m: { p: at, inv: { stone_axe: 2 } }, enemies: [foe], context: { members: [] }, foe, contact: false }
+  return { calls, sw, tc, api: swarmTurnWork(sw), foe, task }
+}
+
+test('P E/D: a committed upper fight approaches the visible intruder instead of a remote formation', async () => {
+  const f = upperResourceFight()
+  await f.api.turnFight(f.tc)
+  assert.deepEqual(f.calls[0], { method: 'goto', params: { ...f.foe.position, range: undefined } }, 'the 31m formation must not pull a defender away from the 8m visible intruder')
+  f.tc.m.p = { x: 666.5, y: 150.5, z: 618.5 }; f.sw.pos[f.tc.b.name].p = f.tc.m.p
+  await f.api.turnFight(f.tc)
+  assert.equal(f.calls.at(-1).method, 'fight', 'closing the legal approach reaches the existing native combat executor')
+})
+
+test('upper fight keeps uncommitted formation, stale pursuit, assigned assault slot and fountain placement', async () => {
+  for (const mode of ['uncommitted', 'stale', 'slot', 'fountain']) {
+    const f = upperResourceFight(mode === 'uncommitted' ? { committed: false } : mode === 'slot' ? { slot: 0, assault: true } : mode === 'fountain' ? { fountain: 'close' } : {})
+    if (mode === 'stale') f.foe.seenAt -= 1500
+    await f.api.turnFight(f.tc)
+    const at = mode === 'uncommitted' || mode === 'fountain' ? f.task.position : mode === 'slot' ? { ...f.foe.position, x: f.foe.position.x + 2.5 } : f.foe.position
+    assert.deepEqual({ x: f.calls[0].params.x, y: f.calls[0].params.y, z: f.calls[0].params.z }, at, mode)
+  }
+  const f = upperResourceFight({ digAvoid: [{ x: 650, y: 150, z: 650 }], swarmStand: { x: 660, y: 150.5, z: 632 } })
+  await f.api.turnFight(f.tc)
+  assert.deepEqual({ x: f.calls[0].params.x, y: f.calls[0].params.y, z: f.calls[0].params.z }, f.task.data.swarmStand, 'the assigned safe stand still controls approach')
+})
+
+test('search goto still follows the assigned search point rather than the fight approach', async () => {
+  const f = upperResourceFight({ search: true, searchAt: { x: 650, y: 150.5, z: 640 } })
+  f.task.kind = 'goto'
+  await f.api.turnGoto(f.tc)
+  assert.deepEqual({ x: f.calls[0].params.x, y: f.calls[0].params.y, z: f.calls[0].params.z }, f.task.data.searchAt)
+})
+
 function liveFight() {
   const at = { x: .5, y: 64, z: .5 }, stand = { x: 2.5, y: 64, z: .5 }
   const fight = (x = 0, extra = {}) => ({ kind: 'fight', data: { target: 'Champ', committed: true, digAvoid: [{ x, y: 63, z: 0 }], swarmStand: stand, ...extra } })

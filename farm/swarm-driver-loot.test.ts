@@ -3,6 +3,62 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createSwarmDriver } from './swarm/swarm-driver'
 
+function fullUpperChest({ full = true, contents = { bow: 2, netherite_leggings: 1, netherite_boots: 1, totem_of_undying: 1 }, cancel = false, arrows = false }: any = {}) {
+  const calls: any[] = [], chest = { x: 649, y: 153, z: 554 }
+  const frame: any = { p: { x: 649.5, y: 153, z: 553.5 }, hp: 20,
+    inv: { iron_axe: 1, water_bucket: 1, ladder: 8, wind_charge: 1, soul_sand: 8 }, armor: { head: 'iron_helmet', torso: 'iron_chestplate' } }
+  let driver, taken = false
+  const b: any = { name: 'FullUpper', team: 'blue', c: { async call(method, params: any = {}) {
+    calls.push({ method, params })
+    if (method === 'blocks_around') return { detail: { found: [chest] } }
+    if (method === 'chest_take') {
+      if (params.makeRoom) { taken = true; frame.inv.netherite_leggings = 1; frame.inv.netherite_boots = 1 }
+      return { status: 'done', detail: { at: chest, full, contents, took: taken ? { netherite_leggings: 1, netherite_boots: 1 } : {} },
+        state: { inventory: { ...frame.inv }, armor: { ...frame.armor } } }
+    }
+    if (method === 'armor') {
+      if (cancel) driver.reset()
+      if (arrows) b.arrowThreat = { active: true, at: 1000 }
+      if (taken) { frame.armor.legs = 'netherite_leggings'; frame.armor.feet = 'netherite_boots' }
+      return { status: 'done', state: { inventory: { ...frame.inv }, armor: { ...frame.armor } } }
+    }
+    return { status: 'done', detail: {}, state: { inventory: frame.inv, armor: frame.armor, pos: frame.p } }
+  } } }
+  driver = createSwarmDriver({ bots: [b], pos: { [b.name]: frame }, alive: () => true, arms: true,
+    arena: { x: 600.5, y: 120, z: 600.5, r: 80 }, home: () => frame.p, now: () => 1000,
+    chestTops: [{ x: 649.5, y: 153, z: 554.5, tier: 5, climbFrom: 144 }], hostile: () => false, log() {} })
+  driver.observe(b, [])
+  return { calls, frame, run: () => driver.turn(b) }
+}
+
+test('a full known upper chest retries missing armour before duplicate bows and equips the result', async () => {
+  const f = fullUpperChest()
+  await f.run()
+  const takes = f.calls.filter(c => c.method === 'chest_take')
+  assert.equal(takes.length, 2)
+  assert.deepEqual(takes[1].params.item.split(',').slice(0, 2), ['netherite_leggings', 'netherite_boots'])
+  assert.ok(!takes[1].params.item.includes('bow'))
+  assert.equal(takes[1].params.makeRoom.slots, 3)
+  assert.equal(f.frame.armor.legs, 'netherite_leggings')
+  assert.equal(f.frame.armor.feet, 'netherite_boots')
+})
+
+test('upper chest recovery requires actual full capacity and known useful contents', async () => {
+  for (const options of [{ full: false }, { contents: {} }, { contents: { bow: 2, soul_sand: 8 } }]) {
+    const f = fullUpperChest(options)
+    await f.run()
+    assert.equal(f.calls.filter(c => c.method === 'chest_take').length, 1)
+  }
+})
+
+test('upper chest recovery yields to a changed round or incoming arrows after equipping', async () => {
+  for (const options of [{ cancel: true }, { arrows: true }]) {
+    const f = fullUpperChest(options)
+    await f.run()
+    assert.equal(f.calls.filter(c => c.method === 'chest_take').length, 1)
+  }
+})
+
 test('a transferred armour item worn before the next own status is a confirmed receipt', async () => {
   const states: Record<string, any> = {
     A: { inventory: { iron_sword: 1, iron_boots: 2 }, armor: {}, pos: { x: 0, y: 64, z: 0 } },
@@ -154,7 +210,7 @@ test('a chest requires a completed approach receipt and stays under a visible st
   assert.equal(take.params.stay, true)
   assert.equal(take.params.visibleOnly, true)
 })
-test('a failed pile approach is retried from a new place, not after 30 seconds; a pile that gives nothing is done', async () => {
+test('a failed pile approach retries after movement and unseen items stay available to allies', async () => {
   const pile: any = { p: { x: 20, y: 64, z: 5 }, at: 900, looted: new Set() }
   const f = lootReceiptFixture({ pile })
   const toPile = (who: string) => f.calls.filter(c => c.who === who && c.method === 'goto' && c.params.x === 20).length
@@ -168,17 +224,48 @@ test('a failed pile approach is retried from a new place, not after 30 seconds; 
   f.now += 5000 // пауза опроса сундуков (4 с) — не повтор кучи
   f.move = async (_name, p) => ({ status: 'done', detail: { arrived: p } })
   let remaining = 1
-  f.pickup = async () => ({ detail: { ok: remaining-- > 0 } })
+  f.pickup = async () => ({ detail: remaining-- > 0 ? { ok: true } : { ok: false, why: 'не вижу вещи' } })
   await f.driver.turn(f.bots[0])
   assert.equal(f.calls.filter(c => c.who === 'A' && c.method === 'assist').length, 2, 'moved off: a new approach, one item taken')
   f.pos.B.p = { x: 3, y: 64, z: 2 }
   await f.driver.turn(f.bots[1])
   assert.equal(f.calls.filter(c => c.who === 'B' && c.method === 'assist').length, 1)
-  assert.ok(pile.empty, 'nothing left: the pile is done')
+  assert.ok(!pile.empty, 'a local visibility result cannot empty the shared pile')
   f.now += 5000
   await f.driver.turn(f.bots[0])
-  assert.equal(f.calls.filter(c => c.who === 'A' && c.method === 'assist').length, 2)
+  assert.equal(f.calls.filter(c => c.who === 'A' && c.method === 'assist').length, 3, 'the ally refusal does not block our own visibility check')
+  f.now += 5000
+  await f.driver.turn(f.bots[0])
+  assert.equal(f.calls.filter(c => c.who === 'A' && c.method === 'assist').length, 3, 'our own unchanged retry remains blocked')
 })
+for (const failure of ['unsupported_or_obstructed_target', 'не вижу вещи', 'прервано', undefined, new Error('transport lost')]) {
+  test(`a pickup failure keeps the pile available to another bot: ${failure?.toString() || 'no receipt'}`, async () => {
+    const pile: any = { p: { x: 1, y: 64, z: 0 }, at: 900 }
+    const f = lootReceiptFixture({ pile })
+    f.pickup = async () => {
+      if (failure instanceof Error) throw failure
+      return { detail: { ok: false, why: failure } }
+    }
+    const pickups = who => f.calls.filter(c => c.who === who && c.method === 'assist').length
+    await f.driver.turn(f.bots[0])
+    assert.ok(!pile.empty && !pile.busy, 'a failed pickup neither empties nor keeps the shared pile reserved')
+    assert.equal(pickups('A'), 1)
+    assert.ok(f.lines.every(line => !line.includes('пусто')), 'failed pickup must not be logged as empty')
+    f.now += 5000
+    await f.driver.turn(f.bots[0])
+    assert.equal(pickups('A'), 1, 'the existing retry blocks the same bot at the same place')
+    let remaining = 1
+    f.pickup = async () => ({ detail: remaining-- > 0 ? { ok: true } : { ok: false, why: 'не вижу вещи' } })
+    await f.driver.turn(f.bots[1])
+    assert.equal(pickups('B'), 2, 'the nearby ally can still collect an item')
+    assert.ok(!pile.empty, 'a successful collection keeps the existing pile policy')
+    f.pos.A.p = { x: 3, y: 64, z: 0 }
+    f.now += 5000
+    await f.driver.turn(f.bots[0])
+    assert.equal(pickups('A'), 2, 'moving off permits a fresh attempt')
+    assert.ok(!pile.empty, 'not seeing an item is local evidence, including after moving')
+  })
+}
 test('a pile stays reserved until the current attempt finishes, however long it takes', async () => {
   const pile: any = { p: { x: 20, y: 64, z: 5 }, at: 900, looted: new Set() }
   const f = lootReceiptFixture({ pile })

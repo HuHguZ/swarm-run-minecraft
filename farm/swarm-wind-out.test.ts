@@ -80,6 +80,18 @@ test('flying throwers request flying reports and dispatch a known-safe shared wi
   assert.equal(f.calls.filter(c => c.method === 'wind_out').length, 2)
 })
 
+test('an achieved upper reserve can still throw a certified useful wind plan', async () => {
+  const f = fixture()
+  f.sw.arms = true; f.sw.chestTops = [{ x: 1, y: 153, z: 0, tier: 5 }]
+  for (const b of f.bots) {
+    f.sw.pos[b.name].p.y = 153
+    b.last = { m: 'swarm_hold', pending: true }
+    b.swarmTask = { kind: 'goto', position: { ...f.sw.pos[b.name].p }, data: { reserve: true, sentry: true } }
+  }
+  assert.equal(await f.api.windObserve(f.bots[0], f.seen, 100000), true)
+  assert.equal(f.calls.filter(c => c.method === 'wind_out').length, 2)
+})
+
 test('a ready local throw takes priority on the controller clock, without holding other targets or a new life', async t => {
   let wall = 1000
   t.mock.method(performance, 'now', () => wall)

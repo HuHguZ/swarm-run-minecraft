@@ -3,6 +3,7 @@ import { ledgeOptions, planLedgeDrop } from '../navigation/descent'
 
 import * as damageModel from './damage-model'
 import * as read from '../read'
+import { standable } from '../walkable'
 type CombatContext = Record<string, any>
 
 export function createCover(ctx: CombatContext) {
@@ -374,15 +375,28 @@ const healItem = () => ctx.findPotion(ctx.bot, 'splash_potion', 'heal') || ctx.f
     ctx.findPotion(ctx.bot, 'potion', 'regen') || ctx.findItem(ctx.bot, i => /golden_apple$/.test(i.name)) ||
     ctx.findItem(ctx.bot, i => /cooked_|bread|baked_potato|golden_carrot|steak/.test(i.name))
 
+// Изнутри ниши видны готовые стены и выход. Считаем только недостающие блоки и материал будущей двери.
+const canFinishHere = (cell) => {
+    const { bot, fortify } = ctx
+    const need = fortify.refugeNeed(bot, cell)
+    if (!need || (need.wallBlocks === 8 && !need.roofSolid && !need.leans)) return false
+    const check = fortify.boxCheck(bot, { cell, toward: ctx.entity.position, roof: true })
+    if (!check.ok) return false
+    const mats = fortify.boxMaterials(bot, check.plan)
+    return [0, 2, 4, 6].some(i => {
+      const side = check.plan[i].minus(cell)
+      return standable(bot, check.plan[i]) && standable(bot, cell.plus(side.scaled(2))) &&
+        [mats[i], mats[i + 1]].every(name => !name || fortify.canBreakOut(bot, { name }))
+    })
+  }
+
 const fortPossible = () => {
-    const filler = ctx.pickFiller(ctx.bot)
-    if (!filler || ctx.countOf(ctx.bot, filler.name) < 10 || !ctx.fortify.canBreakOut(ctx.bot, filler)) return false
+    const filler = ctx.pickFiller(ctx.bot, { steady: true })
+    if (!filler || !ctx.fortify.canBreakOut(ctx.bot, filler)) return false
     if (!ctx.bot.entity.onGround || ctx.bot.entity.isInWater) return false
-    const cell = ctx.bot.entity.position.floored()
-    for (const k of [2, 3]) {
-      const b = ctx.bot.blockAt(cell.offset(0, k, 0))
-      if (!b || b.boundingBox !== 'empty') return false
-    }
+    const cell = ctx.fortify.feetCell(ctx.bot)
+    const openSite = ctx.countOf(ctx.bot, filler.name) >= 10 && [2, 3].every(k => ctx.bot.blockAt(cell.offset(0, k, 0))?.boundingBox === 'empty')
+    if (!openSite && !canFinishHere(cell)) return false
     const creeper = ctx.bot.nearestEntity(e => e && e.name === 'creeper' && e.position.distanceTo(ctx.bot.entity.position) < 9)
     if (creeper) return false
     return !!ctx.healItem() || (ctx.bot.food ?? 0) >= 18
@@ -401,7 +415,7 @@ const cellOk = (c) => {
 
 const fortSpot = () => {
     const here = ctx.fortify.feetCell(ctx.bot)
-    if (ctx.cellOk(here)) return here
+    if (ctx.cellOk(here) || canFinishHere(here)) return here
     const away = ctx.bot.entity.position.minus(ctx.entity.position)
     let best = null; let bs = Infinity
     for (let dx = -5; dx <= 5; dx++) {

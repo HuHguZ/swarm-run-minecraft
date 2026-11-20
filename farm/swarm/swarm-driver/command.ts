@@ -7,9 +7,13 @@ import * as fs from 'fs'
 import { distance } from './common'
 import type { SwarmDriverCtx } from './common'
 
+export function commandOwnsMovement(order: any, completedRpc?: unknown, runningRpc?: unknown): boolean {
+  return !!order && (!!order.do && order.do !== 'auto' || !!order.rpc?.m && order.id != null && (completedRpc !== order.id || runningRpc === order.id))
+}
+
 export function swarmCommand (sw: SwarmDriverCtx) {
   const file = process.env.SWARM_ORDERS, statusFile = process.env.SWARM_STATUS
-  if (!file) return { commanded: () => null, commandTurn: async () => false }
+  if (!file) return { commanded: () => null, commandTurn: async () => false, commandOwnsMovement: () => false }
   const { bots, pos, alive, log, now } = sw
   let orders: any = {}, mtime = 0, version = 0
   const orderOf = b => orders.bots?.[b.name] ?? orders.teams?.[sw.teamOf(b)] ?? orders.all ?? null
@@ -46,7 +50,7 @@ export function swarmCommand (sw: SwarmDriverCtx) {
   const commanded = (b, context) => {
     const o = orderOf(b), m = pos[b.name]
     if (!o?.do || o.do === 'auto' || o.do === 'hold' || !m?.p) return null
-    const at = Array.isArray(o.at) ? { x: o.at[0], y: o.at[1], z: o.at[2] } : null
+    const at = Array.isArray(o.at) ? { x: o.at[0], y: o.at[1], z: o.at[2], ...(Number.isFinite(o.climbFrom) ? { climbFrom: o.climbFrom } : {}) } : null
     const enemies = context.board.enemies()
     if (o.do === 'fight') {
       const foe = enemies.find(e => e.id === o.target) || (!o.target && [...enemies].sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0])
@@ -68,7 +72,10 @@ export function swarmCommand (sw: SwarmDriverCtx) {
     if (!o) return false
     if (o.rpc?.m && o.id != null && b.commandDone !== o.id) {
       b.commandDone = o.id
-      const r: any = await b.c.call(o.rpc.m, o.rpc.p || {}).catch(e => ({ error: e.message }))
+      b.commandRunning = o.id
+      let r: any
+      try { r = await b.c.call(o.rpc.m, o.rpc.p || {}).catch(e => ({ error: e.message })) }
+      finally { if (b.commandRunning === o.id) delete b.commandRunning }
       log(`🎖 ${b.name}: ${o.rpc.m} #${o.id} — ${JSON.stringify(r?.detail ?? r).slice(0, 200)}`)
       return true
     }
@@ -76,7 +83,7 @@ export function swarmCommand (sw: SwarmDriverCtx) {
     if ((o.do === 'goto' || o.do === 'flee') && pos[b.name]?.p) {
       const t = commanded(b, { board: sw.boardOf(b) })
       if (!t) return false
-      await sw.go(b, t.position, t.data.range).catch(() => {})
+      await sw.go(b, t.position, t.data.range, Number.isFinite(o.timeoutSeconds) && o.timeoutSeconds > 0 ? o.timeoutSeconds : undefined).catch(() => {})
       return true
     }
     if (o.do === 'hold') {
@@ -86,5 +93,5 @@ export function swarmCommand (sw: SwarmDriverCtx) {
     }
     return false
   }
-  return { commanded, commandTurn }
+  return { commanded, commandTurn, commandOwnsMovement: b => commandOwnsMovement(orderOf(b), b.commandDone, b.commandRunning) }
 }

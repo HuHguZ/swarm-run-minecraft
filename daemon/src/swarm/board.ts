@@ -9,6 +9,8 @@ import { absorptionOfAmp, TOTEM } from '../pvp/damage-model'
 
 const regenAmp = Math.max(...Object.values(FOOD).map(f => f.regenAmp), ...Object.values(POTION).map(p => 'regenAmp' in p ? p.regenAmp : 0))
 const absorptionMax = Math.max(TOTEM.absorption, ...Object.values(FOOD).map(f => absorptionOfAmp(f.absorbAmp)))
+const armorSlots = ['boots', 'leggings', 'chestplate', 'helmet']
+type ArmorSight = { name: string | null; enchanted: boolean; seenAt: number }
 const upperModel = (upper: number, absorption = 0) => {
   const hp = createHpEstimate({ hp: Math.min(MAX_HP, upper), absorption: Math.max(absorption, upper - MAX_HP) })
   // Не знаем остаток его эффектов/насыщения: верх стареет по самой быстрой обычной регенерации из данных игры.
@@ -20,6 +22,7 @@ export class SwarmBoard {
   private members = new Map<string, SwarmMember>()
   private work = new Map<string, SwarmTask>()
   private sightings = new Map<string, Map<string, Omit<SharedEnemy, 'sources'>>>()
+  private armorSightings = new Map<string, Map<string, ArmorSight>>()
   private hpHealing = new Map<string, { at: number; absorption: number; events: Map<string, number> }>()
   private marks = new Map<string, SwarmFact>()
   private learned: Partial<Record<Doctrine, { successes: number; failures: number }>> = {}
@@ -64,6 +67,7 @@ export class SwarmBoard {
       for (const [source, seen] of sources) if (seen.seenAt + this.enemyTtlMs <= now) sources.delete(source)
       if (!sources.size) this.sightings.delete(id)
     }
+    for (const slots of this.armorSightings.values()) for (const [slot, fact] of slots) if (fact.seenAt + this.enemyTtlMs <= now) slots.delete(slot)
     for (const [id, fact] of this.marks) if (fact.expiresAt <= now) this.marks.delete(id)
   }
   upsert(input: SwarmTask): SwarmTask {
@@ -127,7 +131,7 @@ export class SwarmBoard {
     return true
   }
   // Убит по ленте смертей (чат — открытое знание): зрение о нём больше не враг, не ждать срока enemyTtlMs.
-  forget(id: string): void { this.sightings.delete(id); this.hpHealing.delete(id) }
+  forget(id: string): void { this.sightings.delete(id); this.armorSightings.delete(id); this.hpHealing.delete(id) }
   observe(source: string, seenAt: number, input: EnemyObservation): boolean {
     const now = this.now()
     if (!this.alive(source) || input.visible !== true && input.nametag !== true || !input.id || this.members.has(input.id) || !validPosition(input.position) || !Number.isFinite(seenAt) || seenAt > now || seenAt + this.enemyTtlMs <= now) return false
@@ -138,6 +142,7 @@ export class SwarmBoard {
       if (typeof input.equipment.weapon === 'string') seen.equipment.weapon = input.equipment.weapon
       if (Array.isArray(input.equipment.armor)) seen.equipment.armor = input.equipment.armor.filter(n => typeof n === 'string' && /_(helmet|chestplate|leggings|boots)$/.test(n)).slice(0, 4)
       if (typeof input.equipment.enchanted === 'boolean') seen.equipment.enchanted = input.equipment.enchanted
+      if (typeof input.equipment.weaponEnchanted === 'boolean') seen.equipment.weaponEnchanted = input.equipment.weaponEnchanted
       if (Number.isInteger(input.equipment.unknownArmorSlots) && input.equipment.unknownArmorSlots! >= 0 && input.equipment.unknownArmorSlots! <= 4) seen.equipment.unknownArmorSlots = input.equipment.unknownArmorSlots
     }
     if (input.threat && threats.includes(input.threat)) seen.threat = input.threat
@@ -155,6 +160,21 @@ export class SwarmBoard {
       if (last?.hpEstimate) seen.hpEstimate = last.hpEstimate
     }
     if ((sources.get(source)?.seenAt ?? -Infinity) > seenAt) return false
+    if (input.visible === true && input.nametag !== true && seen.equipment?.armor) {
+      const slots = this.armorSightings.get(input.id) ?? new Map<string, ArmorSight>()
+      const mask = input.equipment?.armorVisible
+      const validMask = Array.isArray(mask) && mask.length === 4 && mask.every(v => typeof v === 'boolean')
+      const glint = input.equipment?.armorEnchanted
+      const validGlint = Array.isArray(glint) && glint.length === 4 && glint.every(v => typeof v === 'boolean')
+      // Old complete reports include empty slots; a partial legacy report only identifies its named items.
+      for (const [i, slot] of armorSlots.entries()) {
+        const name = seen.equipment.armor.find(n => n.endsWith('_' + slot)) || null, prior = slots.get(slot)
+        if (!(validMask ? mask[i] : mask === undefined && (!seen.equipment.unknownArmorSlots || name)) || (prior?.seenAt ?? -Infinity) > seenAt) continue
+        const enchanted = !!name && (validGlint ? glint[i] : seen.equipment.enchanted === true || mask === undefined && !!seen.equipment.unknownArmorSlots && prior?.name === name && prior.enchanted)
+        slots.set(slot, { name, enchanted, seenAt })
+      }
+      this.armorSightings.set(input.id, slots)
+    }
     sources.set(source, seen); this.sightings.set(input.id, sources)
     if (seen.hitProof?.healing) {
       const heal = seen.hitProof.healing, previous = this.hpHealing.get(input.id)
@@ -173,6 +193,8 @@ export class SwarmBoard {
     return [...this.sightings.values()].map(sources => {
       const list = [...sources.values()]
       const fresh = copy(list.sort((a, b) => b.seenAt - a.seenAt)[0])
+      const armor = this.armorSightings.get(fresh.id)
+      if (armor) fresh.equipment = { ...fresh.equipment, armor: armorSlots.flatMap(slot => armor.get(slot)?.name || []), armorEnchanted: armorSlots.map(slot => !!armor.get(slot)?.enchanted), unknownArmorSlots: 4 - armor.size }
       const heal = this.hpHealing.get(fresh.id)
       if (heal) {
         // Зритель мог пропустить лечение и снова прислать старые 3 с новым seenAt. Его модель уже не верх.
@@ -226,7 +248,7 @@ export class SwarmBoard {
   tacticStats(): Partial<Record<Doctrine, { successes: number; failures: number }>> { return copy(this.learned) }
   doctrineState(): { doctrine: Doctrine; since: number } | null { return this.current ? { ...this.current } : null }
   setDoctrine(doctrine: Doctrine): void { if (this.current?.doctrine !== doctrine) this.current = { doctrine, since: this.now() } }
-  resetRound(): void { this.work.clear(); this.sightings.clear(); this.hpHealing.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null; this.assault = null; this.assaultEnded = null; fledAt.delete(this); pvpMemory.delete(this) }
+  resetRound(): void { this.work.clear(); this.sightings.clear(); this.armorSightings.clear(); this.hpHealing.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null; this.assault = null; this.assaultEnded = null; fledAt.delete(this); pvpMemory.delete(this) }
 }
 
 export function liveMembers(board: SwarmBoard, members: SwarmMember[]) { return members.filter(m => m.team === board.team && m.health > 0) }

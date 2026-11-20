@@ -6,10 +6,23 @@
 // +1.5, берётся, только если поле дальше. Чем ближе — тем лучше; дальше от врага — при равных.
 import { Vec3 } from './vec3'
 import * as gameClock from '../game-clock'
+import { bodyBox, intersects } from '../navigation/geometry'
 
 const BURN = /^(lava|fire|soul_fire)$/
 const HOT = /^(magma_block|campfire|soul_campfire)$/
 const open = b => !!b && b.boundingBox === 'empty' && !BURN.test(b.name) && b.name !== 'cobweb'
+
+export function burnContact (bot) {
+  if (bot.entity.isInLava) return 'lava'
+  const body = bodyBox(bot, bot.entity.position)
+  for (let x = Math.floor(body.minX); x <= Math.floor(body.maxX); x++) for (let z = Math.floor(body.minZ); z <= Math.floor(body.maxZ); z++) {
+    for (let y = Math.floor(body.minY); y <= Math.floor(body.maxY); y++) {
+      const b = bot.blockAt(new Vec3(x, y, z))
+      if (b && BURN.test(b.name) && intersects(body, { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 })) return b.name
+    }
+  }
+  return null
+}
 
 export function lavaExit (bot, feet: any, foe: { x: number; z: number } | null = null) {
   const f = feet.floored()
@@ -39,10 +52,11 @@ export function lavaExit (bot, feet: any, foe: { x: number; z: number } | null =
 // Горит ли под ногами: ноги или голова в лаве/огне, стою на магме/костре — или в прыжке над лавой (выпрыгнул на миг и
 // упаду обратно: a39 — выход «кончался» на взлёте, и его тут же начинали заново, теряя ход).
 export function burningFeet (bot) {
+  if (burnContact(bot)) return true
   const p = bot.entity.position
   const at = (dy) => bot.blockAt(p.offset(0, dy, 0).floored())
-  const f = at(0); const h = at(1); const g = at(-0.2)
-  if ((f && BURN.test(f.name)) || (h && BURN.test(h.name)) || (g && HOT.test(g.name))) return true
+  const g = at(-0.2)
+  if (g && HOT.test(g.name)) return true
   if (bot.entity.onGround) return false
   for (const dy of [-0.6, -1.2]) { const b = at(dy); if (b && b.boundingBox === 'block') return false; if (b && BURN.test(b.name)) return true }
   return false

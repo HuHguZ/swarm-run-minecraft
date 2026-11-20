@@ -246,7 +246,7 @@ function onDanger (dz: DangerCtx, b, m) {
       .catch(() => { if (dz.ownsReaction(b, token)) wbE.handled = false }).finally(() => { dz.endReaction(b, token); if (b.webRun === token) b.webRun = null })
     return
   }
-  if (b.webRun && reactions.get(b) === b.webRun) return
+  if (b.webRun && reactions.get(b) === b.webRun && !(lv && lv.d < 0.5)) return
   // Видно разрушение опоры или слышно близкую копку (датчик тела threats.floorDanger) — сойти сразу,
   // раньше всего, кроме выхода из лавы: в дыру летят за тик (игра пользователя 22.10: «ломаю блоки под ними — они в дырки
   // улетают, ничего не делают»).

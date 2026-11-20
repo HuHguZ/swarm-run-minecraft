@@ -116,6 +116,34 @@ test('the construction feasibility check prices existing walls and refuses an in
   assert.equal(need.ok, true); assert.equal(need.blocks, 2); assert.ok(need.ms < 1000)
 })
 
+test('a wounded duelist seals the two-block doorway of an existing alcove with the two blocks it has', async () => {
+  const f = fixture(8), cell = f.fortify.feetCell(f.bot)
+  const materials = f.bot.inventory.items()
+  materials[0].count = 2
+  f.bot.inventory.items = () => materials
+  f.ctx.countOf = () => materials[0].count
+  f.ctx.healItem = () => null
+  f.ctx.solid = (bot, p) => bot.blockAt(p).boundingBox === 'block'
+  const cover = source('pvp/cover').createCover(f.ctx)
+  for (const s of f.fortify.SIDES.filter(s => s.x !== 1)) {
+    for (const y of [0, 1]) f.cells.set(cell.plus(s).offset(0, y, 0).toString(), 'stone')
+  }
+  f.cells.set(cell.offset(0, 2, 0).toString(), 'stone')
+  f.enemy.position.x = 10
+  assert.equal(cover.fortPossible(), true)
+  assert.ok(cover.fortSpot().equals(cell))
+  // The only way out must remain safe to walk through after opening the door.
+  f.cells.set(cell.offset(2, -1, 0).toString(), 'lava')
+  assert.equal(cover.fortPossible(), false)
+  f.cells.set(cell.offset(2, -1, 0).toString(), 'stone')
+  materials[0].count = 1
+  assert.equal(cover.fortPossible(), false)
+  materials[0].count = 2
+  const out = await f.fortify.boxIn(f.bot, { toward: f.enemy.position, ctl: f.ctl })
+  assert.equal(out.sealed, true)
+  assert.deepEqual(f.calls.map(c => c.at.toString()), ['(1, 64, 0)', '(1, 65, 0)'])
+})
+
 test('cancellation during roof-support equipment cannot enable a late jump or placement', async () => {
   const f = fixture(), at = new Vec3(1, 66, 0)
   f.cells.set(at.offset(0, -1, 0).toString(), 'stone')

@@ -10,7 +10,7 @@ import { hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, target
 
 // foesLeft — сколько врагов живо (лента смертей в чате — открытое знание, не зрение); нет — неизвестно (соло против людей).
 // killsBy — та же лента: сколько наших убил каждый враг за раунд.
-export type PvpOptions = { foesLeft?: number; killsBy?: Record<string, number>; doctrine?: Doctrine; quorum?: number; leaseMs?: number; aggressive?: boolean; hideouts?: SwarmPosition[]; perches?: SwarmPosition[]; gather?: { item: string; deficit: number; spot: SwarmPosition }; edgeOf?: (p: SwarmPosition, foe?: SharedEnemy) => Edge | null; digSites?: (p: SwarmPosition) => DigSite[]; campSpots?: SwarmPosition[]; ladderSites?: { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }[] }
+export type PvpOptions = { foesLeft?: number; killsBy?: Record<string, number>; doctrine?: Doctrine; quorum?: number; leaseMs?: number; aggressive?: boolean; hideouts?: SwarmPosition[]; lootZones?: (SwarmPosition & { tier: number })[]; lootOffer?: (m: SwarmMember) => { position: SwarmPosition; tier: number; seconds: number } | null; travelSeconds?: (m: SwarmMember, from: SwarmPosition, to: SwarmPosition) => number; perches?: SwarmPosition[]; gather?: { item: string; deficit: number; spot: SwarmPosition }; edgeOf?: (p: SwarmPosition, foe?: SharedEnemy) => Edge | null; digSites?: (p: SwarmPosition) => DigSite[]; campSpots?: SwarmPosition[]; ladderSites?: { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }[] }
 type LadderSite = { key: string; x: number; y: number; z: number; top: number; face: { x: number; z: number } }
 
 export interface PvpPlan {

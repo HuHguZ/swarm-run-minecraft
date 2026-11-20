@@ -28,7 +28,7 @@ test('swarm sight uses duel rays, never enemy health, inventory or enchantment l
   const bot = { entity: { id: 1, position: new Vec3(0, 64, 0) }, entities: { 2: enemy }, blockAt(p) { return wall && p.x === 1 ? { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : { name: 'air', boundingBox: 'empty' } } }
   const seen = swarmSightings(bot)
   assert.equal(seen[0].id, 'Foe')
-  assert.deepEqual(seen[0].equipment, { weapon: 'diamond_sword', armor: ['iron_boots'] })
+  assert.deepEqual(seen[0].equipment, { weapon: 'diamond_sword', weaponEnchanted: false, armor: ['iron_boots'], armorVisible: [true, true, true, true], armorEnchanted: [false, false, false, false] })
   assert.equal('hp' in seen[0], false)
   wall = true
   enemy.position = new Vec3(3, 64, 2)
@@ -36,6 +36,25 @@ test('swarm sight uses duel rays, never enemy health, inventory or enchantment l
   const tag = swarmSightings(bot)
   assert.deepEqual(tag.map(e => [e.id, e.visible, e.nametag]), [['Foe', false, true]])
   assert.deepEqual(tag[0].position, { x: 3, y: 64, z: 2 })
+  assert.equal('armorVisible' in tag[0].equipment, false, 'a nametag cannot renew any armor observation')
+  assert.equal('armorEnchanted' in tag[0].equipment, false, 'a nametag cannot refresh armor glint')
+})
+
+test('swarm keeps main-hand glint separate from helmet glint and refreshes visible weapon swaps', () => {
+  const glint = name => ({ name, componentMap: new Map([['enchantment_glint_override', { data: true }]]) })
+  const enemy: any = { id: 2, username: 'Foe', type: 'player', position: new Vec3(3, 64, 0), metadata: {},
+    equipment: [{ name: 'iron_sword' }, null, null, null, null, glint('iron_helmet')] }
+  const bot = { entity: { id: 1, position: new Vec3(0, 64, 0) }, entities: { 2: enemy }, blockAt: () => ({ name: 'air', boundingBox: 'empty' }) }
+  const helmet = swarmSightings(bot)[0].equipment
+  assert.equal(helmet.enchanted, true)
+  assert.equal(helmet.weaponEnchanted, false, 'a shiny helmet is not a Sharpness V sword')
+  assert.deepEqual(helmet.armorEnchanted, [false, false, false, true])
+  enemy.equipment[0] = glint('diamond_sword')
+  assert.equal(swarmSightings(bot)[0].equipment.weaponEnchanted, true)
+  enemy.equipment[0] = { name: 'stone_sword' }
+  const swapped = swarmSightings(bot)[0].equipment
+  assert.equal(swapped.weapon, 'stone_sword')
+  assert.equal(swapped.weaponEnchanted, false, 'a visible plain replacement must clear the old weapon glint')
 })
 
 test('a sneaking or invisible player behind a wall shows no nametag', () => {

@@ -433,7 +433,9 @@ export async function hopTurn (ctx: DuelCtx, turn: TurnFrame) {
     }
     pathTo(false); ctx.pathing = false; clear()
     let hop = null
-    try { hop = await require('../navigation/parkour').combatHop(bot, ctl, { score, radius: 4 }) } catch (e) { hop = { ok: false, why: e.message } }
+    const aim = ctx.aim
+    ctx.aim = 'free'
+    try { hop = await require('../navigation/parkour').combatHop(bot, ctl, { score, radius: 4 }) } catch (e) { hop = { ok: false, why: e.message } } finally { ctx.aim = aim }
     st.hops = (st.hops || 0) + 1
     // Итог по делу (S7d): исполнитель S6 строг (сбитая траектория от его удара — «physics_diverged»), а в бою важно,
     // долетел ли я до точки или стал к нему ближе на 1.5+ без падения: это «удался по делу».

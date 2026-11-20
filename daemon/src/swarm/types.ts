@@ -43,7 +43,9 @@ export interface EnemyObservation {
   velocity?: SwarmPosition
   // Physical forecast for this observation only; the long-lived board never retains it.
   peakY?: number | null
-  equipment?: { weapon?: string; armor?: string[]; enchanted?: boolean; unknownArmorSlots?: number }
+  equipment?: { weapon?: string; weaponEnchanted?: boolean; armor?: string[]; enchanted?: boolean; unknownArmorSlots?: number;
+    /** Feet, legs, torso, head; only freshly visible slots renew shared armor and glint knowledge. */
+    armorVisible?: boolean[]; armorEnchanted?: boolean[] }
   threat?: ThreatKind
   // Верх оценки его хп (с поглощением) по нашим подтверждённым попаданиям и видимому лечению — не метаданные (AGENTS.md):
   // своё имя, а не hp/health, — сырое хп доска не читает никогда (тесты честности).

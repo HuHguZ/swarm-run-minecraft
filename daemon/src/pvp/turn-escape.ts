@@ -14,7 +14,7 @@ import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 export async function safetyTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, clear, ctl, duo, escapePearl, finish, guard, holdWeapon, pathTo, releaseFightItems, seesNow, session, st, strategicRequest, tt, used, util } = ctx
   const { arenaStay, flightRecovery, hp, safeMedical, safety } = turn
-  // На арене последний бой не запрещает выход: спуск/прокоп уже сравнен с ценой боя на месте в pickDirection.
+  // Последний бой оставляет выход, если риск пути меньше риска остаться под ударами.
   if (arenaStay && ctx.AR && !flightRecovery && !safeMedical && safety.action !== 'fight' && safety.action !== 'dead') {
     const threats = tt.threats(), foes = threats.map(e => e.id)
     const cell = p => p ? `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}` : '?'
@@ -22,15 +22,15 @@ export async function safetyTurn (ctx: DuelCtx, turn: TurnFrame) {
     const checked = ctx.arenaExitCheck
     // Неудачный поиск — с частотой самого flee, а не тяжёлый прогноз в каждом тике боя.
     if (!checked || checked.inputs !== inputs || turn.now - checked.at >= 300) {
-      const plan = flee.pickDirection(bot, flee.hostilesAround(bot, 64, foes), null, [], ctx.AR, null, true)
-      ctx.arenaExitCheck = plan?.drop ? null : { inputs, at: turn.now }
-      if (plan?.drop) {
+      const plan = flee.pickDirection(bot, flee.hostilesAround(bot, 64, foes), null, [], ctx.AR, null, true, true)
+      ctx.arenaExitCheck = { inputs, at: turn.now }
+      if (plan) {
         pathTo(false); ctx.pathing = false; clear(); ctx.aim = 'free'
         if (guard) await guard.raise(false)
-        await flee.smartFlee(session, ctl, { foes, arena: ctx.AR, timeoutMs: Math.max(0, Math.min(3000, ctx.deadline - turn.now)) })
+        const escape = await flee.smartFlee(session, ctl, { foes, arena: ctx.AR, timeoutMs: Math.max(0, Math.min(3000, ctx.deadline - turn.now)) })
         ctx.aim = 'target'
         await holdWeapon()
-        return NEXT
+        if (!escape.cornered || ctl.aborted) return NEXT
       }
     }
   }

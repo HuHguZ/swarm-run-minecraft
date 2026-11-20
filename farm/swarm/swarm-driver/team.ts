@@ -53,7 +53,7 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     // Одно копьё — ещё не наземный комплект; копьё и булаву донора для тарана/комбо не трогаем.
     const grounded = n => /(_sword|_axe)$|^(mace|trident)$/.test(n)
     const groundPower = Math.max(0, ...names.filter(grounded).map(weaponRating))
-    if (!groundPower || o.swarmTask?.data?.rearm) for (const n of stock.filter(grounded)) if (weaponScore(n) > groundPower) needs[n] = 1
+    for (const n of stock.filter(grounded)) if (weaponScore(n) > groundPower) needs[n] = 1
     if (!names.some(n => WEAPON.test(n))) for (const n of stock.filter(n => WEAPON.test(n) && !grounded(n))) needs[n] = 1
     for (const [slot, suffix] of Object.entries({ head: '_helmet', torso: '_chestplate', legs: '_leggings', feet: '_boots' })) {
       const armorSlot = { head: 5, torso: 6, legs: 7, feet: 8 }[slot]
@@ -193,6 +193,9 @@ export function swarmTeam (sw: SwarmDriverCtx) {
       const killsBy: Record<string, number> = { ...sw.pastKills.get(team) }
       for (const d of sw.drops()) if (d.team === team && d.by) killsBy[d.by] = (killsBy[d.by] || 0) + 1
       planned.set(team, planPvp(board, members, { foesLeft: rivals.length ? rivals.filter(o => alive(o.name)).length + humans.length : undefined, killsBy, quorum: Math.min(2, Math.max(1, members.length)), doctrine: process.env.SWARM_DOCTRINE as any || undefined, aggressive, hideouts, perches, gather, edgeOf: edgeNear,
+        lootZones: sw.arms ? [...hideouts, ...sw.chestTops].filter(h => h.tier > 0) : undefined,
+        lootOffer: sw.arms ? m => { const o = bots.find(o => o.name === m.id); return o ? sw.lootOffer?.(o, board) || null : null } : undefined,
+        travelSeconds: sw.arms && sw.travelCost ? (m, from, to) => { const o = bots.find(o => o.name === m.id); if (!o) return Infinity; const price = sw.travelCost(o, to, from); return Math.min(price.walk, price.fly) } : undefined,
         // Лестницы — выключены, пока столбы берутся из перемещения, а не подтверждённой кладки (арена 36: «стена кончилась»,
         // крафт рвут рефлексы — трое ботов вне боя впустую). ARENA_LADDERS=1 — включить.
         // Точки (стена лестницы, яма, засада) — закрыты, пока споткнувшийся на них стоит там же или у раскрытой засады враг

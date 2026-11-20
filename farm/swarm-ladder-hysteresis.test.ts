@@ -5,6 +5,7 @@ import { assessSwarmFight } from '../daemon/src/swarm'
 import { swarmTurn } from './swarm/swarm-driver/turn'
 import { swarmTurnWork } from './swarm/swarm-driver/turn-work'
 import { createSwarmDriver } from './swarm/swarm-driver'
+import { ladderUp } from '../daemon/src/ladder'
 
 test('ladder phase hysteresis prices the accepted fight and yields to danger without a timer', async () => {
   let now = 1000, entered: () => void, finish: (r: any) => void
@@ -102,4 +103,120 @@ test('ladder phase hysteresis prices the accepted fight and yields to danger wit
   driver.reset()
   assert.equal(b.swarmLadder, undefined, 'новый раунд убирает принятую цену незавершённой работы')
   assert.equal(b.swarmTask, undefined, 'новый раунд убирает цену обратной смены вместе с flee')
+})
+
+test('a worker halfway up its column uses only its remaining ladders and publishes once after native completion', async () => {
+  const site = { key: 'resume', x: 0, y: 64, z: 0, top: 72, face: { x: 1, z: 0 } }
+  const frame = { p: { x: 1.5, y: 68, z: .5 }, hp: 20, inv: { ladder: 4 } }, calls: string[] = []
+  const member: any = { id: 'A', health: 20, position: frame.p, inventory: frame.inv }, task = { data: { ladder: site.key } }
+  let complete = false, failures = 0
+  const b: any = { name: 'A', c: { async call(method) {
+    calls.push(method)
+    if (method === 'status') return { state: { pos: frame.p, health: 20, inventory: frame.inv } }
+    if (method === 'ladder_up') {
+      frame.p = { x: complete ? .5 : 1.5, y: complete ? 73 : 70, z: .5 }; frame.inv.ladder = complete ? 0 : 2
+      return { detail: { complete, placed: 2, at: frame.p, why: complete ? null : 'timeout' } }
+    }
+    return { detail: {} }
+  } } }
+  const sw: any = { now: () => 1000, alive: () => true, pos: { A: frame }, log() {}, walls: new Map([[site.key, site]]),
+    ladderRoutes: [], siteOpen: () => true, siteFailed() { failures++ }, detail: r => r.detail || r, say2() {}, generation: 1 }
+  const work = swarmTurnWork(sw), turn = () => work.turnLadder({ b, task, round: 1, member, enemies: [], context: { members: [member] } } as any)
+  await turn()
+  assert.deepEqual(calls, ['status', 'ladder_up'], 'the mid-column worker must not descend or craft the original nine ladders')
+  assert.equal(sw.ladderRoutes.length, 0, 'a native partial column is not a team route')
+  assert.equal(failures, 0, 'confirmed native construction continues through the ordinary next turn')
+  complete = true
+  await turn(); await turn()
+  assert.equal(sw.ladderRoutes.length, 1)
+  assert.equal(calls.filter(m => m === 'ladder_up').length, 2, 'the completed wall is not built or published twice')
+})
+
+test('a centered ladder worker reads precise physics instead of repeatedly centering its F3 cell', async () => {
+  for (const initialStock of [9, 0]) {
+    const site = { key: 'precise', x: 18000, y: 261, z: 18000, top: 269, face: { x: -1, z: 0 } }
+    const floor = { x: 17998, y: 261, z: 18000 }, calls: any[] = []
+    let precise = { x: 17998.5072, y: 261, z: 18000.5 }, stock = initialStock
+    const member: any = { id: 'A', health: 20, position: floor, inventory: { ladder: stock } }
+    const b: any = { name: 'A', c: { async call(method, params) {
+      calls.push({ method, params })
+      if (method === 'status') return { state: { pos: floor, health: 20, inventory: { ladder: stock } },
+        detail: params?.physics ? { physics: { pos: precise } } : {} }
+      if (method === 'craft') { stock = 9; precise = { ...precise, x: 17998.53 }; return { detail: { crafted: 9 } } }
+      if (method === 'ladder_up') {
+        const expected = Math.hypot(18000.5 - precise.x, 270 - precise.y, 18000.5 - precise.z)
+        assert.ok(Math.abs(b.swarmAscent.left - expected) < 1e-9, 'ascent accounting uses the precise reply after any crafting refresh')
+        return { detail: { complete: false, why: 'fixture finished' } }
+      }
+      return { detail: { arrived: params, ok: true, at: precise } }
+    } } }
+    const sw: any = { now: () => 1000, alive: () => true, pos: { A: { p: floor } }, log() {}, walls: new Map([[site.key, site]]),
+      ladderRoutes: [], siteOpen: () => true, siteFailed() {}, detail: r => r.detail || r, say2() {}, generation: 1 }
+    await swarmTurnWork(sw).turnLadder({ b, task: { data: { ladder: site.key } }, round: 1, member, enemies: [], context: { members: [member] } } as any)
+    assert.deepEqual(calls.map(c => c.method), initialStock ? ['status', 'ladder_up'] : ['status', 'craft', 'status', 'ladder_up'])
+    assert.ok(calls.filter(c => c.method === 'status').every(c => c.params.physics === true))
+    assert.equal(sw.ladderRoutes.length, 0, 'reaching the placement RPC alone does not publish a route')
+  }
+})
+
+test('native ladder resume skips the base entry only when the whole lower column exists', async () => {
+  const { Vec3 } = require('../daemon/node_modules/vec3'), registry = require('../daemon/node_modules/prismarine-registry')('1.21.11')
+  const Block = require('../daemon/node_modules/prismarine-block')(registry)
+  for (const mode of ['partial', 'hole', 'ready']) {
+    const built = new Set(Array.from({ length: mode === 'ready' ? 9 : 5 }, (_, k) => 64 + k).filter(y => mode !== 'hole' || y !== 67)), controls: any = {}
+    let inventory = mode === 'ready' ? 0 : 4, earlyBaseSteps = 0
+    const bot: any = { entity: { position: new Vec3(1.5, mode === 'ready' ? 64 : 68, .5), width: .6, height: 1.8 }, entities: {}, heldItem: { name: 'ladder' },
+      inventory: { items: () => inventory ? [{ name: 'ladder', count: inventory }] : [] }, lookAt: async () => {},
+      setControlState: (name, value) => { controls[name] = value },
+      blockAt: p => {
+        p = p.floored()
+        const name = p.x === 0 && p.z === 0 && p.y >= 64 && p.y <= 72 ? 'stone' : p.x === 1 && p.z === 0 && built.has(p.y) ? 'ladder' : 'air'
+        const b = Block.fromStateId(registry.blocksByName[name].defaultState); b.position = p; return b
+      },
+      placeBlock: async b => { inventory--; built.add(b.position.y) },
+      waitForTicks: async () => {
+        const p = bot.entity.position
+        if (controls.forward && controls.jump) p.y++
+        else if (controls.forward && p.y >= 73) p.x = .5
+        else if (controls.forward) earlyBaseSteps++
+      }
+    }
+    const r = await ladderUp({ require: () => bot }, { onAbort: [] }, { wall: { x: 0, y: 64, z: 0 }, face: { x: 1, z: 0 }, top: 72 })
+    assert.equal(earlyBaseSteps, mode === 'hole' ? 30 : 0, 'only an actual intact lower column permits skipping the initial base entry')
+    assert.ok('complete' in r, 'native traversal must reach its full-column completion check')
+    assert.equal(r.complete, mode !== 'hole', 'an unseen gap below the worker cannot become a complete route')
+    if (mode !== 'hole') { assert.equal(r.placed, mode === 'ready' ? 0 : 4); assert.equal(r.ok, true) }
+  }
+})
+
+test('native ladder travel keeps the arena across the whole column and its exit', async () => {
+  const { Vec3 } = require('../daemon/node_modules/vec3'), registry = require('../daemon/node_modules/prismarine-registry')('1.21.11')
+  const Block = require('../daemon/node_modules/prismarine-block')(registry)
+  for (const mode of ['column', 'exit', 'body', 'late-exit', 'safe']) {
+    const arena: any = mode === 'exit' ? { x: 4.5, z: .5, r: 5 } : mode === 'body' ? { x: -3.5, z: .5, r: 5.5 } : { x: 0, z: 0, r: 20 }
+    if (mode === 'column') arena.avoid = [{ x: 1.5, y: 68, z: .5, r: 2 }]
+    const controls: any = {}; let moved = 0
+    const bot: any = { entity: { position: new Vec3(1.5, 64, .5), width: .6, height: 1.8 }, entities: {},
+      inventory: { items: () => [] }, lookAt: async () => {},
+      setControlState: (name, value) => { controls[name] = value },
+      blockAt: p => {
+        p = p.floored()
+        const name = p.x === 0 && p.z === 0 && p.y >= 64 && p.y <= 72 ? 'stone' : p.x === 1 && p.z === 0 && p.y >= 64 && p.y <= 72 ? 'ladder' : 'air'
+        const b = Block.fromStateId(registry.blocksByName[name].defaultState); b.position = p; return b
+      },
+      waitForTicks: async () => {
+        const p = bot.entity.position
+        if (controls.forward && controls.jump) { p.y++; moved++ }
+        else if (controls.forward) { p.x = .5; moved++ }
+        if (mode === 'late-exit' && p.y >= 73) arena.avoid = [{ x: 1, y: 73, z: .5, r: .3 }]
+      }
+    }
+    const r = await ladderUp({ require: () => bot }, { onAbort: [] }, { wall: { x: 0, y: 64, z: 0 }, face: { x: 1, z: 0 }, top: 72, arena })
+    if (mode === 'safe') { assert.equal(r.ok, true); assert.ok('complete' in r); assert.equal(r.complete, true) }
+    else {
+      assert.equal(r.ok, false, mode + ' must not bypass the supplied arena')
+      assert.match(r.why, /arena/, mode)
+      assert.equal(moved, mode === 'late-exit' ? 9 : 0, 'reject the swept forbidden leg before moving: ' + mode)
+    }
+  }
 })

@@ -6,6 +6,7 @@
 // в ход у всех, у кого есть (wind_push сам проверяет прогоном тела, что всплеск его скинет). Ломка пола под ним —
 // ямы-ловушки (plan-jobs.pvpDiggers) с местами у самых его ног.
 import * as damage from '../pvp/damage-model'
+import { enemyDefense } from './fight'
 import type { SharedEnemy } from './types'
 
 // Сторона падения от цели (единичный вектор), глубина (Infinity — пустота или лава), лава ли внизу и в скольких блоках
@@ -20,8 +21,7 @@ const LAVA_S = 4
 // Лава (10 тиков на удар 4 по броне, lava.json) и горение на теле (1 в секунду, мимо брони) за LAVA_S — по видимой броне:
 // незерит с блеском (Защита IV) теряет ~4 хп, голый — смерть (стенд 21.10: чемпион выходил из ям, лечась яблоками).
 function lavaLoss(foe: Pick<SharedEnemy, 'equipment'>): number {
-  const armor = (foe.equipment?.armor || []).map(name => ({ name, ench: { protection: foe.equipment?.enchanted ? 4 : 0 } }))
-  const def = damage.defenseOf(armor)
+  const def = enemyDefense(foe)
   return LAVA_S * (2 * damage.afterDefense(4, 'fire', def) + (1 - damage.epfFor(def, 'fire') / 25))
 }
 

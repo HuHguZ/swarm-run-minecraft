@@ -9,7 +9,7 @@ import * as tick from './tick-plugins-fixture'
 function fixture(t, surface = 'smooth_sandstone_slab', y = 63.5, physicsEnabled = true) {
   t.mock.method(require('../src/edges/mlg'), 'mlgDrop', () => ({ ok: false, drop: 3 }))
   t.mock.method(require('../src/blockmoves'), 'on', () => false)
-  const clock = tick.testClock(), bot = tick.install(clock, { pathfinder: true, physicsEnabled })
+  const clock = tick.testClock(), bot = tick.install(clock, { pathfinder: true, digging: true, physicsEnabled })
   bot.blockAt = p => tick.block(p.floored().y === 63 && p.x >= -2 && p.x <= 10 && p.z >= -2 && p.z <= 2 ? surface : 'air', p)
   bot.entity.position = new Vec3(.5, y, .5); bot.entity.onGround = true
   bot.health = bot.food = 20; bot.game.dimension = 'overworld'; bot.entity.metadata = []
@@ -49,6 +49,76 @@ test('Session.goto reaches the requested lower-slab support with range .8 throug
     assert.ok(Math.abs(f.bot.entity.position.x - 4.5) < .8)
     assert.equal(f.bot._ndSprintJump?.jumps || 0, 0)
   } finally { f.close() }
+})
+
+test('exact climb reaches a lower slab without mining its requested support or accepting the floor below', async t => {
+  const f = fixture(t, 'stone', 64)
+  const slab = new Vec3(4, 63, 0)
+  f.bot.blockAt = p => tick.block(p.floored().y <= 62 ? 'stone' : p.floored().equals(slab) ? 'smooth_sandstone_slab' : 'air', p)
+  f.bot.entity.position = new Vec3(.5, 63, .5)
+  Object.assign(f.params, { y: 63.5, climb: true, exactY: true })
+  const running = f.session.goto(f.params)
+  running.catch(() => {})
+  try {
+    await f.clock.advanceGame(50)
+    assert.equal(f.goals[0].y, 64, 'the native feet node is above the fractional support')
+    const result = await f.drive(running)
+    assert.ok(result.arrived, JSON.stringify(result))
+    assert.equal(f.bot.entity.onGround, true)
+    assert.ok(Math.abs(f.bot.entity.position.y - 63.5) < 1e-6)
+    assert.ok(f.paths.every(p => p.path.every(n => !n.toBreak?.some(b => b.equals(slab)))), 'the route must retain its destination support')
+    assert.ok(!f.bot.packets.some(p => p.name === 'block_dig' && p.location?.equals(slab)))
+  } finally { f.session.ctl?.abort(); await running.catch(() => {}); f.close() }
+})
+
+for (const y of [64, 64.263]) {
+  test(`exact climb keeps the existing integer-cell target for unsupported Y${y}`, async t => {
+    const f = fixture(t, 'stone', 64)
+    Object.assign(f.params, { y, climb: true, exactY: true })
+    try {
+      const result = await f.drive(f.session.goto(f.params))
+      assert.ok(result.arrived, JSON.stringify(result))
+      assert.equal(f.goals[0].y, 64)
+      assert.equal(f.bot.entity.position.y, 64)
+      assert.equal(f.bot.entity.onGround, true)
+    } finally { f.close() }
+  })
+}
+
+test('fractional destination support survives movement refresh and its lease leaves no stale break guard', async t => {
+  const f = fixture(t)
+  Object.assign(f.params, { climb: true, exactY: true })
+  const running = f.session.goto(f.params)
+  running.catch(() => {})
+  try {
+    await f.clock.advanceGame(50)
+    const slab = f.bot.blockAt(new Vec3(4, 63, 0)), old = f.bot.pathfinder.movements
+    assert.equal(old.exclusionBreak(slab), Infinity)
+    f.session.updateMovements(true)
+    assert.notEqual(f.bot.pathfinder.movements, old)
+    assert.equal(f.bot.pathfinder.movements.exclusionBreak(slab), Infinity)
+    assert.ok((await f.drive(running)).arrived)
+    assert.equal(f.session.gotoSupport, undefined)
+    assert.ok(Number.isFinite(old.exclusionBreak(slab)))
+    assert.ok(Number.isFinite(f.bot.pathfinder.movements.exclusionBreak(slab)))
+  } finally { f.session.ctl?.abort(); await running.catch(() => {}); f.close() }
+})
+
+test('an old fractional goto cleanup cannot clear a newer destination support lease', async t => {
+  const f = fixture(t)
+  Object.assign(f.params, { climb: true, exactY: true })
+  const running = f.session.goto(f.params)
+  running.catch(() => {})
+  try {
+    await f.clock.advanceGame(50)
+    const replacement = { support: new Vec3(4, 63, 0), ctl: { aborted: false } }
+    f.session.gotoSupport = replacement
+    f.session.updateMovements(true)
+    f.session.ctl.abort()
+    await running.catch(() => {})
+    assert.equal(f.session.gotoSupport, replacement)
+    assert.equal(f.bot.pathfinder.movements.exclusionBreak(f.bot.blockAt(replacement.support)), Infinity)
+  } finally { delete f.session.gotoSupport; f.close() }
 })
 
 for (const [surface, y] of [['stone', 64], ['smooth_sandstone_stairs', 64], ['white_carpet', 63.0625]] as const) {

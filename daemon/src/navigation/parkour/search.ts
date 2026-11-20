@@ -63,8 +63,9 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
       const waypoint = contactRoute!(approach.pos).waypoint
       const dx = waypoint.x - approach.pos.x - approach.vel.x
       const dz = waypoint.z - approach.pos.z - approach.vel.z
+      const previous = approach.pos.clone()
       approach.yaw = Math.atan2(-dx, -dz); approach.control = controls({ forward: true, sprint: true }); sim(approach, world)
-      if (!approach.onGround || !supportAt(geometry, approach.pos, .04) || !bodyClear(geometry, approach.pos)) break
+      if (!approach.onGround || !supportAt(geometry, approach.pos, .04) || !bodyClear(geometry, approach.pos, { from: previous })) break
       edgeRunup = tick + 1
     }
   }
@@ -104,7 +105,7 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
       if (opts.climb && onClimbable(geometry, state.pos)) { contacted = true; fallDistance = 0 }
       // LivingEntity.handleOnClimbable and Entity.makeStuckInBlock reset the fall.
       else if (onClimbable(geometry, state.pos) || state.isInWeb) fallDistance = 0
-      if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < Math.min(base.pos.y, target.y, ...springs.map(p => p.y)) - .4 || !bodyClear(geometry, state.pos, { web: opts.web, powder: true }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
+      if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < Math.min(base.pos.y, target.y, ...springs.map(p => p.y)) - .4 || !bodyClear(geometry, state.pos, { web: opts.web, powder: true, from: previous }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
       if (state.onGround) {
         const support = supportAt(geometry, state.pos, .04)
         const damage = support ? landingDamage(support.block, fallDistance, bot.entity.attributes) : 0
@@ -210,7 +211,7 @@ function* momentumSearch(bot: MovementBot, target: Point, opts: JumpOptions, wor
         noteForecast(opts.diagnostics, state, target); airborne ||= !state.onGround
         if (!withinArena(bot, state.pos, opts.arena)) break
         fallDistance += Math.max(0, previous.y - state.pos.y)
-        if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < base.pos.y - .4 || !bodyClear(geometry, state.pos, { web: opts.web, powder: true }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
+        if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < base.pos.y - .4 || !bodyClear(geometry, state.pos, { web: opts.web, powder: true, from: previous }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
         if (state.onGround && state.vel.y <= 0) {
           // Native SELF movement clips Y before horizontal travel. Its real
           // contact can carry the body past the edge in that same tick; verify
@@ -279,7 +280,7 @@ function* ledgeSearch(bot: MovementBot, target: Point, opts: JumpOptions, world:
       airborne ||= !state.onGround && state.pos.y < base.pos.y - .01
       fallDistance += Math.max(0, previous.y - state.pos.y)
       const posture = { ...geometry, physics: { ...geometry.physics, playerHeight: state.ndPoseHeight ?? dimensions(geometry).height } }
-      if (state.isInLava || state.isInWater || state.isInWeb || state.pos.y < target.y - .4 || !bodyClear(posture, state.pos) || !groundedHazardClear(posture, state.pos, state.vel.y, state.onGround)) break
+      if (state.isInLava || state.isInWater || state.isInWeb || state.pos.y < target.y - .4 || !bodyClear(posture, state.pos, { from: previous }) || !groundedHazardClear(posture, state.pos, state.vel.y, state.onGround)) break
       if (state.onGround) {
         const support = supportAt(geometry, state.pos, .04)
         const damage = support ? landingDamage(support.block, fallDistance, bot.entity.attributes) : 0
@@ -341,6 +342,7 @@ function* jumpSearch(bot: MovementBot, target: Point, opts: JumpOptions = {}, ca
         // At 750 TPS a physics turn is only 1.33ms. Yield within the action
         // expansion, rather than after dozens of complete native forecasts.
         if (performance.now() >= slice) { yield; slice = performance.now() + .25 }
+        const previous = node.state.pos
         const state = clone(node.state); state.yaw = step.yaw; state.control = step.control
         sim(state, world)
         noteForecast(opts.diagnostics, state, target)
@@ -350,7 +352,7 @@ function* jumpSearch(bot: MovementBot, target: Point, opts: JumpOptions = {}, ca
         const fallDistance = state.isInWeb || onClimbable(geometry, state.pos) ? 0 : (node.state.onGround ? 0 : node.fallDistance) + Math.max(0, node.state.pos.y - state.pos.y)
         if (!jumped && !state.onGround && !supportAt(geometry, state.pos, .01)) continue
         if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < Math.min(bot.entity.position.y, target.y) - .4) continue
-        if (!bodyClear(geometry, state.pos, { web: opts.web, powder: true }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) continue
+        if (!bodyClear(geometry, state.pos, { web: opts.web, powder: true, from: previous }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) continue
         if (state.onGround) {
           const support = supportAt(geometry, state.pos, .04)
           if (support && landingDamage(support.block, fallDistance, bot.entity.attributes) > 0) continue

@@ -482,6 +482,33 @@ test('лестница для команды: столб своего у цел�
   assert.deepEqual(who, ['far'], 'на 28 ступеней хватает только 32 лестниц (4 бревна ≈ 12)')
 })
 
+test('ordinary upper loot recruits one equipped looter to open a shared ladder before any enemy appears', () => {
+  const bare = { weapon: undefined, armor: [], ench: {}, strength: 20 }
+  const team = [member('builder', { ...bare, position: p(0, 88, 16), inventory: { ladder: 6, iron_pickaxe: 1, cobblestone: 64 } }),
+    member('looter', { ...bare, position: p(2, 88, 16), inventory: { cobblestone: 64 } }),
+    member('guard-a', { position: p(-3, 88, 16) }), member('guard-b', { position: p(3, 88, 16) })]
+  const f = scene(team), destination = { ...p(0, 94, 20), tier: 4 }
+  const site = { key: 'loot-wall', x: 0, y: 88, z: 18, top: 93, face: { x: 0, z: -1 } }
+  const options = { foesLeft: 12, quorum: 1, doctrine: 'hunt' as const, lootZones: [destination],
+    lootOffer: () => ({ position: destination, tier: 4, seconds: 35 }), ladderSites: [site] }
+  const plan = planPvp(f.board, team, options)
+  assert.equal(plan.get('builder')!.data?.ladder, site.key, 'a concrete upper loot route needs the existing shared worker without a foe')
+  assert.equal(plan.get('looter')!.kind, 'loot', 'the shared route leaves the other looter on its actual goal')
+  team[0].position = p(1.5, 90, 18.5); team[0].inventory!.ladder = 3
+  assert.equal(planPvp(f.board, team, options).get('builder')!.data?.ladder, site.key, 'native ascent and consumed ladders retain the same worker')
+  for (const mode of ['no-offer', 'distant', 'no-materials', 'contact', 'hurt']) {
+    const actors = team.map(m => ({ ...m, position: { ...m.position }, inventory: { ...m.inventory } }))
+    actors[0].position = p(0, 88, 16); actors[0].inventory.ladder = mode === 'no-materials' ? 1 : 6
+    if (mode === 'hurt') actors[0].health = 2
+    const c = scene(actors)
+    if (mode === 'contact') c.see('foe', p(0, 88, 17))
+    const tasks = planPvp(c.board, actors, { ...options, lootOffer: () => mode === 'no-offer' ? null :
+      { position: mode === 'distant' ? p(100, 94, 20) : destination, tier: 4, seconds: 35 } })
+    assert.equal(tasks.get('builder')!.data?.ladder, undefined, mode)
+    if (mode === 'hurt') assert.ok(['recover', 'flee'].includes(tasks.get('builder')!.kind), 'urgent recovery keeps ownership')
+  }
+})
+
 test('ямы: быстрые цели первыми, по 1–2 копателя, впереди движения и с разносом 3', () => {
   const team = Array.from({ length: 24 }, (_, i) => member('d' + i, { position: p(Math.floor(i / 8) * 30 + (i % 8 < 4 ? -3.6 : 3.6), 64, 0), inventory: { netherite_sword: 1, netherite_pickaxe: 1 } }))
   const f = scene(team)
@@ -910,6 +937,26 @@ test('endgame: twelve naked against the known last champion still finish instead
   const plan = planPvp(f.board, team, { foesLeft: 1, quorum: 2 })
   assert.ok([...plan.values()].every(t => t.data?.finishing), 'the public death feed confirms the last enemy')
   assert.ok([...plan.values()].every(t => t.kind === 'fight'), `all finish: ${[...plan.values()].map(t => t.kind).join(',')}`)
+})
+
+test('against the last armored champion a safe affordable weapon route beats a futile rush', () => {
+  const zone = p(0, 64, 45)
+  for (const mode of ['route', 'withdrawn', 'expensive', 'cornered', 'dying', 'equal', 'unsafe site']) {
+    const team = Array.from({ length: 12 }, (_, i) => member('n' + i, {
+      position: p(i / 12, 64, mode === 'cornered' ? 2 : 30), strength: 20, weapon: null, armor: [], ench: {}, inventory: {}
+    }))
+    const f = scene(team)
+    f.see('champ', p(), mode === 'equal' ? { equipment: { armor: [] } } : {
+      equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true }, hpEstimate: mode === 'dying' ? 2 : 20
+    })
+    let offer = { tier: 3, seconds: mode === 'expensive' ? 10000 : 9, position: mode === 'unsafe site' ? p(0, 64, 1) : zone }
+    const run = () => [...planPvp(f.board, team, { foesLeft: 1, quorum: 2, lootOffer: () => offer }).values()]
+    if (mode === 'withdrawn') { run(); offer = null }
+    const plan = run()
+    if (mode === 'route') {
+      assert.equal(plan.filter(t => t.kind === 'loot' && t.data?.rearm && t.position?.z === zone.z).length, 12)
+    } else assert.ok(plan.every(t => t.kind === 'fight' && t.data?.finishing), mode)
+  }
 })
 
 test('known last archer is finished; unknown enemy count retains middle battle cover policy', () => {

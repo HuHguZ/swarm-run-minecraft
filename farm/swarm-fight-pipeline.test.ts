@@ -117,7 +117,7 @@ test('an actual approach still stops for new underfoot or path digging, target, 
     const { running } = await f.start(f.fight(base), false)
     try {
       const extra = change === 'underfoot' ? { digAvoid: [far, { x: 0, y: 63, z: 0 }] }
-        : change === 'path' || change === 'path_outside_stand' ? { digAvoid: [far, { x: 6, y: 63, z: 0 }], swarmStand: base.swarmStand }
+        : change === 'path' || change === 'path_outside_stand' ? { digAvoid: [far, { x: 6, y: 63, z: change === 'path_outside_stand' ? 5 : 0 }], swarmStand: base.swarmStand }
           : change === 'target' ? { target: 'Other' }
           : change === 'shove' ? { shove: true, shoveAt: { x: -2, y: 64, z: .5 } }
             : { fountain: 'close' }

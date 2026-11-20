@@ -116,21 +116,37 @@ export async function buildLan (who) {
 // Date.now драйвера — в игровом времени, иначе паузы перед уворотом, перезарядки и опросы растягиваются в тиках во столько
 // же раз. Темп — прирост gametime (RCON) к стене, раз в 1 с; интервалы берут темп при создании (первый замер — до боя).
 // new Date() в журнале — по-прежнему стенное.
+type ClockSample = { sent: number; received: number; tick: number }
+
+export function sampledGameSpeed (previous: ClockSample, next: ClockSample, fallback: number) {
+  // Обработка ответов может слипнуться в одном обороте event loop. Сервер измерил
+  // оба тика между первой отправкой и последним ответом, а не между двумя callbacks.
+  const elapsed = next.received - previous.sent
+  if (elapsed <= 0 || next.tick < previous.tick) return fallback
+  return Math.max(.5, (next.tick - previous.tick) * 50 / elapsed)
+}
+
 export async function gameClock (i) {
   const realNow = Date.now; const realSet = setTimeout; const realInt = setInterval
-  const gt = async () => { const m = /(\d+)/.exec(await rcon(i, 'time query gametime', 3000).catch(() => '') || ''); return m ? [realNow(), +m[1]] : null }
+  const gt = async () => {
+    const sent = realNow()
+    const m = /(\d+)/.exec(await rcon(i, 'time query gametime', 3000).catch(() => '') || '')
+    return m ? { sent, received: realNow(), tick: Number(m[1]) } : null
+  }
   const a = await gt(); await sleep(2000); const b = await gt()
-  let speed = a && b ? Math.max(0.5, (b[1] - a[1]) * 50 / (b[0] - a[0])) : 1
+  let speed = a && b ? sampledGameSpeed(a, b, 1) : 1
   let base = realNow(); let virt = base; let last = b
   const now = () => virt + (realNow() - base) * speed
   Date.now = now
   ;(global as any).setTimeout = (fn, ms = 0, ...r) => realSet(fn, ms / speed, ...r)
   ;(global as any).setInterval = (fn, ms = 0, ...r) => realInt(fn, ms / speed, ...r)
-  realInt(async () => {
-    const t = await gt(); if (!t) return
-    if (last && t[0] > last[0]) { virt = now(); base = realNow(); speed = speed * 0.7 + Math.max(0.5, (t[1] - last[1]) * 50 / (t[0] - last[0])) * 0.3 }
-    last = t
-  }, 1000)
+  const poll = async () => {
+    const t = await gt()
+    if (t && last) { virt = now(); base = realNow(); speed = speed * 0.7 + sampledGameSpeed(last, t, speed) * 0.3 }
+    if (t) last = t
+    realSet(poll, 1000)
+  }
+  realSet(poll, 1000)
   log(`игровое время драйвера: темп ×${speed.toFixed(2)}`)
   realInt(() => log(`темп сервера ×${speed.toFixed(2)}`), 60000)
 }

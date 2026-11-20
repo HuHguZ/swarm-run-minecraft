@@ -137,7 +137,7 @@ function hpOf (ent) {
 // Тело свободно: мозг не ведёт намерение (mc_wait — не занятость, как в
 // autopilot.bodyBusy), не спит, не копает, pathfinder не идёт.
 function idle (session, bot) {
-  if (session.reflex || (session.tactics?.snapshot()?.threatLevel ?? 0) > 0 || bot.entity?.elytraFlying || bot._ndDescend) return false
+  if (session.bot !== bot || session.reflex || (session.tactics?.snapshot()?.threatLevel ?? 0) > 0 || bot.entity?.elytraFlying || bot._ndDescend) return false
   const cur = session.current
   if (cur && cur.name !== 'wait') return false
   if (bot.isSleeping || bot.targetDigBlock) return false
@@ -253,7 +253,7 @@ function gestureState (ap, bot): GestureState {
     if (!decision.gesture || (signal === 'crouch' && decision.gesture !== 'crouch')) return false
     gs.reflexBusy = true
     controlLock.start(session, async ctl => {
-      const allowed = () => !ctl.aborted && (session.tactics?.snapshot()?.threatLevel ?? 0) === 0
+      const allowed = () => session.bot === bot && !ctl.aborted && (session.tactics?.snapshot()?.threatLevel ?? 0) === 0
         && !(session.current && session.current.name !== 'wait') && !bot.entity?.elytraFlying
       if (allowed()) await fn(allowed)
     }, { owner: 'Skill', priority: 1, source: 'social-gesture' }).catch(() => {}).finally(() => { gs.reflexBusy = false })
@@ -534,6 +534,7 @@ function gestureThrows (gs: GestureState) {
       throws.set(key, t)
       gameClock.setTimeout(() => {
         throws.delete(key)
+        if (session.bot !== bot) return
         // /give выбрасывает игроку «фальшивый» предмет у его глаз и тут же
         // забирает его обратно (GiveCommand: player.drop(...) + makeFakeItem)
         // — ради анимации подбора. Настоящий брошенный предмет 40 тиков
@@ -578,7 +579,7 @@ function gestureThrows (gs: GestureState) {
 function gestureWatch (gs: GestureState) {
   const { bot, session, people, rec, fresh, emit, reflex, mood, trySummon } = gs
   const timer = gameClock.setInterval(() => {
-    if (!bot.entity) return
+    if (session.bot !== bot || !bot.entity) return
     const now = gameClock.now()
     for (const name of Object.keys(bot.players)) {
       const p = playerEnt(bot, bot.players[name] && bot.players[name].entity)

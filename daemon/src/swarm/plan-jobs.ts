@@ -272,26 +272,31 @@ export function pvpLadders(S: PvpPlan): void {
   // Место — у стены пояса между ботом и целью (верх не выше цели, по горизонтали в 12 бл. от неё); снизу вверх, ближние к цели
   // первыми; до двух сразу. Хватит ли — лестницы + из дерева (7 палок → 3 лестницы; доска → 2 палки; бревно → 4 доски; верстак
   // — 4 доски, если его нет).
-  if (aggressive) {
-    const goals = enemies.filter(e => board.now() - e.seenAt < 15000)
-    const nearGoal = (s: SwarmPosition) => Math.min(...goals.map(e => Math.hypot(e.position.x - s.x, e.position.z - s.z)))
-    const sites = (options.ladderSites || []).filter(s => goals.some(e => s.top + 1 <= e.position.y + 1 && e.position.y - s.y >= 3) && nearGoal(s) < 12)
+  // Статическая зона лута сама по себе не повод стройки: нужен уже выбранный путь участника.
+  const loot = [...plan.values()].filter(t => t.kind === 'loot' && t.data?.lootTier > 0 && t.position)
+  const was = new Map(board.tasks().filter(t => t.assignedTo && t.data?.ladder).map(t => [t.assignedTo!, t.data!.ladder]))
+  if (aggressive || loot.length) {
+    const goals = [...(aggressive ? enemies.filter(e => board.now() - e.seenAt < 15000).map(e => e.position) : []), ...loot.map(t => t.position!)]
+    const useful = (s, goal: SwarmPosition) => s.top + 1 <= goal.y + 1 && goal.y - s.y >= 3 && Math.hypot(goal.x - s.x, goal.z - s.z) < 12
+    const nearGoal = (s: SwarmPosition) => Math.min(...goals.map(p => Math.hypot(p.x - s.x, p.z - s.z)))
+    const sites = (options.ladderSites || []).filter(s => goals.some(p => useful(s, p)))
       .sort((a, c) => a.y - c.y || nearGoal(a) - nearGoal(c))
     for (const site of sites) {
       if (ladderers.size >= 2) break
       const need = site.top - site.y + 1
+      const continuing = (m: SwarmMember) => was.get(m.id) === site.key && m.position.y >= site.y - .6 && m.position.y <= site.top + 1.5
       const enough = (m: SwarmMember) => {
         const planks = count(m.inventory, 'oak_planks') + 4 * count(m.inventory, 'oak_log')
         const sticks = count(m.inventory, 'stick') + 4 * Math.floor(Math.max(0, planks - (count(m.inventory, 'crafting_table') ? 0 : 4)) / 2)
-        return count(m.inventory, 'ladder') + 3 * Math.floor(sticks / 7) >= need
+        return count(m.inventory, 'ladder') + 3 * Math.floor(sticks / 7) >= (continuing(m) ? Math.max(0, site.top - Math.floor(m.position.y)) : need)
       }
       // Не под его прицелом: бот видит его сейчас (sources — кто видит) — значит, и он видит бота. Лестница у него на виду —
       // мишень: с яруса выше человек стрелял в ставящих лестницу, а они кричали «прикройте!» и ставили дальше (игра
       // пользователя 22.10: «в дырочку с лука прострелил — даже не смотрел на это»).
       const exposed = (a: SwarmMember) => enemies.some(e => S.archer(e) && board.now() - e.seenAt < 1500 && (e.sources || []).includes(a.id) && distance(e.position, a.position) <= 40)
-      const m = team.filter(a => !plan.has(a.id) && enough(a) && Math.abs(a.position.y - site.y) <= 1.5 && !diggers.has(a.id) && !ladderers.has(a.id) && ![...ladderers.values()].some(l => l.key === site.key) &&
-        enemies.every(e => distance(e.position, a.position) > 6) && !exposed(a)).sort((a, c) => distance(a.position, site) - distance(c.position, site))[0]
-      if (m) ladderers.set(m.id, site)
+      const m = team.filter(a => (!plan.has(a.id) || plan.get(a.id)!.kind === 'loot' && useful(site, plan.get(a.id)!.position!)) && enough(a) && (continuing(a) || Math.abs(a.position.y - site.y) <= 1.5) && !diggers.has(a.id) && !ladderers.has(a.id) && ![...ladderers.values()].some(l => l.key === site.key) &&
+        enemies.every(e => distance(e.position, a.position) > 6) && !exposed(a)).sort((a, c) => Number(continuing(c)) - Number(continuing(a)) || distance(a.position, site) - distance(c.position, site))[0]
+      if (m) { plan.delete(m.id); ladderers.set(m.id, site) }
     }
   }
   S.ladderers = ladderers

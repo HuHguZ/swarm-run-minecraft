@@ -15,19 +15,28 @@ test('реестр типов урона — одна копия, сверена
 
 function fireBot (dimension) {
   const Vec3: typeof import('vec3').Vec3 = require('vec3')
+  const { worldOf, Block }: typeof import('./parkour-fixture') = require('./parkour-fixture')
+  const { world } = worldOf([[0, 63, 0, 'stone']]), original = world.getBlock.bind(world)
+  const cell = new Vec3(0, 64, 0), item = { name: 'water_bucket', count: 1 }
+  let poured = false
+  world.getBlock = p => {
+    if (!poured || !p.floored().equals(cell)) return original(p)
+    const water = Block.fromProperties('water', { level: 0 }); water.position = cell; return water
+  }
   const calls = []
   const bot = {
     game: { dimension },
-    entity: { position: new Vec3(0.5, 64, 0.5), yaw: 0 },
-    inventory: { items: () => [{ name: 'water_bucket' }] },
-    equip: async () => { calls.push('equip') },
+    entity: { position: new Vec3(0.5, 64, 0.5), yaw: 0, metadata: [], isInWater: false },
+    heldItem: null as { name: string; count: number } | null,
+    inventory: { items: () => [item] },
+    equip: async i => { bot.heldItem = i; calls.push('equip') },
     look: async () => {},
     lookAt: async () => {},
-    activateItem: () => { calls.push('activate') },
+    activateItem: () => { calls.push('activate'); poured = !poured; item.name = poured ? 'bucket' : 'water_bucket'; bot.entity.isInWater = poured },
     setControlState: (k, v) => { if (v) calls.push(k) },
     clearControlStates: () => {},
-    // Пол вокруг: воздух над камнем.
-    blockAt: p => ({ name: p.y >= 64 ? 'air' : 'stone', boundingBox: p.y >= 64 ? 'empty' : 'block' })
+    blockAt: p => world.getBlock(p),
+    world: { raycast: require('../node_modules/prismarine-world/src/worldsync').prototype.raycast.bind(world) }
   }
   return { bot, calls }
 }

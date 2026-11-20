@@ -19,7 +19,7 @@ function fixture(points: { x: number; z: number }[]) {
     arena: { x: .5, y: 1, z: .5, r: 24 }, boardOf: () => ({ enemies: () => [] }) }
   Object.assign(sw, swarmMoves(sw))
   const sentries = swarmWind(sw).sentries
-  return { bots, calls, pos, observe: () => sentries(bots[0], [{ id: 'foe', visible: true, position: { x: .5, y: 1, z: .5 } }]),
+  return { bots, calls, pos, sw, observe: () => sentries(bots[0], [{ id: 'foe', visible: true, position: { x: .5, y: 1, z: .5 } }]),
     close: async () => { replies.forEach(reply => reply()); await new Promise(resolve => setImmediate(resolve)) } }
 }
 
@@ -60,5 +60,13 @@ test('a blocked finishing chase outside the held ring remains eligible for usefu
 
 for (const method of ['fight', 'clear_web', 'dodge_blast']) test(`sentry preserves pending ${method} ownership`, async () => {
   const f = fixture([{ x: 18.5, z: .5 }]); f.bots[0].last.m = method
+  try { f.observe(); assert.equal(f.calls.length, 0) } finally { await f.close() }
+})
+
+test('optional mace sentry does not abandon an achieved upper reserve', async () => {
+  const f = fixture([{ x: 18.5, z: .5 }]), at = f.pos[f.bots[0].name].p
+  f.bots[0].swarmTask = { kind: 'goto', position: at, data: { reserve: true, sentry: true } }
+  f.bots[0].last = { m: 'swarm_hold', pending: true }
+  f.sw.arms = true; f.sw.chestTops = [{ ...at, tier: 5 }]
   try { f.observe(); assert.equal(f.calls.length, 0) } finally { await f.close() }
 })

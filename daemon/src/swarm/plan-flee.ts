@@ -29,13 +29,14 @@ const boxBlocks = (m: SwarmMember) => {
   const ok = pick ? /^(cobblestone|stone|dirt|smooth_sandstone|cut_sandstone|sandstone|sand|red_sand|netherrack|.*_planks)$/ : /^(dirt|sand|red_sand|.*_planks)$/
   return Object.entries(inv).filter(([n]) => ok.test(n)).reduce((s, [, c]) => s + (c as number), 0)
 }
+export const visiblyWeakened = (foe: SharedEnemy, now: number) => (foe.hpEstimate ?? 20) <= 10 && now - foe.seenAt < 3000
 export function pvpFlee(S: PvpPlan): void {
   const { board, team, enemies, aggressive, assault, forward, groups, futile, outnumbered, hopeless, put, weak, outclassed, perchFor, rallyFor, hideoutFor, archer, threatReach } = S
   // Ва-банк (пользователь 14.10: «когда мало хп, я начинаю убегать, а они не гонятся добивать — если чувствуют слабость,
   // должны ва-банк идти и добивать»): цель с оценкой хп ≤ 10 (по нашим попаданиям и видимому лечению, не метаданные),
   // виденная за 3 с, — добивание: все, у кого есть оружие, в 32 бл. — прямо на неё; бегства и лечения у них нет, кроме
   // смертельного залпа.
-  const prey = aggressive ? enemies.filter(e => (e.hpEstimate ?? 20) <= 10 && board.now() - e.seenAt < 3000).sort((a, b) => (a.hpEstimate ?? 20) - (b.hpEstimate ?? 20))[0] : undefined
+  const prey = aggressive ? enemies.filter(e => visiblyWeakened(e, board.now())).sort((a, b) => (a.hpEstimate ?? 20) - (b.hpEstimate ?? 20))[0] : undefined
   const hunting = (m: SwarmMember) => !!prey && distance(m.position, prey.position) <= 32 && Object.keys(m.inventory || {}).some(n => count(m.inventory, n) > 0 && (damage.isMeleeWeapon(n) || /^(bow|crossbow|trident)$/.test(n)))
   const retreats = pvpState(board).retreats
   for (const [i, m] of team.entries()) {

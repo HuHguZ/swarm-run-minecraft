@@ -31,9 +31,34 @@ export async function escapeFire (session, ctl: any = null): Promise<FireEscape>
   const nether = /nether/.test(String((bot.game && bot.game.dimension) || ''))
   const bucket = nether ? null : bot.inventory.items().find(i => i.name === 'water_bucket')
   if (bucket) {
-    try { await bot.equip(bucket, 'hand'); await bot.look(bot.entity.yaw, -Math.PI / 2, true); bot.activateItem() } catch {}
-    await sleep(600)
-    return { status: 'done', detail: { how: 'вода из ведра' } }
+    const locks: typeof import('../reflex-lock') = require('../reflex-lock')
+    const water: typeof import('../cast/bucket') = require('../cast/bucket')
+    const { levelOf }: typeof import('../cast/base') = require('../cast/base')
+    const kit: typeof import('../fightkit') = require('../fightkit')
+    const live = () => !ctl.aborted && locks.allowed(session)
+    const full = () => bot.inventory.items().filter(i => i.name === 'water_bucket').reduce((sum, i) => sum + i.count, 0)
+    let extinguished = false, recovered = false
+    try {
+      if (!live()) return { status: 'interrupted', detail: { how: 'тушение прервано' } }
+      await bot.equip(bucket, 'hand')
+      if (!live()) return { status: 'interrupted', detail: { how: 'тушение прервано' } }
+      await bot.look(bot.entity.yaw, -Math.PI / 2, true)
+      const cell = water.landing(bot, bot.entity.position.offset(0, -1, 0))?.cell
+      if (!cell || !live() || bot.heldItem?.name !== 'water_bucket') return { status: ctl.aborted ? 'interrupted' : 'failed', detail: { how: 'нет грани для воды' } }
+      const source = () => { const b = bot.blockAt(cell); return b?.name === 'water' && levelOf(b) === 0 }
+      const foreign = !bot.blockAt(cell) || source(), before = full(), until = gameClock.now() + 600
+      let own = false, wet = false
+      bot.activateItem()
+      while (live() && gameClock.now() < until) {
+        own ||= !foreign && source() && full() < before
+        wet ||= (require('../movement/water') as typeof import('../movement/water')).inWater(bot)
+        extinguished = wet && !kit.onFire(bot) && !(require('../pvp/lava-exit') as typeof import('../pvp/lava-exit')).burnContact(bot)
+        if (extinguished && (foreign || own)) break
+        await sleep(40)
+      }
+      if (extinguished && own && live()) recovered = await (require('../obsidian') as typeof import('../obsidian')).scoopWater(bot, cell, ctl)
+    } catch {}
+    return { status: ctl.aborted ? 'interrupted' : extinguished ? 'done' : 'failed', detail: { how: 'вода из ведра', extinguished, recovered } }
   }
   // Без лавы и ведра бег огонь не тушит (горит 8 с): уйти можно только из клетки огня, и только безопасным шагом. Раньше —
   // спринт с прыжком 1.2 с вслепую к «ближайшей клетке с полом» (часто своей же) — с моста или платформы в пустоту и лаву

@@ -11,11 +11,12 @@ import { pearlDamage } from '../pearl-hop'
 import { hasEffect, onFire, stepSafe } from './body'
 import { findItem } from './potions'
 import { HIT_REACH, TICK_MS, cooldownMs } from './rules'
-import { escapeBurn, lavaExit } from './lava-exit'
+import { burnContact, burningFeet, escapeBurn, lavaExit } from './lava-exit'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 import { webExitPlan } from '../navigation/web-exit'
 import { executePlan } from '../navigation/parkour/execute'
 import { settledLanding } from '../navigation/parkour/model'
+import { bodyClear } from '../navigation/geometry'
 
 // Ямы и опасности рядом, паутина на нём, перезарядка, успокоился ли он.
 export function terrainTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -71,6 +72,10 @@ export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
   turn.webSafe = true
   if (!webCells.length) { ctx.failedCutWeb = null; return }
   if (ctx.pathing) { pathTo(false); ctx.pathing = false }
+  if (burningFeet(bot) && !hasEffect(bot, 'fire_resistance')) {
+    const rescue = await fireTurn(ctx, turn)
+    if (rescue) return rescue
+  }
   clear()
   const hp = bot.health ?? 20
   const foes = tt.threats()
@@ -204,31 +209,56 @@ export async function webObstacleTurn (ctx: DuelCtx, turn: TurnFrame) {
 
 // Огонь и лава под ногами, бег к воде.
 export async function fireTurn (ctx: DuelCtx, turn: TurnFrame) {
-  const { bot, clear, ctl, holdWeapon, pathTo, routeInputs, scoop, set, useOnGroundAt, used } = ctx
+  const { bot, clear, ctl, holdWeapon, pathTo, pendingWater, routeInputs, scoop, set, useOnGroundAt, used } = ctx
   const { me, meInWeb, webSafe, r } = turn
+  const hp = bot.health ?? 20
   const water = findItem(bot, i => i.name === 'water_bucket')
+  const burnName = burnContact(bot)
+  const lavaContact = burnName === 'lava' && !hasEffect(bot, 'fire_resistance') && !/nether/.test(String(bot.game?.dimension || ''))
   // Вплотную (его меч в 4 бл.) — не выливать: горение снимает 1 в секунду, а вода, которую не успел забрать под его ударами,
-  // держит в узкой комнате (игра пользователя 22.10: «вода мешает им убегать — забиваю»).
-  if (water && onFire(bot) && !meInWeb && !bot.entity.isInWater && !(ctx.prof.player && r <= 4)) {
+  // держит в узкой комнате. Контакт с лавой — уже 4 хп за 0.5 с, даже в паутине и без флага обычного горения.
+  if (water && !bot.entity.isInWater && (lavaContact || onFire(bot) && !meInWeb && !(ctx.prof.player && r <= 4))) {
     const cell = me.floored()
-    await useOnGroundAt(water, cell, 'вода: потушился')
-    await ctx.sleep(250)
-    await scoop(cell)
-    await holdWeapon()
-    return NEXT
+    if (await useOnGroundAt(water, cell, lavaContact ? 'лава — залил водой' : 'вода: потушился')) {
+      await ctx.sleep(250)
+      if (!lavaContact || !burningFeet(bot)) {
+        await scoop(cell)
+        await holdWeapon()
+        return NEXT
+      }
+      pendingWater.push({ cell, at: gameClock.now() })
+      await holdWeapon()
+    }
   }
-  const feetName = blockName(bot, me.floored())
-  if (/^(lava|fire|soul_fire)$/.test(feetName) && (!ctx.failedOutOfFire || ctx.failedOutOfFire.inputs !== routeInputs())) {
+  if (/^(lava|fire|soul_fire)$/.test(burnName) && (!ctx.failedOutOfFire || ctx.failedOutOfFire.inputs !== routeInputs())) {
     // Ближайшая клетка поля (на уровне ног или на блок выше — край ямы вровень с полом), до 3 бл.; не останавливаться на
     // кольце магмы (lava-exit: escapeBurn — пока под ногами горит).
-    if (lavaExit(bot, me, ctx.entity.position)) {
+    const exit = lavaExit(bot, me, ctx.entity.position)
+    const pearlAvailable = () => burnContact(bot) === 'lava' && !hasEffect(bot, 'fire_resistance') &&
+      !!findItem(bot, i => i.name === 'ender_pearl') && canSurvivePearl(bot)
+    if (exit || pearlAvailable()) {
       ctx.aim = 'free'
       clear()
-      const r = await escapeBurn(bot, { limitMs: 1500, foe: ctx.entity.position, aborted: () => ctl.aborted, sleep: ms => ctx.sleep(ms), now: () => gameClock.now() })
+      const started = gameClock.now()
+      // Вода/шаг дешевле жемчуга, пока наблюдённый урон не превысил его реальную цену.
+      const pearlCheaper = () => pearlAvailable() && (!exit || hp - (bot.health ?? hp) > pearlDamage(bot))
+      let r = await escapeBurn(bot, { limitMs: 1500, foe: ctx.entity.position, aborted: () => ctl.aborted || pearlCheaper(), sleep: ms => ctx.sleep(ms), now: () => gameClock.now() })
+      clear()
+      if (!r.ok && !ctl.aborted && pearlCheaper()) {
+        if (ctx.guard) await ctx.guard.raise(false)
+        await ctx.escapePearl({ jump: false, rescue: true })
+        await holdWeapon()
+        const remaining = 1500 - (gameClock.now() - started)
+        ctx.aim = 'free'
+        if (burningFeet(bot) && !ctl.aborted && remaining > 0) {
+          r = await escapeBurn(bot, { limitMs: remaining, foe: ctx.entity.position, aborted: () => ctl.aborted, sleep: ms => ctx.sleep(ms), now: () => gameClock.now() })
+        }
+        r = { ...r, ok: !burningFeet(bot), ms: gameClock.now() - started }
+      }
       clear()
       ctx.aim = 'target'
       ctx.failedOutOfFire = r.ok ? null : { inputs: routeInputs(), why: 'hazard_not_left' }
-      used(feetName === 'lava' ? `выпрыгнул из лавы (${r.ms} мс${r.ok ? '' : ', не вышел'})` : 'вышел из огня')
+      used(burnName === 'lava' ? `выпрыгнул из лавы (${r.ms} мс${r.ok ? '' : ', не вышел'})` : 'вышел из огня')
       return NEXT
     }
   }
@@ -236,24 +266,25 @@ export async function fireTurn (ctx: DuelCtx, turn: TurnFrame) {
     const waterId = bot.registry.blocksByName.water && bot.registry.blocksByName.water.id
     const pools = waterId !== undefined ? bot.findBlocks({ matching: waterId, maxDistance: 10, count: 12 }) : []
     const here = bot.entity.position
-    const pool = pools.map(v => bot.blockAt(v)).filter(b => b && Math.abs(b.position.y - here.y) <= 3)
+    const pool = pools.map(v => bot.blockAt(v)).filter(b => b && Math.abs(b.position.y - here.y) <= 3 && bodyClear(bot, b.position.offset(.5, 0, .5), { water: true }))
       .sort((x, y) => x.position.distanceTo(here) - y.position.distanceTo(here))[0] || null
     const poolInputs = [pool?.position, pool?.stateId ?? pool?.name, routeInputs()].join('|')
     if (pool && (!ctx.failedToWater || ctx.failedToWater.inputs !== poolInputs)) {
       ctx.aim = 'free'
-      const near = pool.position.offset(0.5, 0, 0.5).distanceTo(here) <= 4.5
+      const to = pool.position.offset(0.5, 0, 0.5)
+      const near = to.distanceTo(here) <= 4.5 && !ctx.hazardOnLine(to)
       const t0 = gameClock.now()
       if (near) {
         await bot.lookAt(pool.position.offset(0.5, 0.5, 0.5), true).catch(() => {})
         set('forward', true); set('sprint', true); set('back', false); set('left', false); set('right', false)
-        while (gameClock.now() - t0 < 1800 && !bot.entity.isInWater && !ctl.aborted) {
+        while (gameClock.now() - t0 < 1800 && !bot.entity.isInWater && !ctl.aborted && !burnContact(bot) && !ctx.hazardOnLine(to)) {
           set('jump', wantsJump(bot, keyDir(bot, 'forward')))
           await ctx.sleep(TICK_MS)
         }
         clear()
       } else {
         pathTo(true, new goals.GoalBlock(pool.position.x, pool.position.y, pool.position.z)); ctx.pathing = true
-        while (gameClock.now() - t0 < 3500 && !bot.entity.isInWater && !ctl.aborted) await ctx.sleep(TICK_MS)
+        while (gameClock.now() - t0 < 3500 && !bot.entity.isInWater && !ctl.aborted && !burnContact(bot)) await ctx.sleep(TICK_MS)
         pathTo(false); ctx.pathing = false
         clear()
       }

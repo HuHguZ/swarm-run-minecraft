@@ -2,6 +2,7 @@
 export const WEAPON = /(_sword|_axe|_spear)$|^(mace|trident|bow|crossbow)$/
 export const BLOCK = /^(cobblestone|stone|dirt|smooth_sandstone|cut_sandstone|sandstone|sand|red_sand|netherrack|.*_planks)$/
 export const blockCount = (inv = {}) => Object.entries(inv).filter(([n]) => BLOCK.test(n)).reduce((s, [, c]: any) => s + c, 0)
+export const buildStock = (inv: Record<string, number> = {}) => Object.keys(inv).filter(n => inv[n] > 0 && BLOCK.test(n)).sort().map(n => `${n}:${inv[n]}`).join(',')
 export const FOOD = /^(bread|cooked_.*|golden_apple|enchanted_golden_apple)$/
 export const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 export const cellKey = p => `${p.x},${p.y},${p.z}`

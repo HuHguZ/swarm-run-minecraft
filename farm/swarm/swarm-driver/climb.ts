@@ -1,11 +1,11 @@
 // Рой: натиск — схватить лучшее у врага, подъём к врагу (лестницы, столбы, пролом), пролом.
 import { ownedCount } from '../../../daemon/src/swarm'
 import { BLOCK, distance, cellKey, underArrowFire } from './common'
-import { runAscent } from './ascent'
+import { followLadder, readyLadder, runAscent } from './ascent'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmClimb (sw: SwarmDriverCtx) {
-  const { now, pos, log, arena, surfaceY, sandSpot, cooldown, ladderRoutes, detail, lootSafe, lootStep, bounded, lootArena, blast, go } = sw
+  const { now, pos, log, arena, surfaceY, sandSpot, cooldown, detail, lootSafe, lootStep, bounded, lootArena, blast, go } = sw
   // Неудача — повтор по причине (retry.ts: бот ушёл с места на 2 бл. или подпись другая), а не через N секунд (пользователь
   // 21.10: «убрать костыли по секундам»). Подписи: клетка цели (грубо — сдвиг цели на 2+ бл.), запасы, видимая вещь.
   const failed = (b, key, sig = '') => sw.failed(b, key, sig), blocked = (b, key, sig = '') => sw.blocked(b, key, sig), cleared = key => sw.cleared(key)
@@ -125,11 +125,10 @@ export function swarmClimb (sw: SwarmDriverCtx) {
       if (raw.ascentStalled && await leaveArrows(b, foe)) return true
     }
     // Готовая лестница своих, верх которой у цели (в 8 бл.), — по ней: строитель путей лезет по ступеням сам, блоки не нужны.
-    const lad = ladderRoutes.filter(l => l.top.y > m.p.y + .6 && l.top.y <= foe.position.y + 1 && l.base.y >= m.p.y - 1 && Math.hypot(l.top.x - foe.position.x, l.top.z - foe.position.z) < 12 && !blocked(b, `ladder:${b.name}:${cellKey(l.base)}`))
-      .sort((a, c) => distance(m.p, a.base) - distance(m.p, c.base))[0]
+    const lad = readyLadder(sw, b, foe.position)
     if (lad) {
-      const raw = await ascend(b, lad.top, 'goto', { ...bounded(lad.top), range: 1, timeoutSeconds: 25, arena, _hunt: true }), r = detail(raw)
-      if (waitTactics(b, raw)) return true
+      const raw = await followLadder(sw, b, lad, arena), r = detail(raw)
+      if (waitTactics(b, raw) || raw?.status === 'interrupted') return true
       const end = raw?.state?.pos || r.arrived || r.at || pos[b.name]?.p
       if (!(end?.y >= lad.top.y - .5)) {
         failed(b, `ladder:${b.name}:${cellKey(lad.base)}`)

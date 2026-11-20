@@ -143,11 +143,11 @@ export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: Jum
     }
     const applyStep = () => {
       const step = plan.steps[tick]
-      if (plan.arena) {
-        const next = new PlayerState(bot, step.control); next.yaw = step.yaw
-        simulator(bot)(next, worldOf(bot))
-        if (!withinArena(bot, next.pos, plan.arena)) { finish(false, 'outside_arena'); return }
-      }
+      const next = new PlayerState(bot, step.control); next.yaw = step.yaw
+      simulator(bot)(next, worldOf(bot))
+      if (!withinArena(bot, next.pos, plan.arena)) { finish(false, 'outside_arena'); return }
+      if (!bodyClear(bot, next.pos, { water: true, web: true, powder: true, from: bot.entity.position })) { finish(false, 'unsafe_next_body'); return }
+      if (plan.states.slice(tick).some((state, i) => !bodyClear(bot, state.pos, { water: true, web: true, powder: true, from: i ? plan.states[tick + i - 1].pos : bot.entity.position }))) { finish(false, 'trajectory_changed'); return }
       // Mineflayer force-look updates the observed yaw synchronously. Awaiting
       // it here would hold old keys across a whole physics catch-up batch.
       void bot.look(step.yaw, 0, true).catch(fail)

@@ -121,8 +121,18 @@ function wrapPlaceBlock (bot) {
     const dest = ref.position.plus(face)
     for (let t = 0; t < 12 && inMe(dest, face); t++) await bot.waitForTicks(1)
     if (inMe(dest, face)) throw new Error('своя рамка в клетке постановки')
+    const pick: typeof import('./pick') = require('./pick')
+    const aim = pick.faceAim(bot, ref.position, face)
+    if (!aim) throw new Error('грань постановки не видна')
+    const from = bot.entity.position.clone()
+    await bot.lookAt(aim, true)
+    const fresh = pick.faceAim(bot, ref.position, face)
+    if (inMe(dest, face) || bot.entity.position.distanceTo(from) > 1e-7 || !fresh || fresh.distanceTo(aim) > 1e-7) {
+      throw new Error('позиция или видимая грань постановки изменилась при прицеливании')
+    }
     const old = bot.blockAt(dest)
-    await bot._genericPlace(ref, face, { swingArm: 'right' })
+    // Native genericPlace otherwise awaits aim again and can send after the jump has fallen back into this cell.
+    await bot._genericPlace(ref, face, { swingArm: 'right', forceLook: 'ignore', delta: aim.minus(ref.position) })
     for (let t = 0; t < 10; t++) {
       const now = bot.blockAt(dest)
       if (now && old && now.type !== old.type) { bot.emit('blockPlaced', old, now); return }
@@ -154,6 +164,20 @@ function tuneMovements (bot, movements) {
       // Native partial paths share A* Moves: executor centering must not change the search cell.
       if (!Number.isInteger(node.x) || !Number.isInteger(node.y) || !Number.isInteger(node.z)) node = Object.assign(Object.create(node), (require('./blockmoves') as typeof import('./blockmoves')).cellOf(node))
       const out = neighbors.call(this, node)
+      // Native drops miss deeper landings; diagonals also miss a landing one block below.
+      for (const move of out) {
+        const diagonal = move.x !== node.x && move.z !== node.z
+        if (move.y < node.y - 1 || move.y < node.y && diagonal) move.cost += this.exclusionStep(this.getBlock(move, 0, 0, 0))
+        // Dry diagonal nodes can still sweep the body over either lower orthogonal corner.
+        if (move.y === node.y && diagonal) {
+          let cornerCost = 0
+          for (const [x, z] of [[node.x, move.z], [move.x, node.z]]) {
+            const feet = this.getBlock({ x, y: move.y, z }, 0, 0, 0)
+            if (hurts.has(this.getBlock(feet.position, 0, -1, 0).name)) cornerCost = Math.max(cornerCost, this.exclusionStep(feet))
+          }
+          move.cost += cornerCost
+        }
+      }
       if (worldOf(bot) !== 'the_nether') return out
       // Не только разведка: дорога к порталу тоже спускалась к морю — y=27,
       // «tried to swim in lava» (2026-09-26, 23:06). Всегда в Аду: не ниже

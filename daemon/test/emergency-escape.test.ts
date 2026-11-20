@@ -9,6 +9,7 @@ import pearls = require('../src/pearl-hop')
 import projectiles = require('../src/throw')
 import { Vec3 } from 'vec3'
 import * as clock from '../src/game-clock'
+import { worldOf } from './parkour-fixture'
 
 test('only a fresh descending lava forecast can start a rescue before contact', () => {
   const from = new Vec3(.5, 120, .5)
@@ -48,11 +49,12 @@ test('the current validated movement endpoint supersedes a competing lava coast 
   } finally { timer.dispose(); clock.activate(null) }
 })
 
-test('a lava rescue accepts a safe steep arc and stops searching before delaying the emergency throw', async () => {
+test('a resistant lava rescue retains a survivable steep-only option within the bounded shared search', async () => {
   const saved: any[] = [skyWorld.worldOf, skyFlight.landingSpot, skyKit.kit, skyFlight.lavaLaunchClear, pearls.settle, pearls.pearlDamage, projectiles.throwAt]
   const shore = new Vec3(8.5, 105, .5)
-  const bot: any = { health: 20, entity: { position: new Vec3(.5, 100, .5), isInLava: true },
-    inventory: { items: () => [{ name: 'ender_pearl', count: 8 }] }, blockAt: () => ({ name: 'lava' }) }
+  const data = require('minecraft-data')('1.21.11')
+  const bot: any = { registry: data, health: 20, entity: { position: new Vec3(.5, 100, .5), isInLava: true, effects: { [data.effectsByName.Resistance.id]: { amplifier: 3, duration: 200 } } },
+    inventory: { slots: [], items: () => [{ name: 'ender_pearl', count: 8 }] }, blockAt: p => ({ name: p.x < 2 && p.y === 100 ? 'lava' : p.x >= 6 && p.y === 104 ? 'stone' : 'air', position: p.floored(), boundingBox: p.x >= 6 && p.y === 104 ? 'block' : 'empty', shapes: p.x >= 6 && p.y === 104 ? [[0, 0, 0, 1, 1, 1]] : [] }) }
   let forecasts = 0
   skyWorld.worldOf = () => ({})
   skyFlight.landingSpot = () => shore
@@ -63,17 +65,62 @@ test('a lava rescue accepts a safe steep arc and stops searching before delaying
   projectiles.throwAt = async (_bot: any, _target: any, options: any) => {
     const shot = options.pick({ from: bot.entity.position, landing: (_yaw: number, pitch: number) => {
       forecasts++
-      return pitch >= 85 * Math.PI / 180 ? { tp: shore } : { tp: new Vec3(.5, 100, .5) }
+      return pitch >= 85 * Math.PI / 180 ? { tp: shore, ticks: 100 } : { tp: new Vec3(.5, 100, .5), ticks: 1 }
     } })
     assert.ok(shot, 'the steep trajectory clears a nearby high wall')
     assert.equal(options.onAim({ land: { tp: shore } }), true)
-    bot.entity.position = shore.clone()
+    bot.entity.position = shore.clone(); bot.entity.isInLava = false
     return { thrown: true } as any
   }
   try {
     assert.equal((await createEmergencyEscape(bot).run({ aborted: false }, 'pearl')).ok, true)
-    assert.ok(forecasts <= 12, 'the first safe forecast is used immediately in lava')
+    assert.ok(forecasts <= 16 * 16, 'all existing steep and short options share one bounded native search')
+    bot.entity.position = new Vec3(.5, 100, .5); bot.entity.isInLava = true
+    bot.entity.effects = { [data.effectsByName.FireResistance.id]: { amplifier: 0, duration: 200 } }; forecasts = 0
+    assert.equal((await createEmergencyEscape(bot).run({ aborted: false }, 'pearl')).ok, true)
+    assert.ok(forecasts <= 12, 'the ordinary protected steep escape retains its previous first-safe search')
   } finally {
     [skyWorld.worldOf, skyFlight.landingSpot, skyKit.kit, skyFlight.lavaLaunchClear, pearls.settle, pearls.pearlDamage, projectiles.throwAt] = saved
   }
+})
+
+
+test('the real emergency selector replaces the captured 173-tick lava arc with a bounded native shore rescue', async () => {
+  const cells: Array<[number, number, number, string]> = []
+  for (let x = -8; x <= 8; x++) for (let z = -8; z <= 8; z++) cells.push([x, 0, z, 'stone'])
+  for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) cells.push([x, 2, z, 'lava'])
+  for (let x = -6; x <= 0; x++) for (let z = 67; z <= 73; z++) cells.push([x, -168, z, 'stone'])
+  cells.push([1, 1, 0, 'cobweb'])
+  const { bot, world } = worldOf(cells), WorldSync = require('../node_modules/prismarine-world/src/worldsync')
+  bot.world = { raycast: WorldSync.prototype.raycast.bind(world) }; bot.game.minY = -256
+  bot.entity.position = new Vec3(.71, 1, .5); bot.entity.isInLava = true; bot.health = 16
+  bot.entities = { 2: { id: 2, username: 'PassivePlayer', type: 'player', position: new Vec3(4.5, 1, .5), width: .6, height: 1.8, metadata: [], isValid: true } }
+  bot._ndReflexSession = { current: { params: { arena: { x: 0, y: 1, z: 0, r: 8 } } } }
+  bot.players = { PassivePlayer: { gamemode: 1 } }; bot.inventory.items = () => [{ name: 'ender_pearl', count: 1 }]
+  const saved = [skyWorld.worldOf, skyFlight.landingSpot, skyKit.kit, skyFlight.lavaLaunchClear, projectiles.throwAt]
+  skyWorld.worldOf = () => ({}) as any; skyFlight.landingSpot = () => new Vec3(-2.5, -167, 70.5)
+  skyKit.kit = () => ({ elytra: false, rockets: 0 }) as any; skyFlight.lavaLaunchClear = () => true
+  let chosen: any, forecasts = 0
+  projectiles.throwAt = async (_bot, _target, options) => {
+    const from = bot.entity.position.offset(0, 1.52, 0)
+    const long = projectiles.landing(bot, from, 177 * Math.PI / 180, 55 * Math.PI / 180, projectiles.KINDS.ender_pearl)
+    assert.ok(long?.tp && long.ticks > 100, 'the captured upward arc really reaches known deep ground after the lethal wait')
+    chosen = options.pick({ from, moved: { x: 0, y: 0, z: 0 }, airborne: false, landing(yaw, pitch, entities) { forecasts++; return projectiles.landing(bot, from, yaw, pitch, projectiles.KINDS.ender_pearl, null, false, entities) } })
+    assert.ok(chosen && chosen.ticks <= 10, 'the emergency path must use the same survivable short bank as PvP rescue')
+    const land = projectiles.landing(bot, from, chosen.yaw, chosen.pitch, projectiles.KINDS.ender_pearl, null, false, true)
+    assert.equal(options.onAim({ land }), true)
+    bot.health = 5; assert.equal(options.onAim({ land }), false, 'HP is rechecked before release'); bot.health = 16
+    bot.entity.isInLava = false; const blockAt = bot.blockAt; bot.blockAt = p => p.y >= 1 ? { name: 'air', position: p.floored(), boundingBox: 'empty', shapes: [] } : blockAt(p)
+    assert.equal(options.onAim({ land }), false, 'an already dry body must not spend an emergency pearl')
+    bot.blockAt = blockAt; bot.entity.isInLava = true
+    const outside = { ...land, tp: land.tp.offset(30, 0, 0) }
+    assert.equal(options.onAim({ land: outside }), false, 'the captured arena remains binding at release')
+    bot.entity.position = land.tp.clone(); bot.entity.isInLava = false; bot.health -= 5
+    return { thrown: true, ticks: chosen.ticks, land: { ...land.tp } }
+  }
+  try {
+    assert.equal((await createEmergencyEscape(bot).run({ aborted: false }, 'pearl')).ok, true)
+    assert.ok(forecasts <= 16 * 16, 'one existing bounded angular set, with no repeated searches')
+    bot.health = 5; bot.entity.isInLava = true; assert.equal(createEmergencyEscape(bot).snapshot().pearlReady, false)
+  } finally { [skyWorld.worldOf, skyFlight.landingSpot, skyKit.kit, skyFlight.lavaLaunchClear, projectiles.throwAt] = saved as any }
 })

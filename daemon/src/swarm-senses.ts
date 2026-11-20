@@ -49,7 +49,7 @@ export function swarmSightings(bot: any, allies: string[] = []) {
     const projection = observePlayerGear(bot, e, remembered.get(e.id)?.raw === e ? remembered.get(e.id).projection : null)
     remembered.set(e.id, { raw: e, projection })
     const gear = projection.equipment
-    const equipment = { weapon: gear[0]?.name || null, armor: gear.slice(2, 6).map(it => it?.name).filter(Boolean), ...(projection.unknownArmorSlots ? { unknownArmorSlots: projection.unknownArmorSlots } : {}), ...(gear.some(it => it?.enchanted) ? { enchanted: true } : {}) }
+    const equipment = { weapon: gear[0]?.name || null, ...(projection.known[0] ? { weaponEnchanted: !!gear[0]?.enchanted } : {}), armor: gear.slice(2, 6).map(it => it?.name).filter(Boolean), armorVisible: projection.visible.slice(2, 6), armorEnchanted: gear.slice(2, 6).map(it => !!it?.enchanted), ...(projection.unknownArmorSlots ? { unknownArmorSlots: projection.unknownArmorSlots } : {}), ...(gear.some(it => it?.enchanted) ? { enchanted: true } : {}) }
     const threat = /bow|crossbow/.test(equipment.weapon || '') ? 'bow' : /^(end_crystal|respawn_anchor)$/.test(equipment.weapon || '') ? 'blast' : e.elytraFlying || equipment.weapon === 'mace' && velocity.y < -.2 ? 'aerial' : 'melee'
     const observer: typeof import('./pvp/combat-observe') = require('./pvp/combat-observe')
     const hp = observer.foeHpUpper(bot, e), hitProof = observer.foeHitProof(bot, e)

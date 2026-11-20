@@ -39,9 +39,13 @@ export function ownDefense(m: SwarmMember) {
   defense.prot = Math.max(0, m.ench?.protection || 0)
   return defense
 }
-function enemyDefense(e: SharedEnemy) {
+export function enemyDefense(e: Pick<SharedEnemy, 'equipment'>) {
   // Блеск виден, тип и уровень чар нет: верх — vanilla Protection IV, низ ноль (блеск может быть от иных чар).
-  const armor = (e.equipment?.armor || []).map(name => ({ name, ench: { protection: e.equipment?.enchanted ? 4 : 0 } }))
+  const armor = (e.equipment?.armor || []).map(name => {
+    const slot = ['boots', 'leggings', 'chestplate', 'helmet'].findIndex(slot => name.endsWith('_' + slot))
+    const glint = e.equipment?.armorEnchanted?.[slot] ?? e.equipment?.enchanted
+    return { name, ench: { protection: glint ? 4 : 0 } }
+  })
   const unknown = Math.max(0, Math.min(4 - armor.length, e.equipment?.unknownArmorSlots || 0))
   const slots = ['chestplate', 'leggings', 'helmet', 'boots'].filter(slot => !armor.some(it => it.name.endsWith('_' + slot)))
   for (const slot of slots.slice(0, unknown)) armor.push({ name: 'netherite_' + slot, ench: { protection: 4 } })
@@ -75,7 +79,7 @@ function combatProfile(m: SwarmMember, foe: SharedEnemy) {
 }
 function enemyAttack(e: SharedEnemy, m: SwarmMember) {
   const weapon = e.equipment?.weapon
-  const glint = !!e.equipment?.enchanted
+  const glint = e.equipment?.weaponEnchanted ?? !!e.equipment?.enchanted
   let raw: number; let kind = 'melee'; let interval: number
   // Взрыв — только кристалл и якорь: их ставят и рвут за пару тиков. Динамит в руке — не взрыв (поставить, поджечь, 4 с
   // фитиля): «выжить 0.0 с» от любого с динамитом в руке гнало от него всю команду (стенд 15×15, 21.10). Горящий динамит
@@ -104,7 +108,7 @@ function enemyAttack(e: SharedEnemy, m: SwarmMember) {
 // Личная цена без прибавки за толпу: слабый удар не становится сильнее от числа союзников.
 export function memberFight(m: SwarmMember, foe: SharedEnemy) {
   let low = combatProfile(m, foe)
-  const bare = { ...foe, equipment: { ...foe.equipment, enchanted: false } }
+  const bare = { ...foe, equipment: { ...foe.equipment, enchanted: false, armorEnchanted: undefined } }
   const gap = Math.max(.1, distance(m.position, foe.position))
   const away = ((foe.position.x - m.position.x) * (foe.velocity?.x || 0) + (foe.position.z - m.position.z) * (foe.velocity?.z || 0)) / gap * 20
   // Таран копьём — альтернатива уколу; убегающий с той же скоростью не даёт относительной скорости для урона.
@@ -123,6 +127,13 @@ export function memberFight(m: SwarmMember, foe: SharedEnemy) {
   // Блеск — диапазон, не знание чар. Сравниваем нижний урон с возможным регеном и ценой ответного размена.
   const rearm = low.hit / interval <= REGEN_FAST * 20 && attackSeconds > survival
   return { damage: damageRange, interval, survival, attackSeconds, rearm }
+}
+// Подход и подъём оплачиваются запасом выигрышного размена; старое место врага не повод бросить работу.
+export function attackBeforeBuild(m: SwarmMember, foe: SharedEnemy | undefined, now: number): boolean {
+  if (!foe || now - foe.seenAt > 1000) return false
+  const fight = memberFight(m, foe)
+  const approach = Math.max(0, distance(m.position, foe.position) - 3) / 5.6 + Math.max(0, foe.position.y - m.position.y)
+  return approach + fight.attackSeconds < fight.survival
 }
 // Сколько проживу под этими ударами (без своих ответов), с общим окном неуязвимости: двое синхронных лучников не дают
 // двух полных стрел в одно окно. Бой кончился раньше нашей смерти — выживание всё равно меряется, а не берётся формулой
@@ -222,11 +233,10 @@ export function assessSwarmFight(member: SwarmMember, enemies: SharedEnemy[], me
   const teamSurvival = survivalSeconds * Math.max(1, able / Math.max(1, localEnemies))
   const lethal = closeHit >= member.health && firstArrival <= killSeconds
   const unsafe = killSeconds > teamSurvival + period || lethal
-  const slots = foe.equipment?.armor?.length || 0
-  const protectionUpper = (foe.equipment?.enchanted ? slots * 4 : 0) + Math.min(4 - slots, foe.equipment?.unknownArmorSlots || 0) * 4
+  const protectionUpper = foeDefense.prot
   const duelKillSeconds = Math.max(0.05, killSeconds - Math.min(...actors.map(a => a.arrival)) / 20)
   const duelSurvivalSeconds = Math.max(0.05, survivalSeconds - firstArrival)
-  return { unsafe, lethal, burst: closeHit >= member.health, target: foe.id, killSeconds, survivalSeconds, duelKillSeconds, duelSurvivalSeconds, damage: loss, ready: profiles.length, contactSlots: melee.length, enemySharpness: foe.equipment?.enchanted && sharpWeapon(foe.equipment.weapon) ? [0, 5] : [0, 0], enemyProtection: [0, protectionUpper], reason: `убить≈${killSeconds.toFixed(1)}с, выжить≈${survivalSeconds.toFixed(1)}с, контакт ${melee.length}, готово ${profiles.length}, врагов ${localEnemies}, хп ${Math.round(member.health)}` }
+  return { unsafe, lethal, burst: closeHit >= member.health, target: foe.id, killSeconds, survivalSeconds, duelKillSeconds, duelSurvivalSeconds, damage: loss, ready: profiles.length, contactSlots: melee.length, enemySharpness: (foe.equipment?.weaponEnchanted ?? foe.equipment?.enchanted) && sharpWeapon(foe.equipment.weapon) ? [0, 5] : [0, 0], enemyProtection: [0, protectionUpper], reason: `убить≈${killSeconds.toFixed(1)}с, выжить≈${survivalSeconds.toFixed(1)}с, контакт ${melee.length}, готово ${profiles.length}, врагов ${localEnemies}, хп ${Math.round(member.health)}` }
 }
 export interface SwarmTeamFight { engage: boolean; ourLoss: number; theirLoss: number; wipedUs: boolean; wipedThem: boolean; seconds: number; ours: number; theirs: number }
 // Командный счёт боя (14.10): стороны целиком, а не «выживу ли я, если бьют все». Личная оценка (assessSwarmFight) при

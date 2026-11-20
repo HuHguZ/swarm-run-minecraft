@@ -5,12 +5,14 @@ import type { SwarmTask, SwarmMember, SharedEnemy, SwarmPosition } from './types
 import type { PvpPlan } from './plan-frame'
 import { fledAt, markFled } from './board'
 import { distance, cellKey, ratio, count } from './common'
-import { visibleForce, memberFight } from './fight'
+import { visibleForce, memberFight, attackBeforeBuild } from './fight'
 import { lineRank } from './doctrine'
 import { racesForLoot, behindRace, killMeans, MELEE_CAP } from './race'
 import { SHOVE, SHOVE_REACH, shoveHits } from './shove'
 import { dislodgeSeconds, attackSeconds } from './dislodge'
 import { airUnreachable } from './plan-judges'
+import { pricedLoot } from './plan-doctrines'
+import { visiblyWeakened } from './plan-flee'
 
 export function assignFighters(S: PvpPlan): void {
   // Добивание убегающего (командная игра): нас вдвое больше видимых врагов, а цель уходит от нашей середины — без резерва
@@ -72,9 +74,12 @@ export function assignFighters(S: PvpPlan): void {
     const personal = near && memberFight(m, near), kit = killMeans(m)
     const shoveUseful = near && worthShove(m, near, attackSeconds(m, near, personal!.attackSeconds), personal!)
     // Не пробивающий и проигрывающий размен получает другое дело; кирка нужна лишь у назначенной живой ямы.
-    const rearm = aggressive && !S.endgame && personal?.rearm && !kit.smash && !kit.harm && !(kit.axe && comboMace) && !shoveUseful && !diggers.has(m.id)
+    const needsWeapon = personal?.rearm && !kit.smash && !kit.harm && !(kit.axe && comboMace) && !shoveUseful && !diggers.has(m.id)
+    const rearm = aggressive && !S.endgame && needsWeapon
     if (rearm) rearming.add(m.id)
     if (plan.has(m.id)) continue
+    if (S.endgame && options.foesLeft === 1 && options.lootOffer && needsWeapon && !covering && near && !visiblyWeakened(near, S.now) &&
+        S.now - near.seenAt <= 1000 && outclassed(m, near) && pricedLoot(S, m, near, personal)) continue
     if (diggers.has(m.id)) { const { site: s, foe } = diggers.get(m.id)!; put(m, 'goto', { dig: cellKey(s), undermine: !!(s as any).undermine, blocks: (s as any).blocks, stands: (s as any).stands, drop: (s as any).drop, target: foe.id, enemyPosition: foe.position, reason: (s as any).drop === Infinity ? 'подкоп: под ним пустота' : 'копаю яму-ловушку' }, s); continue }
     if (ladderers.has(m.id)) { const s = ladderers.get(m.id)!; put(m, 'goto', { ladder: s.key, reason: 'ставлю лестницу для своих' }, { x: s.x, y: s.y, z: s.z }); continue }
     if (!S.endgame && campers.has(m.id)) { put(m, 'goto', { hold: 'ambush', camp: cellKey(campers.get(m.id)!), reason: 'засада в углу' }, campers.get(m.id)!); continue }
@@ -204,13 +209,34 @@ export function assignFighters(S: PvpPlan): void {
     }
     const demand = visibleForce(foe) * 1.2 / meanStrength
     const engageValue = (1 - (loads.get(foe.id) || 0) / demand) * 15 + 7 - distance(m.position, foe.position) * 0.25
-    const reserveValue = (m.role === 'miner-builder' ? 8 : m.role === 'healer' ? 6 : 1) + (1 - ratio(m)) * 8
+    let reserveValue = (m.role === 'miner-builder' ? 8 : m.role === 'healer' ? 6 : 1) + (1 - ratio(m)) * 8
     // Натиск: резерва нет — на человека идут все (резерв «по модели нужно 2–3» оставлял одиночек без подмоги).
     const finishing = S.endgame || outnumber && (runner(foe) || crushing)
-    if (!nearby && !aggressive && !finishing && !deadly && engageValue < reserveValue) {
-      const i = team.indexOf(m); const across = (i - (team.length - 1) / 2) * 2
-      const at = doctrine === 'ring' || doctrine === 'weak-center' ? spots.get(m.id) : { x: center.x - forward.x * 5 - forward.z * across, y: m.position.y, z: center.z - forward.z * 5 + forward.x * across }
-      put(m, m.role === 'miner-builder' ? 'scout' : 'goto', { reserve: true, sentry: true }, at)
+    const i = team.indexOf(m), across = (i - (team.length - 1) / 2) * 2
+    const at = doctrine === 'ring' || doctrine === 'weak-center' ? spots.get(m.id) : { x: center.x - forward.x * 5 - forward.z * across, y: m.position.y, z: center.z - forward.z * 5 + forward.x * across }
+    const upper = (options.lootZones || []).filter(h => h.tier > 0 && h.y <= m.position.y)
+      .sort((a, b) => distance(m.position, a) - distance(m.position, b))[0]
+    const holdUpper = upper && distance(m.position, upper) < Math.min(distance(m.position, at), distance(at, upper))
+    if (!nearby && !aggressive && !finishing && !deadly && holdUpper && options.travelSeconds) {
+      const arrival = options.travelSeconds(m, m.position, foe.position), back = options.travelSeconds(m, foe.position, upper)
+      if (Number.isFinite(arrival) && arrival >= 0 && Number.isFinite(back) && back >= 0) {
+        const duties = board.tasks(), fight = foe === near ? personal! : memberFight(m, foe)
+        const cover = team.reduce((sum, a) => {
+          const duty = plan.get(a.id) || duties.find(t => t.assignedTo === a.id)
+          if (a.id === m.id || weak(a) || duty?.status === 'done' || !duty || !/^(fight|goto)$/.test(duty.kind) || duty.data?.target !== foe.id || duty.data.search) return sum
+          const duel = memberFight(a, foe), approach = options.travelSeconds!(a, a.position, foe.position)
+          return Number.isFinite(approach) && approach >= 0 && approach + duel.attackSeconds < duel.survival ?
+            sum + a.strength / meanStrength * (arrival + fight.attackSeconds) / Math.max(arrival + fight.attackSeconds, approach + duel.attackSeconds) : sum
+        }, 0)
+        const advantage = fight.survival > fight.attackSeconds ? 1 - fight.attackSeconds / fight.survival : 0
+        const value = upper.tier / (1 + distance(m.position, upper))
+        // Возврат к занятому верхнему луту оплачивается той же ценой пути; ближний готовый союзник уже держит цель.
+        reserveValue += back * 5.6 * .25 * advantage * value / (1 + value) * Math.min(1, cover / demand)
+      }
+    }
+    if (!nearby && !aggressive && !finishing && !deadly && !(m.role === 'miner-builder' && options.lootZones?.length && attackBeforeBuild(m, foe, board.now())) && engageValue < reserveValue) {
+      // Резерв не сдаёт занятую высоту, если ближний верхний лут дешевле перехода и этот переход уводит от него.
+      put(m, m.role === 'miner-builder' ? 'scout' : 'goto', { reserve: true, sentry: true }, holdUpper ? m.position : at)
       continue
     }
     const search = board.now() - foe.seenAt > 500

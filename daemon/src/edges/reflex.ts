@@ -14,7 +14,7 @@ const DIRS8 = [
 // сам край — никогда. Возвращает { stop, allow(depth, ms), stats }.
 // Сторож края: stats — спасения, прыжки в воздух, простои, причины; без физики сторожа нет и stats пуст.
 interface GuardStats { saves: number; air: number; idle: number; why: Record<string, number> }
-function guard (bot, { margin = () => 0 }: any = {}): { stats: Partial<GuardStats>; allow (depth: number, ms?: number): void; stop (): void } {
+function guard (bot, { margin = () => 0, arena }: any = {}): { stats: Partial<GuardStats>; allow (depth: number, ms?: number): void; stop (): void } {
   const ph = bot.physics
   if (!ph || typeof ph.simulatePlayer !== 'function') return { stop () {}, allow () {}, stats: {} }
   if (!bot._ndSimOrig) bot._ndSimOrig = ph.simulatePlayer
@@ -83,6 +83,21 @@ function guard (bot, { margin = () => 0 }: any = {}): { stats: Partial<GuardStat
       cands.push({ ...IDLE })
       cands.push({ ...IDLE, sneak: true })
       let pick = cands.find(c => ok(run(bot, state, c, { ...opt, hold: 2 })))
+      if (pick && !pick.forward && !pick.back && !pick.left && !pick.right &&
+          !require('../fightkit').hasEffect(bot, 'fire_resistance') && require('../navigation/descent').lavaNear(bot, state.pos)) {
+        const burn = require('../pvp/movement').burnStepCost(bot)
+        const risk = p => Math.max(burn({ position: p.floored() }), burn({ position: p.floored().offset(0, 1, 0) }))
+        let price = risk(run(bot, state, pick, { ...opt, hold: 2 }).rest)
+        // Waiting beside a known flowing front can be dearer than an already safe step away.
+        for (const c of DIRS8) {
+          if (!price) break
+          const r = run(bot, state, c, { ...opt, hold: 3 })
+          if (!ok(r) || !r.rest || !require('../navigation/parkour/model').withinArena(bot, r.rest, arena) ||
+              !require('../navigation/geometry').bodyClear(bot, r.rest, { from: state.pos, water: true, web: true, powder: true })) continue
+          const candidate = risk(r.rest)
+          if (candidate < price) { price = candidate; pick = c }
+        }
+      }
       if (!pick) {
         // Уже у самого края (отбросило): шаг туда, где запас больше.
         let best = -1

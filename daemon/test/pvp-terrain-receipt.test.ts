@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createTerrain } from '../src/pvp/terrain'
+import { installReport } from '../src/pvp/duel-report'
+import * as pick from '../src/pick'
+import { Block, registry, worldOf } from './parkour-fixture'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 
 function fixture() {
@@ -169,4 +172,58 @@ test('tower shield stays up for the released bolt corridor, not its old four-hun
     sleep: async ms => { now += ms; watch.drawAt = 0; watch.loadedAt = 0; watch.shots = 1 } }
   assert.equal(await createTerrain(ctx).towerShield(), 'waited')
   assert.equal(lowered, 2000, 'lower only once the observed bolt no longer intersects the body')
+})
+
+function scoopFixture (upper = 'lava') {
+  const { bot } = worldOf([[0, 1, 0, 'water'], [0, 2, 0, upper]])
+  bot.entity.position = new Vec3(.5, 2, .5)
+  const water = new Vec3(0, 1, 0), lava = new Vec3(0, 2, 0), original = bot.blockAt
+  const updates = new Map<string, any>(), bag = [{ name: 'bucket', count: 1 }]
+  const put = (p, name) => { const b = Block.fromStateId(registry.blocksByName[name].defaultState); b.position = p; updates.set(p.toString(), b) }
+  bot.blockAt = p => updates.get(p.floored().toString()) || original(p)
+  let uses = 0, afterAim: (() => void) | null = null
+  bot.lookAt = async () => {}
+  // A protocol receipt for this vertical column: the upper source is the first vanilla bucket pick.
+  bot.activateItem = () => {
+    uses++
+    const first = bot.blockAt(lava).name === 'lava' ? 'lava' : bot.blockAt(water).name === 'water' ? 'water' : null
+    if (first) bag[0] = { name: `${first}_bucket`, count: 1 }
+  }
+  const ctx: any = { bot, pick, ctl: { aborted: false }, findItem: (_bot, pred) => bag.find(pred),
+    holdItem: async item => { bot.heldItem = item; return true }, sleep: async ms => { if (ms === 50) afterAim?.() } }
+  return { scoop: createTerrain(ctx).scoop, water, lava, bag, uses: () => uses, put, afterAim: fn => { afterAim = fn } }
+}
+
+test('water behind an overhead lava source cannot be collected as a lava bucket', async () => {
+  const f = scoopFixture()
+  await f.scoop(f.water)
+  assert.equal(f.uses(), 0)
+  assert.equal(f.bag[0].name, 'bucket')
+})
+
+test('generic scoop retains visible water and intentional lava collection', async () => {
+  const water = scoopFixture('air')
+  await water.scoop(water.water)
+  assert.equal(water.bag[0].name, 'water_bucket')
+  const lava = scoopFixture()
+  await lava.scoop(lava.lava)
+  assert.equal(lava.bag[0].name, 'lava_bucket')
+})
+
+test('pending-lava cleanup passes the exact source cell to generic scoop', async () => {
+  const cell = new Vec3(1, 2, 3), calls: any[] = []
+  const ctx: any = { pendingLava: [{ cell, at: 1 }], scoop: async at => { calls.push(at) } }
+  installReport(ctx)
+  await ctx.releaseFightItems()
+  assert.deepEqual(calls, [cell])
+})
+
+test('a source changing during the old aim wait cannot redirect a water pickup', async () => {
+  for (const change of ['blocker', 'target']) {
+    const f = scoopFixture('air')
+    f.afterAim(() => f.put(change === 'blocker' ? f.lava : f.water, change === 'blocker' ? 'lava' : 'air'))
+    await f.scoop(f.water)
+    assert.equal(f.uses(), 0, change)
+    assert.equal(f.bag[0].name, 'bucket')
+  }
 })

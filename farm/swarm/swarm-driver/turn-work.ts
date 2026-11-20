@@ -5,7 +5,7 @@ import { digCells } from '../../../daemon/src/swarm/plan-jobs'
 import { distance, cellKey } from './common'
 import { currentTurn } from './lifecycle'
 import type { SwarmDriverCtx, TurnCtx } from './common'
-import { runAscent } from './ascent'
+import { ladderEntry, runAscent } from './ascent'
 import { randomUUID } from 'node:crypto'
 
 // The first physical move is shared with preempt: a changed later fight order must not restart this same walk.
@@ -105,15 +105,18 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     if (!t || t.done || !sw.siteOpen('ladder:' + t.key)) return
     const { x: fx, z: fz } = t.face
     const stand = { x: t.x + .5 + fx * 2, y: t.y, z: t.z + .5 + fz * 2 }
-    const need = t.top - t.y + 1
+    const route = { key: t.key, base: { x: t.x + .5 + fx, y: t.y, z: t.z + .5 + fz }, top: { x: t.x + .5, y: t.top + 1, z: t.z + .5 } }
     b.climbing = true
     try {
-      let state = (await b.c.call('status', {}).catch(() => null))?.state
+      let status = await b.c.call('status', { physics: true }).catch(() => null)
+      let state = status?.state, p = status?.detail?.physics?.pos || state?.pos
       if (!currentTurn(sw, b, round)) return
-      if (!state?.pos) return
+      if (!state || !p) return
       b.swarmLadder = { hp: state.health ?? member.health, maxHp: state.maxHealth ?? member.maxHealth ?? 20,
         risk: assessSwarmFight(member, enemies, context.members) }
-      if (distance(state.pos, stand) > .6) {
+      const resume = p.y > t.y + .6 && ladderEntry(route, p) === p
+      const need = resume ? Math.max(0, t.top - Math.floor(p.y)) : t.top - t.y + 1
+      if (!resume && distance(p, stand) > .6) {
         const g = detail(await b.c.call('goto', { ...stand, range: 1, timeoutSeconds: 10, arena, climb: true, _hunt: true, _climb: true }).catch(e => ({ why: e.message })))
         if (!currentTurn(sw, b, round)) return
         if (g.arrived && Math.abs(g.arrived.y - stand.y) < .6) await b.c.call('center_in', { ...stand, ms: 1500, _climb: true }).catch(() => null)
@@ -123,19 +126,21 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
       if ((state.inventory?.ladder || 0) < need) {
         const r = detail(await b.c.call('craft', { item: 'ladder', count: need - (state.inventory?.ladder || 0), _climb: true }).catch(e => ({ why: e.message })))
         if (!currentTurn(sw, b, round)) return
-        state = (await b.c.call('status', {}).catch(() => null))?.state
+        status = await b.c.call('status', { physics: true }).catch(() => null)
+        state = status?.state; p = status?.detail?.physics?.pos || state?.pos
         if (!currentTurn(sw, b, round)) return
+        if (!p) return
         if ((state?.inventory?.ladder || 0) < need) { sw.siteFailed(b, 'ladder:' + t.key); log(`🪜 ${b.name}: лестниц для ${t.key} не хватило (${state?.inventory?.ladder || 0}/${need}) — ${String(r.why || r.error || r.note || '').slice(0, 50)}`); return }
       }
-      const r = detail(await runAscent(b, { p: state.pos, hp: state.health, inv: state.inventory },
-        { x: stand.x, y: t.top + 1, z: stand.z }, () => b.c.call('ladder_up', { wall: { x: t.x, y: t.y, z: t.z }, face: t.face, top: t.top, timeoutSeconds: 40, _climb: true }).catch(e => ({ why: e.message })), now))
+      const r = detail(await runAscent(b, { p, hp: state.health, inv: state.inventory },
+        route.top, () => b.c.call('ladder_up', { wall: { x: t.x, y: t.y, z: t.z }, face: t.face, top: t.top, timeoutSeconds: 40, arena, _climb: true }).catch(e => ({ why: e.message })), now))
       if (!currentTurn(sw, b, round)) return
       log(`🪜 ${b.name}: лестница у ${t.key} (${need} бл.) — ${r.complete ? `готова, ступеней ${r.placed}` : String(r.why || 'нет').slice(0, 70)}`)
       if (r.complete) {
         t.done = true
-        if (!ladderRoutes.some(l => l.key === t.key)) ladderRoutes.push({ key: t.key, base: { x: t.x + .5 + fx, y: t.y, z: t.z + .5 + fz }, top: { x: t.x + .5, y: t.top + 1, z: t.z + .5 } })
+        if (!ladderRoutes.some(l => l.key === t.key)) ladderRoutes.push(route)
         say2(`🪜 ${b.name.replace(/^NeuroFarm/, '')}: лестница наверх готова — лезьте`, 'green', true)
-      } else sw.siteFailed(b, 'ladder:' + t.key)
+      } else if (!(r.placed > 0 || r.at?.y > p.y + .6)) sw.siteFailed(b, 'ladder:' + t.key)
     } finally { if (round === sw.generation) { b.climbing = false; delete b.swarmLadder } }
     return
   }
@@ -149,7 +154,19 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     if (task.data?.search && distance(m.p, searchAt) < 4) { if (task.data.hunt && (sw.onslaught(b) || task.data.finishing) && await breach(b, task.data.enemyPosition)) return; if (!currentTurn(sw, b, round)) return; await search(b, context); return }
     // Сбор на своём секторе (окружение): место — от живой позиции цели (план держит старое место, пока данные те же).
     const sf = task.data?.slot !== undefined && foe
-    const at = task.data?.search ? searchAt : task.data?.swarmStand || (sf ? { x: sf.position.x + Math.cos(task.data.slot * Math.PI / 4) * 10, y: sf.position.y, z: sf.position.z + Math.sin(task.data.slot * Math.PI / 4) * 10 } : task.position)
+    let at = task.data?.search ? searchAt : task.data?.swarmStand || (sf ? { x: sf.position.x + Math.cos(task.data.slot * Math.PI / 4) * 10, y: sf.position.y, z: sf.position.z + Math.sin(task.data.slot * Math.PI / 4) * 10 } : task.position)
+    const range = task.data?.swarmStand && !task.data?.search ? .15 : task.data?.range ?? 2
+    const sentry = task.data?.reserve && task.data?.sentry && !task.data?.target && !task.data?.search && !task.data?.swarmStand && !task.data?.hold
+    // Виртуальная точка резерва наследует высоту бойца, но в её XZ пол может быть ниже его столба.
+    if (sentry && sw.surfaceY && Math.hypot(at.x - m.p.x, at.z - m.p.z) > range) {
+      const y = sw.surfaceY(at.x, at.z, at.y)
+      if (Number.isFinite(y)) at = { ...at, y }
+    }
+    // Достигнутый часовой ждёт с реакцией тела, а не повторяет мгновенный goto к себе.
+    if (sentry && !contact && !task.data?.commanded && !task.data?.finishing && distance(m.p, at) <= range) {
+      await b.c.call('swarm_hold', { enemies: tc.enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 3, arena })
+      return
+    }
     // Сторож уже отказал этому подходу с той же стойки: меняем путь, сохраняя цель охоты.
     if ((b.badSpots || []).some(p => p.from && distance(p.from, m.p) < 2 && distance(p, bounded(at)) < 1)) {
       if (task.data?.hunt && (sw.onslaught(b) || task.data.finishing) && distance(m.p, task.data.enemyPosition) < 12 && await breach(b, task.data.enemyPosition)) return
@@ -157,7 +174,7 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
       await search(b, context)
       return
     }
-    const walked = detail(await go(b, at, task.data?.swarmStand && !task.data?.search ? .15 : task.data?.range ?? 2).catch(e => ({ why: e.message })))
+    const walked = detail(await go(b, at, range).catch(e => ({ why: e.message })))
     if (!currentTurn(sw, b, round)) return
     // Охота: к месту врага не дойти (замуровался за стеной дальше 4 бл.) — прокоп к нему (Codex 15.10: три отказа пути, ноль прокопов).
     if (task.data?.hunt && (sw.onslaught(b) || task.data.finishing) && !walked?.arrived && distance(pos[b.name]?.p || m.p, task.data.enemyPosition) < 12 && await breach(b, task.data.enemyPosition)) return
@@ -249,7 +266,8 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     }
     // Смыкание фонтана — сперва своё место по кругу (иначе все догоняют его со спины одной кучей), потом удар.
     if (task.data.fountain === 'close' && distance(m.p, task.position) > 1.5 && !contact) { await go(b, task.position, .8); return }
-    const place = task.data.slot !== undefined ? slotAt : task.position
+    // A fresh committed fight closes on its live target (or assigned safe slot), not the team's remote formation.
+    const place = slotAt
     if (!flyer && distance(m.p, place) > 6 && !contact && !rangedAdvantage(b)) { await go(b, place); return }
     if (!flyer && foe.position.y - m.p.y > 4 && (m.inv.elytra || m.armor?.torso === 'elytra') && m.inv.firework_rocket >= 5 && !sw.blocked(b, `fly:${b.name}`, foeCell)) {
       const r = detail(await b.c.call('fly_to', { at: foe.position, timeoutSeconds: 15, arena }).catch(e => ({ why: e.message })))

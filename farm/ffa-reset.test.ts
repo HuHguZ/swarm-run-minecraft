@@ -186,6 +186,37 @@ test('between-round log deaths are consumed without eliminating a freshly reset 
   assert.equal(context.deadNow.size, 0, 'the preparation death cannot be replayed in the new round')
 })
 
+test('successive Colosseum rounds reconnect before any placement, exclude missing bodies and leave the human alone', async t => {
+  let returned = false
+  const f = placements(false, false, command => {
+    if (command.startsWith('tp ') || command.startsWith('spreadplayers ')) assert.ok(returned, command)
+  })
+  f.bodies.Tester = { mode: 'survival', safe: true }
+  f.context.COLOS_MAP = true
+  t.mock.method(require('./arena/fleet'), 'restoreRoundRoster', async (_slot, bots, _rcon, rebuild) => {
+    returned = false
+    assert.ok(bots.every(b => f.bodies[b.name].mode === 'spectator'))
+    await rebuild()
+    returned = true
+    return new Set(bots.filter((_b, k) => !k || f.context.round === 3).map(b => b.name))
+  })
+  const original = f.context.restoreArena
+  f.context.restoreArena = async () => { assert.equal(returned, false); await original() }
+  const kit = new Set<string>()
+  f.context.roundKit = async b => { assert.ok(returned); kit.add(b.name) }
+  for (let round = 2; round <= 3; round++) {
+    kit.clear(); f.commands.length = 0
+    await f.context.endRound(false, 'fixture')
+    assert.equal(f.context.between, false)
+    const confirmed = f.bots.slice(0, round - 1)
+    assert.deepEqual([...kit], confirmed.map(b => b.name))
+    assert.ok(confirmed.every(b => f.bodies[b.name].mode === 'survival' && f.bodies[b.name].safe))
+    assert.deepEqual([...f.context.out], round === 2 ? [f.bots[1].name] : [])
+    assert.ok(!f.commands.some(command => command.includes('Tester')))
+    assert.equal(f.bodies.Tester.mode, 'survival')
+  }
+})
+
 test('a delayed old death handler cannot park an actor after the next round starts', async () => {
   let release
   const gate = new Promise<void>(resolve => { release = resolve })

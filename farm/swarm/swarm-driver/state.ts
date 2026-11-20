@@ -2,6 +2,9 @@
 // планы и отметки, кулдауны, телеметрия, счётчики раунда. Части меняют его на месте; изменяемые счётчики — поля (sw.generation).
 import { SwarmBoard } from '../../../daemon/src/swarm'
 import type { SwarmDriverCtx } from './common'
+import type { SwarmPosition } from '../../../daemon/src/swarm/types'
+
+export type KnownChest = { at: SwarmPosition; report?: { by: string; time: number; items: string[] } }
 
 export function createDriverState ({ bots, pos, alive, arena, home, hostile, humanNames, log, arms = false, aggressive = false, hideouts = [], chestTops = [], perches = [], drops = () => [], announce = null, sandSpot = null, edgeOf = null, digSites = null, surfaceY = null, ladderSites = [], now = () => Date.now() }: any): SwarmDriverCtx {
   const boards = new Map<string, SwarmBoard>()
@@ -43,13 +46,13 @@ export function createDriverState ({ bots, pos, alive, arena, home, hostile, hum
   // Сундук, взятый дочиста или найденный пустым, пуст, пока арена его не пополнила (refill — уведомление из arena/loot.ts),
   // а не «через минуту снова» (пользователь 14.10: «лазают в пустые сундуки»; 15.10: режим — по событию мира, не по часам).
   // Остаток, который не влез в рюкзак, этому боту не повторять, пока рюкзак не изменился.
-  const emptyChests = new Set<string>(), fullFor = new Map<string, string>()
+  const fullFor = new Map<string, string>()
   // Сундук под рукой (5 бл., тот же ярус): известный — верхние места колизея и виденные лутом; не пустой по нашему знанию и
   // не отказавший этому боту на том же месте. Его берут раньше любого приказа (пользователь 16.10: «залез наверх, а
   // незеритовые вещи не взял» — бой пришёл в ту же секунду, бот слез и дрался в слабом).
-  const knownChests = new Map<string, any>()
+  const knownChests = new Map<string, Map<string, KnownChest>>() // Только свои наблюдения и сообщения союзников.
   // Оценка «не вытяну» — симуляция боя на 600 тиков; на каждый ответ статуса (40 тел — ~160/с) её не пересчитывать: 250 мс.
   const unsafeCache = new Map<string, { at: number; v: boolean }>()
   return { bots, pos, alive, arena, home, hostile, humanNames, log, arms, aggressive, hideouts, chestTops, perches, drops, announce, sandSpot, edgeOf, digSites, surfaceY, ladderSites, now,
-    boards, holes, walls, ladderRoutes, boxed, boxTries, blueprints, transfers, planned, plannedAt, plannedFoes, pastKills, visited, cooldown, telemetry, generation, positionQueries, saidAt, placed, toured, tourBad, blockedRoutes, emptyChests, fullFor, knownChests, unsafeCache }
+    boards, holes, walls, ladderRoutes, boxed, boxTries, blueprints, transfers, planned, plannedAt, plannedFoes, pastKills, visited, cooldown, telemetry, generation, positionQueries, saidAt, placed, toured, tourBad, blockedRoutes, fullFor, knownChests, unsafeCache }
 }

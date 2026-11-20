@@ -1,8 +1,31 @@
 // Рой (swarm.ts): план боя (planPvp) — цели и приёмы строя: кольцо щитов, кокон и загон, ложная слабость, ложный отход,
 // фонтан.
-import type { SwarmMember, SwarmPosition } from './types'
+import type { SharedEnemy, SwarmMember, SwarmPosition } from './types'
 import type { PvpPlan } from './plan-frame'
 import { distance, cellKey, hasShield, buildBlock } from './common'
+import { memberFight, attackBeforeBuild } from './fight'
+import { inContact } from './retreat'
+
+export function pricedLoot(S: PvpPlan, m: SwarmMember, foe?: SharedEnemy, fight?: ReturnType<typeof memberFight>): boolean {
+  const improvement = S.improvementOf(m)
+  const fighting = S.board.tasks().some(t => t.assignedTo === m.id && t.kind === 'fight')
+  if (S.plan.has(m.id) || improvement <= 0 || inContact(m, S.enemies, fighting, S.aggressive)) return false
+  const offer = S.options.lootOffer?.(m)
+  if (!offer || offer.tier <= 0 || !Number.isFinite(offer.seconds) || offer.seconds < 0) return false
+  foe ??= [...S.enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
+  fight ??= foe && memberFight(m, foe)
+  // Последний бой: окупиться должно фактическое время похода, и место сбора должно лежать вне досягаемости врага.
+  if (S.endgame && (!foe || !fight || distance(offer.position, foe.position) <= S.threatReach(foe) || offer.seconds >= fight.attackSeconds)) return false
+  const lootPrice = offer.seconds / (1 + offer.tier) / improvement
+  const fightPrice = fight ? distance(m.position, foe!.position) / 5.6 + fight.attackSeconds * (1 + fight.attackSeconds / Math.max(.05, fight.survival)) : Infinity
+  if (lootPrice >= fightPrice) return false
+  S.put(m, 'loot', { improvement, weak: S.weak(m), lootTier: offer.tier, ...(S.endgame ? { rearm: true } : {}), reason: `верхний лут: ярус ${offer.tier}, путь и сбор ≈${Math.ceil(offer.seconds)}с` }, offer.position)
+  return true
+}
+
+export function pvpLoot(S: PvpPlan): void {
+  if (!S.endgame && S.options.lootOffer) for (const m of S.available) pricedLoot(S, m)
+}
 
 export function pvpTargets(S: PvpPlan): void {
   const { board, team, enemies, plan, center, forward } = S
@@ -38,7 +61,7 @@ export function pvpBuilders(S: PvpPlan): void {
     // Проигрываем (losing: штурм провален или нас мало) — не строить: строитель получал стенку, пока цель видна ≤ 0.5 с, а
     // иначе — «проигрываем — прячусь», и на трибуне (цель то видна, то нет) дело менялось каждую секунду со стопом —
     // бот стоял «афк» (игра пользователя 22.10: «афкшников всё равно вижу», 57 смен «прячусь ↔ строю» за 7 мин).
-    const builders = available.filter(m => !plan.has(m.id) && m.role === 'miner-builder' && buildBlock(m) && !(aggressive && (assault || S.losing || distance(m.position, primary.position) <= 6 || weak(m) || outclassed(m, primary)))).slice(0, S.endgame ? 2 : undefined)
+    const builders = available.filter(m => !plan.has(m.id) && m.role === 'miner-builder' && buildBlock(m) && !(S.options.lootZones?.length && attackBeforeBuild(m, primary, now)) && !(aggressive && (assault || S.losing || distance(m.position, primary.position) <= 6 || weak(m) || outclassed(m, primary)))).slice(0, S.endgame ? 2 : undefined)
     if (builders.length) {
       // Загон впереди бегущей цели (14.10): стенка в 3 бл. от неё не успевала — на спринте (5.6 бл/с) цель пробегала место
       // раньше, чем строители клали клетки (лаборатория, run9 и run12). Бежит — упреждение на 1.5 с пути (3–9 бл.) и стенка

@@ -1,5 +1,6 @@
 'use strict'
 import * as gameClock from '../game-clock'
+import { inTransferWindow } from '../invsync'
 import { sleep } from '../movement'
 import { withTimeout } from '../build'
 
@@ -151,7 +152,7 @@ function waitUpdate (win, ms) {
 // packets in a tight loop until we are dropped for spam.
 async function unloadCursor (bot, win, start, end) {
   if (!win.selectedItem || !live(bot, win)) return
-  try { await bot.putSelectedItemRange(start, end, win, null) } catch {}
+  try { await inTransferWindow(bot, win, () => bot.putSelectedItemRange(start, end, win, null)) } catch {}
 }
 
 // transfer() fills the destination slot and then throws 'destination full'

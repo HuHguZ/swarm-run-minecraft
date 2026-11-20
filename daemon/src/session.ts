@@ -52,6 +52,7 @@ export class Session {
   declare bridgeWanted: any
   declare sprintWanted: any
   declare gotoTarget: any
+  declare gotoSupport: { support?: import('./navigation/geometry').Point; ctl: { aborted: boolean } } | undefined
   declare furnaceLeft: any
   declare shelterBox: any
   declare gotoArena: import('./navigation/parkour').MovementArena | undefined

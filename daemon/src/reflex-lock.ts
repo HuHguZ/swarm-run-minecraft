@@ -122,6 +122,8 @@ function protectedClimb (s) {
     !s.bot?.entity?.isInLava && !['dangerousFall', 'emergencyController', 'lava', 'lavaAhead', 'lavaEscapePending', 'embedded', 'explosion', 'drowning'].some(k => h[k])
 }
 function start (s, fn, { triggerAt = gameClock.now(), source = 'melee', owner = 'Tactical', priority = 2, preempt = false, immediate = false }: any = {}) {
+  const b = s.bot
+  if (!b) return Promise.resolve({ acted: false, cancelled: true })
   install(s)
   const st = state(s)
   if (owner !== 'Emergency' && s.current && !s.current.ctl?.aborted && (COMMANDED_ESCAPE.test(s.current.name || '') || protectedClimb(s) || shieldHold(s))) return Promise.resolve({ acted: false, cancelled: true, why: 'идёт уворот по приказу' })
@@ -142,13 +144,12 @@ function start (s, fn, { triggerAt = gameClock.now(), source = 'melee', owner = 
     release(result)
   }
   const ended = () => a.ctl.abort()
-  const b = s.bot
   b.once('death', ended); b.once('end', ended)
   a.ctl.onAbort.push(() => cleanup({ acted: false, cancelled: true }))
   context.run({ session: s, ctl: a.ctl, reflex: a }, () => {
     take(s)
     let work
-    const invoke = () => a.ctl.aborted || st.active !== a ? { acted: false, cancelled: true } : fn(a.ctl)
+    const invoke = () => a.ctl.aborted || st.active !== a || s.bot !== b ? { acted: false, cancelled: true } : fn(a.ctl)
     try { work = immediate ? Promise.resolve(invoke()) : Promise.resolve().then(invoke) } catch (error) { work = Promise.reject(error) }
     work.then(cleanup, error => cleanup({ acted: false, error: error.message }))
       .finally(() => { b.removeListener('death', ended); b.removeListener('end', ended) })

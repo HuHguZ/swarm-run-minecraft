@@ -127,3 +127,35 @@ test('opening wait errors still reach the caller without an offensive continuati
   await assert.rejects(openDuel(f.ctx), e => e === error)
   assert.deepEqual(f.actions, ['weapon', 'wear'])
 })
+
+
+test('a pending normal opening yields to real head-lava contact before spending the rescue HP', async t => {
+  const f = fixture(t)
+  const read = f.bot.blockAt
+  let lava = false, doneAt = null
+  f.bot.blockAt = p => lava && p.floored().equals(new Vec3(0, 65, 0))
+    ? { name: 'lava', position: p.floored(), shapes: [], boundingBox: 'empty' } : read(p)
+  const opening = openDuel(f.ctx).then(() => { doneAt = f.time.now() - 10000 })
+  await flush()
+  for (let tick = 1; tick <= 3; tick++) { f.time.advanceTicks(1); await flush() }
+  lava = true
+  f.time.advanceTicks(1); await flush()
+  assert.equal(doneAt, 200, 'the existing main hazard turn needs control while a pearl remains survivable')
+  assert.equal(f.ctx.tt.opening, undefined)
+  await opening
+})
+
+
+test('live fire resistance preserves the ordinary opening delay under head lava', async t => {
+  const f = fixture(t), read = f.bot.blockAt
+  f.bot.entity.effects = { [f.bot.registry.effectsByName.FireResistance.id]: { amplifier: 0, duration: 200 } }
+  f.bot.blockAt = p => p.floored().equals(new Vec3(0, 65, 0))
+    ? { name: 'lava', position: p.floored(), shapes: [], boundingBox: 'empty' } : read(p)
+  let doneAt = null
+  const opening = openDuel(f.ctx).then(() => { doneAt = f.time.now() - 10000 })
+  await flush()
+  for (let tick = 1; tick <= 20; tick++) { f.time.advanceTicks(1); await flush() }
+  await opening
+  assert.equal(doneAt, 1000)
+  assert.equal(f.ctx.tt.opening, 'rush')
+})

@@ -6,6 +6,7 @@ import test = require('node:test')
 import assert = require('node:assert/strict')
 import * as ranged from '../src/ranged'
 import * as read from '../src/read'
+import { stateSummary } from '../src/perception'
 
 const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const rocket = (stars, slot = 9, count = 16) => ({
@@ -45,6 +46,21 @@ test('crossbowInfo: звёзды заряженной ракеты из сыро
   assert.equal(read.crossbowInfo(b, crossbow({ name: 'firework_rocket', stars: 3 })).stars, 3)
   assert.equal(read.crossbowInfo(b, crossbow({ name: 'firework_rocket', stars: 0 })).stars, 0)
   assert.equal(read.crossbowInfo(b, crossbow({ name: 'arrow' })).stars, null)
+})
+
+test('own status reports a loaded usable crossbow independently of loose attack arrows', () => {
+  for (const [ammo, ready] of [[{ name: 'arrow' }, true], [null, false],
+    [{ name: 'firework_rocket', stars: 0 }, false], [{ name: 'firework_rocket', stars: 2 }, true]] as const) {
+    for (const offhand of [false, true]) {
+      const item = crossbow(ammo, offhand ? 45 : 36)
+      const b: any = bot(offhand ? [] : [item], offhand ? item : null)
+      b.players = {}; b.health = 20; b.food = 20
+      assert.equal(read.crossbowInfo(b, item).loaded, !!ammo, 'use the real charged_projectiles reader')
+      const state = stateSummary(b)
+      assert.equal(state.attackArrows, 0, 'a loaded projectile is not a spare arrow')
+      assert.equal(state.loadedCrossbow, ready, `${JSON.stringify(ammo)}; offhand=${offhand}`)
+    }
+  }
 })
 
 test('expectedDamage: 0 звёзд — 0; больше звёзд — больнее', () => {

@@ -26,7 +26,7 @@ function updateMovements (this: Session, force = false): void {
     const scaffold = items
       .filter(i => /^(dirt|cobblestone|cobbled_deepslate|netherrack|stone|oak_planks|spruce_planks|birch_planks)$/.test(i.name) || (arenaScaffold && (require('../build') as typeof import('../build')).ARENA_FILLER.test(i.name)))
       .reduce((n, i) => n + i.count, 0)
-    const towers = scaffold >= 8
+    const towers = scaffold > 0
 
     const mlg = edges.mlgDrop(this)
     const free = freeDrop(bot)
@@ -92,13 +92,7 @@ function updateMovements (this: Session, force = false): void {
     // Цена — по памяти на Block из кеша, как у лавы ниже (fastblocks: версия растёт на любом сбросе кеша): без неё 18 клеток
     // на узел у 30 ботов разом — поход «стоит 5 с» (стенд 15×15, 21.10: 🧊 goto 16 → 45 за раунд).
     if (this.gotoArena && Array.isArray(movements.exclusionAreasStep)) {
-      const burn = (require('../pvp/movement') as typeof import('../pvp/movement')).burnStepCost(bot), fbm = bot._ndFastBlocks
-      movements.exclusionAreasStep.push((block: any) => {
-        if (fbm && fbm.live && block && block._ndBurnVer === fbm.ver) return block._ndBurnV
-        const v = burn(block)
-        if (fbm && fbm.live && block) { block._ndBurnVer = fbm.ver; block._ndBurnV = v }
-        return v
-      })
+      ;(require('../pvp/movement') as typeof import('../pvp/movement')).priceBurnSteps(bot, movements)
     }
     if (Array.isArray(movements.exclusionAreasStep)) {
       const fbm = bot._ndFastBlocks
@@ -177,6 +171,12 @@ function updateMovements (this: Session, force = false): void {
     // Порталы и огонь душ pathfinder считает пустотой и шагал бы сквозь них
     // (worlds.js tuneMovements): в портал тело входит только mc_portal enter.
     worlds.tuneMovements(bot, movements)
+    const support = this.gotoSupport
+    if (support?.support) {
+      const at = support.support
+      movements.exclusionAreasBreak.push(block => this.gotoSupport === support && !support.ctl.aborted &&
+        block.position?.x === at.x && block.position.y === at.y && block.position.z === at.z ? Infinity : 0)
+    }
     // Прыжок глубже обычного — дороже шага на время воды (edges.priceDrops).
     edges.priceDrops(movements, () => this.surfaceWalk && this.pathGoalY == null)
     // Мост над смертельной высотой не строим ни в одном мире: срыв или отказ сервера = смерть (Ад S1f; верхний мир cl-f 14.10:
@@ -211,7 +211,13 @@ function updateMovements (this: Session, force = false): void {
       const neighbors = movements.getNeighbors.bind(movements)
       movements.getNeighbors = node => {
         const p = bot.entity.position
-        const from = node.x === Math.floor(p.x) && node.y === Math.floor(p.y) && node.z === Math.floor(p.z) ? p : { x: node.x + .5, y: node.y, z: node.z + .5 }
+        const sameColumn = node.x === Math.floor(p.x) && node.z === Math.floor(p.z)
+        let startY = Math.floor(p.y)
+        if (sameColumn && p.y-startY > .001 && bot.entity.onGround) {
+          const feet = bot.blockAt(p.floored(),false)
+          if (feet && !movements.emptyBlocks.has(feet.type)) startY++
+        }
+        const from = sameColumn && node.y === startY ? p : { x: node.x + .5, y: node.y, z: node.z + .5 }
         const arena = here()
         return neighbors(node).filter(n => within(bot, { x: n.x + .5, y: n.y, z: n.z + .5 }, arena, from))
       }

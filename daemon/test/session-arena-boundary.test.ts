@@ -12,6 +12,56 @@ const native = (require('../src/tick-plugins') as typeof import('../src/tick-plu
 import * as parkour from '../src/navigation/parkour'
 const arena = { x: .5, z: .5, r: 5, killY: 60 }
 
+test('a native lantern start checks the legal physical body instead of a raised anchor inside enemy clearance', t => {
+  const f = fixture(t,'idle'), p = new Vec3(562.5794132425465,125.5625,622.5000000690104)
+  f.bot.entity.position = p; f.bot.entity.onGround = true
+  f.bot.blockAt = at => {
+    const q = at.floored(), own = q.x === 562 && q.z === 622
+    const state = own && q.y === 125 ? 20638 : own && q.y === 124 ? 20327 : registry.blocksByName[q.y < 124 ? 'smooth_quartz' : 'air'].defaultState
+    const b = Block.fromStateId(state); b.position = q; return b
+  }
+  const bounded = { x:600.5,y:120,z:600.5,r:80,killY:113,
+    avoid:[{x:574.0954686804594,y:131.5,z:640.0151784544513,r:21.78657643992967}] }
+  assert.equal(parkour.withinArena(f.bot,p,bounded),true)
+  assert.equal(parkour.withinArena(f.bot,new Vec3(562.5,126,622.5),bounded),false)
+  f.s.gotoArena = bounded; f.s.surfaceStrict = true; f.s.updateMovements(true)
+  const Move = require('mineflayer-pathfinder/lib/move')
+  const neighbors = f.bot.pathfinder.movements.getNeighbors(new Move(562,126,622,0,0))
+  assert.ok(neighbors.some(n=>n.x===561&&n.y===124&&n.z===622),'the ordinary drop away from the enemy remains reachable')
+  assert.ok(neighbors.every(n=>parkour.withinArena(f.bot,new Vec3(n.x+.5,n.y,n.z+.5),bounded,p)),
+    'a genuinely closer swept step remains excluded')
+})
+
+test('one or seven remaining blocks keep a native final ascent available, while zero and strict movement cannot tower', t => {
+  const f = fixture(t,'idle'), cobble = f.items.find(i=>i.name==='cobblestone')
+  f.bot.entity.position = new Vec3(650.3000000119209,150,554.329834787691)
+  f.bot.pathfinder.bestHarvestTool = ()=>null
+  f.bot.blockAt = at => {
+    const p = at.floored(), column = p.x===650&&p.z===554, target = p.x===649&&p.z===555
+    const name = column&&p.y===149 ? 'cobblestone' : (column||target)&&p.y===153 ? 'smooth_sandstone_slab' : 'air'
+    const b = Block.fromStateId(registry.blocksByName[name].defaultState); b.position=p; return b
+  }
+  f.s.gotoArena = {x:600.5,y:120,z:600.5,r:80,killY:113}
+  const Move = require('mineflayer-pathfinder/lib/move'), AStar = require('mineflayer-pathfinder/lib/astar')
+  const { goals } = require('mineflayer-pathfinder')
+  for (const count of [1,7,8,0]) {
+    cobble.count=count; f.s.surfaceStrict=false; f.s.updateMovements(true)
+    const mv=f.bot.pathfinder.movements, start=new Move(650,150,554,count,0)
+    assert.equal(mv.allow1by1towers,count>0,`${count} available blocks use only the native physical limit`)
+    assert.equal(mv.getNeighbors(start).some(n=>n.x===650&&n.y===151&&n.z===554),count>0)
+    if (count===7) {
+      const r=new AStar(start,mv,new goals.GoalBlock(649,154,555),5000).compute()
+      assert.equal(r.status,'success','the confirmed final column needs fewer than seven placements')
+      assert.ok(r.path.reduce((n,p)=>n+p.toPlace.length,0)<=count)
+    }
+  }
+  cobble.count=7; f.s.surfaceStrict=true; f.s.updateMovements(true)
+  assert.equal(f.bot.pathfinder.movements.allow1by1towers,false)
+  f.s.surfaceStrict=false; f.s.updateMovements(true)
+  const combat=(require('../src/pvp/movement') as typeof import('../src/pvp/movement')).combatMovement(f.bot,f.s.gotoArena)
+  try { assert.equal(f.bot.pathfinder.movements.allow1by1towers,false) } finally { combat.restore() }
+})
+
 function fixture(t, mode = 'arrive') {
   t.mock.method((require('../src/edges/mlg') as typeof import('../src/edges/mlg')), 'mlgDrop', () => ({ ok: false, drop: 3 }))
   t.mock.method((require('../src/blockmoves') as typeof import('../src/blockmoves')), 'on', () => false)

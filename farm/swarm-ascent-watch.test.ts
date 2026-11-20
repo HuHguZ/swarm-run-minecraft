@@ -15,7 +15,8 @@ function fixture(t) {
   }, c: { async call(method, params) {
     calls.push({ method, params })
     if (method === 'status') return { status: 'done', state: { pos: frame.p, health: frame.hp,
-      inventory: frame.inv, physicsTicks: frame.frame, clock: { ticks: frame.frame } }, detail: { sightings: [], ...(frame.precise ? { at: frame.precise } : {}) } }
+      inventory: frame.inv, physicsTicks: frame.frame, clock: { ticks: frame.frame } }, detail: { sightings: [],
+        ...(params.physics ? { physics: frame.physics } : {}), ...(frame.precise ? { at: frame.precise } : {}) } }
     return { status: 'done', detail: {} }
   } } }
   const ctx: any = { i: 31, bots: [b], names: ['A'], pos: { A: frame }, busy: new Set(), out: new Set(), deadNow: new Set(),
@@ -110,4 +111,84 @@ test('team planning keeps the precise self position for support reservations, wi
   timers.poll()
   await new Promise(resolve => setImmediate(resolve))
   assert.deepEqual(f.ctx.pos.A.p, f.frame.p)
+})
+
+test('frozen watcher lets a stationary goto finish successive slow digs but bounds a stuck target', async t => {
+  const f = fixture(t)
+  await f.close()
+  f.ctx.swarmDriver.panic = () => false
+  f.ctx.enemiesOf = () => []
+  f.b.last.p.timeoutSeconds = 12
+  f.frame.p.y = 136
+  f.frame.physics = { pathfinder: { mining: true }, targetDig: { x: 643, y: 138, z: 561 } }
+  const timers = watchStatus(f.ctx) as any
+  const sample = async (ms, target = f.frame.physics.targetDig) => {
+    f.advance(ms)
+    f.frame.physics.targetDig = target
+    timers.poll()
+    await new Promise(resolve => setImmediate(resolve))
+    timers.frozenT()
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  await sample(0)
+  await sample(4000, { x: 643, y: 137, z: 561 })
+  await sample(4500, { x: 643, y: 137, z: 560 })
+  for (let n = 0; n < 5; n++) await sample(2000)
+  assert.deepEqual(f.calls.filter(c => c.method !== 'status'), [],
+    '18.5 s at one position includes distinct completed digs and a 10 s sandstone dig')
+  assert.equal(f.b.frozen, undefined, 'real block work must not blacklist the upper route or request a descent')
+  await sample(4000)
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 1,
+    'the same target with mining=true cannot renew the existing 14 s budget forever')
+})
+
+test('revisiting dig targets and old-daemon status cannot renew the goto freeze budget', async t => {
+  const f = fixture(t)
+  await f.close()
+  f.ctx.swarmDriver.panic = () => false
+  f.ctx.enemiesOf = () => []
+  f.b.last.p.timeoutSeconds = 12
+  const first = { x: 1, y: 65, z: 0 }, second = { x: 1, y: 64, z: 0 }
+  f.frame.physics = { pathfinder: { mining: true }, targetDig: first }
+  const timers = watchStatus(f.ctx) as any
+  for (let n = 0; n <= 8; n++) {
+    f.advance(n ? 2000 : 0)
+    f.frame.physics.targetDig = n % 2 ? second : first
+    timers.poll()
+    await new Promise(resolve => setImmediate(resolve))
+    timers.frozenT()
+  }
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 1, 'cycling the same cells is not new progress')
+  f.b.last = { m: 'goto', at: Date.now(), pending: true, p: { timeoutSeconds: 12 } }
+  f.b.anchor = null
+  delete f.frame.physics
+  for (let n = 0; n <= 7; n++) {
+    f.advance(n ? 2000 : 0)
+    timers.poll()
+    await new Promise(resolve => setImmediate(resolve))
+    timers.frozenT()
+  }
+  assert.equal(f.calls.filter(c => c.method === 'stop').length, 2, 'missing physics preserves the existing freeze recovery')
+})
+
+test('a stalled route to upper loot replans on its tier and keeps the upper goal for recovery', async t => {
+  const f = fixture(t)
+  await f.close()
+  f.ctx.Y = 120
+  f.ctx.enemiesOf = () => []
+  f.frame.p = { x: 624, y: 142, z: 550 }
+  const upper = { x: 630, y: 150, z: 550 }
+  f.b.swarmTask = { kind: 'loot' }
+  f.b.last = { m: 'goto', at: Date.now(), status: 'timeout', pending: false, p: { ...upper, climb: true, timeoutSeconds: 23 } }
+  const { frozenT } = watchStatus(f.ctx) as any
+  frozenT()
+  f.advance(40000)
+  frozenT()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(f.calls.map(c => c.method), ['stop'], 'a failed ascent requests a new route, without sending the bot down to Y=120')
+  f.advance(8000)
+  frozenT()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(f.calls.filter(c => c.method === 'dig_to').map(c => c.params.at), [upper])
+  assert.equal(f.b.swarmReserved, undefined)
 })

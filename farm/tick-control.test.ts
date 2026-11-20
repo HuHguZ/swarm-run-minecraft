@@ -76,8 +76,8 @@ test('scene env carries one selected tick rate after per-scene overrides', () =>
 
 // Exercise the actual farm wiring with process/filesystem/RCON boundaries mocked.
 // No Java process, world or network socket is created by these integration tests.
-function farmHarness ({ running = [], prepareChanged = false, failReload = 0, limits = { maxUp: 4, cores: 'ccd1' } }: any = {} as Record<string, any>) {
-  const events = []; const files = new Map(); const cli = path.join(__dirname, 'farm.js')
+function farmHarness ({ running = [], prepareChanged = false, failReload = 0, unknownOwners = [], limits = { maxUp: 4, cores: 'ccd1' } }: any = {} as Record<string, any>) {
+  const events = []; const files = new Map(); const cli = path.join(__dirname, 'farm.js'); const probes: number[][] = []
   const load = createRequire(cli)
   const fakeFs = {
     existsSync: filename => files.has(String(filename)),
@@ -100,18 +100,34 @@ function farmHarness ({ running = [], prepareChanged = false, failReload = 0, li
     } : load(name),
     __dirname, __filename: cli, process: { env: {} as Record<string, any>, execPath: process.execPath },
     console: { log () {}, error () {} }, Buffer, setTimeout: fn => { fn(); return 1 }, clearTimeout () {}, queueMicrotask,
-    events, running, prepareChanged, failReload
+    events, running, prepareChanged, failReload, unknownOwners, probes
   }))
   const source = fs.readFileSync(cli, 'utf8').split(/\n;?\s*\(async \(\) => \{/)[0]
   assert.ok(!source.includes('process.argv.slice(2)'), 'fixture excludes farm CLI entry point')
-  vm.runInContext(source + '\nthis.api = { cmdUp, cmdRun, cmdTick, parseArgs, tickSelection, prepareSlot, slot };\n' +
-    'listeners = () => new Map(running.map(i => [25600+i, 123]));\n' +
+  vm.runInContext(source + '\nthis.api = { cmdUp, cmdDown, cmdRun, cmdTick, parseArgs, tickSelection, prepareSlot, slot };\n' +
+    'listeners = ports => { probes.push(ports); return new Map([...running.map(i => [25600+i, 123]), ...unknownOwners.filter(p => ports.includes(p)).map(port => [port, 0])]) };\n' +
     'prepareSlot = (s, options) => { events.push({kind:"prepare",slot:s.i,options}); return prepareChanged };\n' +
     'startServer = async s => events.push({kind:"server",slot:s.i});\n' +
     'waitPort = async () => true; portOpen = async () => false;\n' +
     'let mockRate = 20; slotRcon = async (s,command) => { events.push({kind:"rcon",slot:s.i,command}); if(command === "paper reload" && failReload-- > 0) return "Unknown command"; if(command.startsWith("tick rate ")) mockRate=Number(command.slice(10)); return command === "tick query" ? `Target tick rate: ${mockRate.toFixed(1)} per second.` : "ok" };', context)
-  return { api: context.api, events, files }
+  return { api: context.api, events, files, probes }
 }
+
+test('world limit counts an occupied State=0 server-run without probing live or LAN ports', async () => {
+  const { api, events, probes } = farmHarness({ limits: { maxUp: 1 }, unknownOwners: [25569] })
+  await assert.rejects(api.cmdUp({ _: ['1'] }), /лимит 1.*25569/)
+  assert.deepEqual(events, [])
+  assert.deepEqual(Array.from(probes[0]), [25569, ...Array.from({ length: 32 }, (_, k) => 25601 + k)])
+})
+
+test('down preserves the slot and skips RCON when ownership of a busy port is unknown', async () => {
+  const { api, events, files } = farmHarness({ unknownOwners: [8831] })
+  const slotFile = path.join(REPO_ROOT, 'farm/slots.json'), state = JSON.stringify({ slots: { 31: {} } })
+  files.set(slotFile, state)
+  await assert.rejects(api.cmdDown({ _: ['31'] }), /8831.*владелец/)
+  assert.deepEqual(events, [])
+  assert.equal(files.get(slotFile), state)
+})
 
 test('up configures each ready server before spawning its daemon and records selected TPS', async () => {
   const { api, events, files } = farmHarness()

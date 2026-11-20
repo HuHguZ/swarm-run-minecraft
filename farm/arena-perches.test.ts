@@ -1,5 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { runInNewContext } from 'node:vm'
 import { setupArmsMap } from './arena/map'
 
 test('Colosseum perches stand on real collision supports, not decorative banners', async t => {
@@ -25,4 +29,35 @@ test('Colosseum perches stand on real collision supports, not decorative banners
     return !Block.fromStateId(definition.minStateId, 0).shapes.some(s => s.every((v, i) => v === (i < 3 ? 0 : 1)))
   })
   assert.deepEqual(invalid, [], 'a non-colliding decoration cannot advertise a landing support')
+})
+
+test('arms controller restart parks, detaches, restores the map, then reconnects before playing', async t => {
+  const entry = path.join(__dirname, 'arena/ffa.js'), load = createRequire(entry)
+  const source = fs.readFileSync(entry, 'utf8').split('const [cmd, slot, arg] = process.argv.slice(2)')[0]
+  const b = { name: 'NeuroFarm31', ws: 8831 }, phases: string[] = []
+  const stop = new Error('startup complete'), oldReset = process.env.ARMS_RESET
+  delete process.env.ARMS_RESET
+  t.after(() => { if (oldReset === undefined) delete process.env.ARMS_RESET; else process.env.ARMS_RESET = oldReset })
+  const read = fs.readFileSync
+  t.mock.method(fs, 'readFileSync', (file, ...args) => String(file).endsWith('colos-stash-31.json')
+    ? '{"at":"600 120 600 h1 y0..0"}' : read(file, ...args))
+  t.mock.method(load('./fleet'), 'leaveForRestore', async (slot, bots) => {
+    assert.equal(slot, 31); assert.deepEqual(bots.map(bot => bot.name), [b.name])
+    phases.push('disconnect'); return 1
+  })
+  t.mock.method(load('./loot'), 'makeStockChests', () => async () => {})
+  const rcon = async (_i, command) => {
+    if (command === `gamemode spectator ${b.name}`) phases.push('spectator')
+    if (command.startsWith('clone ')) { phases.push('restore'); return 'Successfully cloned' }
+    if (command.startsWith('execute if block')) return 'Test passed'
+    if (command === 'list') return 'There are 0 of a max of 40 players online:'
+    return ''
+  }
+  const run = runInNewContext(source + '\nrun', { exports: {}, console, process: { env: { ARMS_MAP: 'colosseum' } },
+    require: spec => spec === './fleet' ? { discover: async () => [b], client: () => ({ ready: Promise.resolve(), call: async method => { phases.push(method) } }) }
+      : spec === './server' ? { LAN: 0, rcon } : spec === 'fs' ? { statSync() { throw stop } }
+      : spec.endsWith('colosseum-arms') ? { generate: () => ({ half: 1, y0: 0, y1: 0, seed: 'test', chests: [] }), commands: () => [] } : load(spec)
+  })
+  await assert.rejects(run(31, 'arms', { arms: true }), error => error === stop)
+  assert.deepEqual(phases, ['spectator', 'disconnect', 'restore', 'connect', 'spectator', 'temper', 'play_mode'])
 })

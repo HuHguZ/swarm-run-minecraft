@@ -1,6 +1,21 @@
 'use strict'
 import * as gameClock from './game-clock'
+import { AsyncLocalStorage } from 'node:async_hooks'
 const menuStates = new WeakMap<object, Map<number, number>>()
+const transferWindow = new AsyncLocalStorage<{ bot: any; window: any }>()
+
+// Mineflayer's transfer and cursor-cleanup loops retain a Window across awaits,
+// but clickWindow chooses its target again after each await.
+export function inTransferWindow<T>(bot, window, transfer: () => Promise<T>): Promise<T> {
+  return transferWindow.run({ bot, window }, transfer)
+}
+
+function checkTransferWindow(bot, window) {
+  const held = transferWindow.getStore()
+  if (held?.bot === bot && (held.window !== window || window !== (bot.currentWindow || bot.inventory))) {
+    throw new Error('контейнер закрылся во время переноса')
+  }
+}
 
 function sameStack(bot, a, b) {
   const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
@@ -31,6 +46,20 @@ function install (bot) {
   const Item = (require('prismarine-item') as typeof import('prismarine-item').default)(bot.registry)
   const states = new Map<number, number>()
   menuStates.set(bot, states)
+  // Stop the wrong click before prismarine-windows mutates its prediction,
+  // including when Paper reuses a window id for a different chest.
+  const protectedMenus = new WeakSet<object>()
+  const protect = window => {
+    if (typeof window?.acceptClick !== 'function' || protectedMenus.has(window)) return
+    const accept = window.acceptClick
+    window.acceptClick = function (click) {
+      checkTransferWindow(bot, this)
+      return accept.call(this, click)
+    }
+    protectedMenus.add(window)
+  }
+  protect(bot.inventory)
+  protect(bot.currentWindow)
   if (bot.version === '1.21.11') {
     // Ordinary Mineflayer clicks predict Slot components, but this protocol
     // expects component hashes. A late carried correction can outlive the
@@ -46,7 +75,8 @@ function install (bot) {
   bot.on('windowOpen', window => {
     if (window === bot.currentWindow) activeWindow = window
   })
-  bot._client.on('open_window', packet => states.delete(packet.windowId))
+  bot._client.on('open_window', packet => { states.delete(packet.windowId); protect(bot.currentWindow) })
+  bot._client.on('open_horse_window', () => protect(bot.currentWindow))
 
   // Modern full-state packets include the carried stack. Mineflayer updates
   // the slots but omits it, leaving crafting to use a stale predicted cursor.

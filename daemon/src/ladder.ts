@@ -8,8 +8,9 @@
 // Вход: wall {x,y,z} — нижний блок стены; face {x,z} — сторона лестницы (единичная по оси); top — верхний y стены.
 // Итог: { ok, placed, at, why }; ok — стоит на верху стены или у верхней ступени.
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
+import { withinArena } from './navigation/parkour/model'
 
-async function ladderUp (session, ctl, { wall, face, top, timeoutSeconds = 40 }: any = {}) {
+async function ladderUp (session, ctl, { wall, face, top, timeoutSeconds = 40, arena }: any = {}) {
   const bot = session.require()
   if (!wall || !face || !Number.isFinite(top)) return { ok: false, why: 'нужны wall, face, top' }
   const dir = new Vec3(Math.sign(face.x) || 0, 0, Math.sign(face.z) || 0)
@@ -23,6 +24,8 @@ async function ladderUp (session, ctl, { wall, face, top, timeoutSeconds = 40 }:
   let placed = 0
   const clear = () => { for (const k of ['forward', 'jump', 'sneak']) bot.setControlState(k, false) }
   ctl?.onAbort?.push(clear)
+  const allowed = (to, from = bot.entity.position) => withinArena(bot, from, arena) && withinArena(bot, to, arena, from)
+  const outside = () => ({ ok: false, placed, why: 'outside arena bounds', at: bot.entity.position.floored() })
   // Ступень в клетку перед гранью стены на высоте y — по видимой грани.
   let why = ''
   const put = async (y) => {
@@ -43,11 +46,20 @@ async function ladderUp (session, ctl, { wall, face, top, timeoutSeconds = 40 }:
   const lookWall = y => bot.lookAt(wallAt(y).offset(0.5, 0.5, 0.5).minus(dir.scaled(0.45)), true)
   try {
     const y0 = wall.y
+    const here = bot.entity.position.floored(), feet = Math.floor(bot.entity.position.y + .05), column = cellAt(feet)
+    // Продолжение после частичного подъёма не тянет вниз; нижние ступени подтверждаются телом, не планом.
+    const resume = feet > y0 && feet <= top && here.x === column.x && here.z === column.z &&
+      Array.from({ length: feet - y0 + 1 }, (_, k) => isLadder(cellAt(y0 + k))).every(Boolean)
+    const base = cellAt(y0).offset(.5, 0, .5), upper = cellAt(top).offset(.5, 1, .5), exit = wallAt(top).offset(.5, 1, .5)
+    const entry = resume ? bot.entity.position : base
+    // Без A* проверяем целые отрезки: запретная сфера может лежать между безопасными концами лестницы.
+    if (!allowed(entry) || !allowed(upper, entry) || !allowed(exit, upper)) return outside()
     // 1. Первая ступень — у ног: стоя за лестницей (клетка в 2 бл. от стены).
     if (!isLadder(cellAt(y0)) && !(await put(y0))) return { ok: false, placed, why: 'первая ступень: ' + why }
     // 2. Войти в клетку лестницы.
-    for (let t = 0; t < 30 && bot.entity.position.distanceTo(cellAt(y0).offset(0.5, 0, 0.5)) > 0.45; t++) {
+    for (let t = 0; !resume && t < 30 && bot.entity.position.distanceTo(base) > 0.45; t++) {
       if (ctl?.aborted) return { ok: false, placed, why: 'прервано' }
+      if (!allowed(base)) return outside()
       await lookWall(y0 + 1); bot.setControlState('forward', true); await bot.waitForTicks(1)
     }
     clear()
@@ -55,6 +67,7 @@ async function ladderUp (session, ctl, { wall, face, top, timeoutSeconds = 40 }:
     while (Date.now() < deadline && !ctl?.aborted) {
       const feet = Math.floor(bot.entity.position.y + 0.05)
       if (feet > top) break
+      if (!allowed(upper)) return outside()
       const next = feet + 1
       if (next <= top && !isLadder(cellAt(next)) && solid(wallAt(next))) { clear(); if (!(await put(next))) return { ok: false, placed, why: `ступень на ${next}: ${why}`, at: bot.entity.position.floored() } }
       await lookWall(Math.min(next, top))
@@ -68,6 +81,7 @@ async function ladderUp (session, ctl, { wall, face, top, timeoutSeconds = 40 }:
     for (let t = 0; t < 30; t++) {
       const p = bot.entity.position
       if (p.y >= top + 0.9 && Math.abs((p.x - mid.x) * dir.x + (p.z - mid.z) * dir.z) < 0.25) break
+      if (!allowed(exit)) return outside()
       await lookWall(top); bot.setControlState('forward', true); bot.setControlState('jump', p.y < top + 0.9); await bot.waitForTicks(1)
     }
     clear()

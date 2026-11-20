@@ -221,6 +221,21 @@ for (const [method, params, grace] of [
   assert.equal(f.calls.filter(c => c.name === 'fast' && c.method === 'stop').length, 1)
 })
 
+for (const method of ['eat', 'antidote']) test('fresh ' + method + ' can finish after a stationary route and an expired one still resets', t => {
+  const f = fixture(t), b = f.bots[0]
+  b.swarmTask = { kind: 'recover', data: {} }
+  f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000
+  f.context.enemiesOf = () => [{ d: 2.5, mob: false }]
+  b.anchor = { p: { ...f.context.pos.fast.p }, at: 42000 }
+  b.last = { m: method, pending: true, at: 49000, p: {} }
+  const stops = () => f.calls.filter(c => c.name === 'fast' && c.method === 'stop').length
+  f.watchdog()
+  assert.equal(stops(), 0)
+  b.last.at = 47000
+  f.watchdog()
+  assert.equal(stops(), 1)
+})
+
 test('fresh fight does not inherit a stationary goto anchor', t => {
   const f = fixture(t), b = f.bots[0]
   f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000

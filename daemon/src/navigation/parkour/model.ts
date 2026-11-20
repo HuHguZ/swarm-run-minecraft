@@ -179,8 +179,8 @@ export function rest(bot: MovementBot, state: State, world: ReturnType<typeof wo
   const geometry = geometryOf(bot, world)
   for (let i = 0; i < 6; i++) {
     const step = { yaw: st.yaw, control: controls({ sneak: true }) }
-    st.control = step.control; sim(st, world)
-    if (!withinArena(bot, st.pos, arena) || !onTarget(geometry, st, target, tolerance)) return null
+    const previous = st.pos.clone(); st.control = step.control; sim(st, world)
+    if (!withinArena(bot, st.pos, arena) || !bodyClear(geometry, st.pos, { from: previous }) || !onTarget(geometry, st, target, tolerance)) return null
     steps.push(step); states.push(clone(st))
   }
   return Math.hypot(st.vel.x, st.vel.z) < .035 ? { steps, states } : null

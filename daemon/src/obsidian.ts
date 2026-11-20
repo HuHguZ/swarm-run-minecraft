@@ -290,12 +290,28 @@ async function pourOnto (bot, ground) {
 }
 
 // Забрать воду обратно: источник там, куда лили.
-async function scoopWater (bot, cell) {
-  if (!(await holdItem(bot, 'bucket'))) return false
-  try { await bot.lookAt(cell.offset(0.5, 0.8, 0.5), true) } catch {}
-  await sleep(80)
-  try { bot.activateItem() } catch {}
-  return waitHeld(bot, 'water_bucket', 1200)
+async function scoopWater (bot, cell, ctl: any = null) {
+  const live = () => !ctl?.aborted && (!bot._ndReflexSession || (require('./reflex-lock') as typeof import('./reflex-lock')).allowed(bot._ndReflexSession))
+  const source = () => isSource(bot.blockAt(cell), 'water')
+  try {
+    if (!live() || !source() || !(await holdItem(bot, 'bucket'))) return false
+    const { scoopAim }: typeof import('./cast/bucket') = require('./cast/bucket')
+    const aim = scoopAim(bot, cell)
+    if (!live() || !aim) return false
+    await bot.lookAt(aim, true)
+    await sleep(80, ctl)
+    const fresh = live() && source() && bot.heldItem?.name === 'bucket' && scoopAim(bot, cell)
+    if (!fresh) return false
+    await bot.lookAt(fresh, true)
+    if (!live() || !source() || bot.heldItem?.name !== 'bucket') return false
+    const before = countOf(bot, 'water_bucket'), until = gameClock.now() + 1200
+    bot.activateItem()
+    while (live() && gameClock.now() < until) {
+      if (countOf(bot, 'water_bucket') > before) return true
+      await sleep(50, ctl)
+    }
+  } catch {}
+  return false
 }
 
 // --------------------------------------------------------------- обсидиан

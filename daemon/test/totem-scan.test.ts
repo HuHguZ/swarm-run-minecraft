@@ -123,18 +123,22 @@ test('missing boundary or a replaced bot makes the full-round totem count unknow
 })
 
 test('status totem telemetry is opt-in and uses the same live counters without installing listeners', async () => {
-  // RPC status демона живёт в src/rpc/observation.ts; единственный модуль, который он тянет здесь, — totem.
+  // У этого тела нет активной аренды; status читает её независимо от opt-in тотема.
   const file = path.join(__dirname, '../src/rpc/observation.ts')
   const f = popFixture(); f.pop()
+  let totemRequests = 0
   const context = { module: { exports: {} as any }, require: name => {
-    assert.equal(name, '../totem'); return totem
+    if (name === '../reflex-lock') return { owner: () => null }
+    assert.equal(name, '../totem'); totemRequests++; return totem
   } }
   vm.runInNewContext(transformSync(fs.readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code, cjsContext(context), { filename: file })
   const status = context.module.exports.observationMethods({ cfg: {}, session: { bot: f.bot, immediate: async fn => fn() }, state: { dangerWatch: null } }).status
   assert.equal((await status({})).totem, undefined)
+  assert.equal(totemRequests, 0, 'ordinary status must not even load opt-in totem telemetry')
   const before = (await status({ totem: true })).totem
   f.pop()
   const after = (await status({ totem: true })).totem
+  assert.equal(totemRequests, 2)
   assert.equal(totem.delta(before, after).pops, 1)
   assert.equal(f.bot._client.listenerCount('entity_status'), 1)
 })

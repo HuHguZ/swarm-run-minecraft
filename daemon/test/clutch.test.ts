@@ -191,6 +191,26 @@ function installFake (m, s, extra: any = {} as Record<string, any>) {
   return { bot, guard }
 }
 
+test('fall forecast reads each collision cell once and observes a changed floor next time', () => {
+  const { openGuard } = require('../src/clutch/guard-state') as typeof import('../src/clutch/guard-state')
+  const { context } = require('../src/clutch/guard-forecast') as typeof import('../src/clutch/guard-forecast')
+  let floor = 0
+  const m = model(p => p.y < floor ? 'stone' : 'air')
+  const s = state(new Vec3(.5, 14, .5), new Vec3(0, -.4, 0))
+  const bot = fakeBot(m, s)
+  const g = openGuard({ bot }, { Vec3, PlayerState, faceAim: pick.faceAim, makeBlock: p => block('cobblestone', p), hand: { as: fn => fn(), hold () {} } })
+  for (const top of [0, -3]) {
+    floor = top
+    const seen = new Set<string>()
+    let reads = 0
+    bot.blockAt = p => { reads++; seen.add(key(p)); return m.world.getBlock(p) }
+    const { landing } = context(g, s)
+    assert.equal(landing.top, top)
+    // The live climbability check may read the cell at the feet separately.
+    assert.ok(reads <= seen.size + 1, `forecast made ${reads} block reads for ${seen.size} distinct cells`)
+  }
+})
+
 test('the shared Emergency lease preserves knockback clutch steering until the forecast landing', async () => {
   const clock: typeof import('../src/game-clock') = require('../src/game-clock')
   const locks: typeof import('../src/reflex-lock') = require('../src/reflex-lock')

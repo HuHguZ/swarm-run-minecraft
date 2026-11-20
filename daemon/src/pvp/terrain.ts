@@ -1,3 +1,8 @@
+import { scoopAim } from '../cast/bucket'
+import { levelOf } from '../cast/base'
+import { eyeOf } from '../pick'
+import { bodyBox, intersects } from '../navigation/geometry'
+
 type CombatContext = Record<string, any>
 
 export function createTerrain(ctx: CombatContext) {
@@ -274,12 +279,24 @@ const scoop = async (cell) => {
     if (!(await ctx.holdItem(bucket))) return
     ctx.aim = 'free'
     try {
-      await ctx.bot.lookAt(cell.offset(0.5, 0.2, 0.5), true)
+      const fluid = ctx.bot.blockAt(cell)?.name
+      if (!/^(water|lava)$/.test(fluid || '')) return
+      const checkedAim = () => {
+        const b = ctx.bot.blockAt(cell)
+        return b?.name === fluid && levelOf(b) === 0 ? scoopAim(ctx.bot, cell, eyeOf(ctx.bot)) : null
+      }
+      const aim = checkedAim()
+      if (!aim) return
+      await ctx.bot.lookAt(aim, true)
       await ctx.sleep(50)
+      if (ctx.ctl.aborted) return
+      const fresh = checkedAim()
+      if (!fresh) return
+      await ctx.bot.lookAt(fresh, true)
+      if (ctx.ctl.aborted) return
       ctx.bot.activateItem()
-    } catch {}
+    } catch {} finally { ctx.aim = 'target' }
     await ctx.sleep(80)
-    ctx.aim = 'target'
   }
 
 const towerShield = async () => {
@@ -318,16 +335,21 @@ const towerShield = async () => {
     return 'waited'
   }
 
-const hazardOnLine = () => {
+const hazardOnLine = (to = ctx.entity.position) => {
     const me0 = ctx.bot.entity.position
-    const dx = ctx.entity.position.x - me0.x; const dz = ctx.entity.position.z - me0.z
+    const dx = to.x - me0.x; const dz = to.z - me0.z
     const len = Math.hypot(dx, dz)
     if (len < 1) return null
     const feetY = Math.floor(me0.y + 1e-3)
     for (let t = 0.8; t <= Math.min(4.5, len - 0.5); t += 0.35) {
       const feet = new ctx.Vec3(Math.floor(me0.x + dx / len * t), feetY, Math.floor(me0.z + dz / len * t))
-      const fn = ctx.blockName(ctx.bot, feet) || ''
-      if (/^(lava|fire|soul_fire)$/.test(fn)) return { cell: feet, kind: fn }
+      const body = bodyBox(ctx.bot, { x: me0.x + dx / len * t, y: me0.y, z: me0.z + dz / len * t })
+      for (let x = Math.floor(body.minX); x <= Math.floor(body.maxX); x++) for (let z = Math.floor(body.minZ); z <= Math.floor(body.maxZ); z++) {
+        for (let y = Math.floor(body.minY); y <= Math.floor(body.maxY); y++) {
+          const cell = new ctx.Vec3(x, y, z), kind = ctx.blockName(ctx.bot, cell) || ''
+          if (/^(lava|fire|soul_fire)$/.test(kind) && intersects(body, { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 })) return { cell, kind }
+        }
+      }
       const floor = feet.offset(0, -1, 0)
       const fl = ctx.bot.blockAt(floor)
       if (fl && (fl.name === 'lava' || (fl.boundingBox === 'empty' && !/water|cobweb/.test(fl.name)))) return { cell: floor, kind: fl.name === 'lava' ? 'lava' : 'pit' }

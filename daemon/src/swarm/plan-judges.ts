@@ -4,7 +4,7 @@ import * as damage from '../pvp/damage-model'
 import type { SwarmPosition, SwarmMember, SharedEnemy } from './types'
 import type { PvpPlan } from './plan-frame'
 import { distance, count } from './common'
-import { visibleForce, ownDefense, assessTeamFight } from './fight'
+import { visibleForce, ownDefense, assessTeamFight, memberFight } from './fight'
 
 // Укрытие для слабого: дальше от врагов, чем он сам (не навстречу), ближе к нему; занятые другими — дороже (расходятся).
 export function hideoutFor(S: PvpPlan, m: SwarmMember): SwarmPosition | null {
@@ -123,5 +123,13 @@ export function targetCost(S: PvpPlan, m: SwarmMember, e: SharedEnemy): number {
   // удара (4.5 — как nearby плана) или других нет (cl28u: летун садился/взлетал, 48 смен цели в бою за раунд).
   const left = S.state.leftAerial?.get(m.id) === e.id && distance(m.position, e.position) > 4.5
   const unreachable = (e.threat === 'aerial' || left) && airUnreachable(m) ? 1000 : 0
-  return unreachable + ranged + (loads.get(e.id) || 0) * 5 + enemyCrowd * 2 - local * 2 - (m.role === 'flank' ? Math.min(8, enemyCenterD) : 0)
+  let denial = 0
+  if (S.options.lootZones?.length && !unreachable) {
+    const value = Math.max(0, ...S.options.lootZones.map(h => h.tier / (1 + distance(h, e.position))))
+    const fight = memberFight(m, e), advantage = fight.survival > fight.attackSeconds ? 1 - fight.attackSeconds / fight.survival : 0
+    const gap = distance(m.position, e.position), travel = gap + 5.6 * Math.max(0, e.position.y - m.position.y)
+    // Denying known upper loot spends only a fraction of travel cost, scaled by the winning duel margin and ascent.
+    denial = ranged * advantage * value / (1 + value) * gap / Math.max(1, travel)
+  }
+  return unreachable + ranged - denial + (loads.get(e.id) || 0) * 5 + enemyCrowd * 2 - local * 2 - (m.role === 'flank' ? Math.min(8, enemyCenterD) : 0)
 }

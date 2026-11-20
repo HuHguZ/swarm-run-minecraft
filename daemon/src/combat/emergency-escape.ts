@@ -28,6 +28,11 @@ export function lavaFallFloor(bot: any): number | null {
 }
 
 export function createEmergencyEscape(bot: any, { away = null }: { away?: (() => any) | null } = {}) {
+  const session = bot._ndReflexSession, arena = session?.current?.params?.arena ?? session?._rescue?.arena
+  const inside = (p: any) => !arena || (require('./team-wind') as typeof import('./team-wind')).windInside(p, arena)
+  const contact = () => (require('../pvp/lava-exit') as typeof import('../pvp/lava-exit')).burnContact(bot)
+  const lavaRescue = () => contact() === 'lava' &&
+    !(require('../fightkit') as typeof import('../fightkit')).hasEffect(bot, 'fire_resistance')
   const snapshot = (): EmergencyEscapeState => {
     if (!bot.entity?.position || bot.health <= 0 || bot.currentWindow) return { flightReady: false, pearlReady: false, landing: null }
     const equipment = sky.kit(bot)
@@ -40,7 +45,7 @@ export function createEmergencyEscape(bot: any, { away = null }: { away?: (() =>
     const landing = sky.landingSpot(bot, world, { near: bot.entity.position, floorY: Math.min(bot.entity.position.y, lavaFloor ?? bot.entity.position.y), radius: 48, away: threat, minFromAway: threat && !lava ? 18 : 0 })
     const launchClear = bot.entity.isInLava ? sky.lavaLaunchClear(bot) : sky.headroom(world, bot.entity.position, 6) >= 4
     return { landing, flightReady: !!landing && launchClear && equipment.elytra && equipment.rockets > 0,
-      pearlReady: !!landing && pearl && bot.health > pearls.pearlDamage(bot) + 1 }
+      pearlReady: !!landing && pearl && (lavaRescue() ? projectiles.canSurvivePearl(bot) : bot.health > pearls.pearlDamage(bot) + 1) }
   }
   const safe = (point: any) => {
     const settled = pearls.settle(pearls.worldOf(bot), point)
@@ -66,12 +71,17 @@ export function createEmergencyEscape(bot: any, { away = null }: { away?: (() =>
       if (bot.entity.onGround && safe(bot.entity.position)) return { ...landed, ok: true, at: bot.entity.position.clone(), landingError: bot.entity.position.distanceTo(at) }
       return landed
     }
-    const from = bot.entity.position.clone()
+    const from = bot.entity.position.clone(), rescue = lavaRescue()
+    let forced = false
+    const onMove = () => { forced ||= !bot.entity.position.equals(from) }
+    if (rescue) bot.on?.('forcedMove', onMove)
+    try {
     const item = bot.inventory.items().find((item: any) => item.name === 'ender_pearl')
     const rejected: Record<string, number> = {}
     const reject = (why: string) => { rejected[why] = (rejected[why] ?? 0) + 1 }
     const result = await projectiles.throwAt(bot, null, { item, preferOffhand: true,
       pick: (ctx: any) => {
+        if (rescue) return projectiles.escapePick(bot, p => inside(p) ? 0 : -Infinity, { rescue: true, maxDrop: 4 })(ctx)
         const yaw = Math.atan2(-(at.x - ctx.from.x), -(at.z - ctx.from.z))
         const threat = away?.()
         const lava = bot.entity.isInLava || bot.blockAt(bot.entity.position)?.name === 'lava' || lavaFallFloor(bot) !== null
@@ -97,16 +107,21 @@ export function createEmergencyEscape(bot: any, { away = null }: { away?: (() =>
         return best
       },
       onAim: (shot: any) => !ctl.aborted && !shot.land?.void && shot.land?.tp && safe(shot.land.tp)
-        && bot.health > pearls.pearlDamage(bot) + 1 })
+        && (rescue ? lavaRescue() && projectiles.canSurvivePearl(bot) && inside(shot.land.tp) &&
+          (require('../navigation/geometry') as typeof import('../navigation/geometry')).bodyClear(bot, shot.land.tp, { water: true }) : bot.health > pearls.pearlDamage(bot) + 1) })
     bot._ndReflexSession?.bus?.emit('escape_pearl', { shot: result, health: bot.health, position: bot.entity.position.clone() })
     if (!result.thrown) return { ok: false, why: `${result.why ?? 'escape pearl not thrown'}: ${JSON.stringify(rejected)}`, predicted: result.land }
     const began = clock.now()
     const deadline = Math.max(4000, ((result.ticks ?? 70) + 10) * 50)
     while (!ctl.aborted && bot.health > 0 && clock.now() - began < deadline) {
-      if (bot.entity.position.distanceTo(from) > 2 && safe(bot.entity.position)) return { ok: true, pearl: true, at: bot.entity.position.clone() }
+      const p = bot.entity.position
+      if ((rescue && forced || p.distanceTo(from) > 2) && safe(p) && (!rescue || inside(p) && !contact() &&
+          (!result.land || p.distanceTo(new Vec3(result.land.x, result.land.y, result.land.z)) < 2) &&
+          (require('../navigation/geometry') as typeof import('../navigation/geometry')).bodyClear(bot, p, { water: true }))) return { ok: true, pearl: true, at: p.clone() }
       await clock.sleep(50)
     }
     return { ok: false, why: ctl.aborted ? 'escape interrupted' : 'escape teleport unconfirmed' }
+    } finally { if (rescue) bot.removeListener?.('forcedMove', onMove) }
   }
   return { snapshot, run }
 }

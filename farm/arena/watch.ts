@@ -178,13 +178,32 @@ export function installSight (ctx: ArenaContext) {
       }
       farCatalogue.set(c, out); return out
     }
-    // Все места у цели; досягаемость копателю и разнос проверяет планировщик.
+    // Порядок x,z,F при равной дальности совпадает с порядком общего каталога.
+    const columns = new Map<number, typeof holeCells>()
+    const columnKey = (x: number, z: number) => (x + L.half) * (2 * L.half + 1) + z + L.half
+    for (const cell of holeCells) {
+      const key = columnKey(cell.x, cell.z)
+      if (!columns.has(key)) columns.set(key, [])
+      columns.get(key)!.push(cell)
+    }
     digSites = p => {
       const rx = p.x - X, ry = p.y - Y, rz = p.z - Z, out: any[] = []
       // С самой клетки у него под ногами (пользователь 21.10: «включая поломку блоков под ногами врага») до 6 бл.: стоящему —
       // пол из-под ног, бегущему — яма впереди (порядок задаёт plan-jobs по его ходу).
-      for (const c of holeCells.filter(c => Math.abs(c.F - ry) < 1.6).map(c => ({ c, d: Math.hypot(c.x + .5 - rx, c.z + .5 - rz) })).filter(o => o.d <= 6).sort((a, b) => a.d - b.d)) {
-        out.push({ ...c.c, stands: allStands(c.c), x: X + c.c.x, y: Y + c.c.y, z: Z + c.c.z })
+      const near: { cell: any; distance: number }[] = []
+      for (let x = Math.max(-L.half, Math.floor(rx) - 6); x <= Math.min(L.half, Math.floor(rx) + 6); x++) {
+        for (let z = Math.max(-L.half, Math.floor(rz) - 6); z <= Math.min(L.half, Math.floor(rz) + 6); z++) {
+          const column = columns.get(columnKey(x, z))
+          if (!column) continue
+          const distance = Math.hypot(x + .5 - rx, z + .5 - rz)
+          if (distance > 6) continue
+          for (const cell of column) {
+            if (Math.abs(cell.F - ry) < 1.6) near.push({ cell, distance })
+          }
+        }
+      }
+      for (const { cell } of near.sort((a, b) => a.distance - b.distance)) {
+        out.push({ ...cell, stands: allStands(cell), x: X + cell.x, y: Y + cell.y, z: Z + cell.z })
       }
       return out
     }
@@ -287,6 +306,7 @@ export function watchStatus (ctx: ArenaContext) {
   let tailTraceAt = 0
   const panicStops = new WeakMap<object, { round: number, action: any }>()
   const spreading = new WeakMap<object, { round: number, holder: string, mate: string, action: any }>()
+  const digging = new WeakMap<object, { round: number, action: any, cells: Set<string>, at: number }>()
   // Мобы глазами бойцов — раз в секунду (только с мобами на арене: ARMS_MOBS).
   const mobPollT = process.env.ARMS_MOBS ? setInterval(() => {
     for (const b of bots) {
@@ -328,11 +348,19 @@ export function watchStatus (ctx: ArenaContext) {
         (b.swarmTask?.data?.bait || b.swarmTask?.data?.perch) && b.swarmTask.position && dist3(b.swarmTask.position, m.p) < 3 || b.swarmExecuting && (b.swarmBusyUntil || ctx.swarmDriver?.holding?.(b)) || busy.has(b.name) || (b.last?.m === 'craft' && b.last.pending) || (/^(mine|dig_to|swarm_work|box_in|box_out|ladder_up|tnt_at)$/.test(b.last?.m || '') && Date.now() - b.last.at < ((b.last.p?.timeoutSeconds ?? 12) + 2) * 1000)) { b.anchor = null; continue }
       // A delayed status or paused native physics is not evidence that a route is physically stuck.
       if (!Number.isFinite(m.observedAt) || !Number.isFinite(m.frameAt) || Date.now() - Math.min(m.observedAt, m.frameAt) > 5000) { b.anchor = null; continue }
+      if (b.last?.m === 'goto' && b.last.pending !== false && m.targetDig) {
+        let work = digging.get(b)
+        if (work?.round !== ctx.round || work.action !== b.last) digging.set(b, work = { round: ctx.round, action: b.last, cells: new Set(), at: b.last.at })
+        const key = `${m.targetDig.x},${m.targetDig.y},${m.targetDig.z}`
+        if (!work.cells.has(key)) { work.cells.add(key); work.at = Date.now() }
+      }
       if (!b.anchor || dist3(b.anchor.p, m.p) > 1) { b.anchor = { p: { ...m.p }, at: Date.now() }; continue }
-      // Свежий бой не наследует неподвижность прежнего похода (Codex 15.10: «стоит 20 с — fight (0 с) — сброс» → 0/0 cancelled).
-      const still = Date.now() - (b.last?.m === 'fight' ? Math.max(b.anchor.at, b.last.at) : b.anchor.at)
-      // Поход ещё считает путь (до 4 с в Колизее при 30 ботах) — до конца его времени не сбрасывать.
-      if (b.last?.m === 'goto' && Date.now() - b.last.at < ((b.last.p?.timeoutSeconds || 10) + 2) * 1000) continue
+      // Свежий бой и начатое употребление предмета не наследуют неподвижность предыдущего дела.
+      const ownStart = b.last?.m === 'fight' || (b.swarmTask?.kind === 'recover' && b.last?.pending && (b.last.m === 'eat' || b.last.m === 'antidote'))
+      const still = Date.now() - (ownStart ? Math.max(b.anchor.at, b.last.at) : b.anchor.at)
+      // Новый блок — работа на месте в том же бюджете; один застывший target или повтор клеток его не продлевает.
+      const work = digging.get(b)
+      if (b.last?.m === 'goto' && Date.now() - Math.max(b.last.at, work?.action === b.last && work.round === ctx.round ? work.at : 0) < ((b.last.p?.timeoutSeconds || 10) + 2) * 1000) continue
       if (b.last?.m === 'chest_take' && Date.now() - b.last.at < (Math.min(45, b.last.p?.timeoutSeconds ?? 45) + 4) * 1000) continue
       if (b.last?.m === 'assist' && b.last.p?.mode === 'pickup' && Date.now() - b.last.at < 10000) continue
       // Стойка роя (щит, засада, оцепление, ожидание у стройки) стоит нарочно: сброс рвал её 36 раз за 2.5 мин (арена 14.10).
@@ -347,11 +375,10 @@ export function watchStatus (ctx: ArenaContext) {
       // Отказ конкретного подхода: снимается сменой стойки/раунда, а не ожиданием; читатель — swarm-driver (1b).
       if (goal && Number.isFinite(goal.x) && !(b.badSpots || []).some(s => dist3(s, goal) < 1)) (b.badSpots ||= []).push({ x: goal.x, y: goal.y, z: goal.z, from: { ...m.p }, round: ctx.round })
       log(`🧊 ${b.name} стоит ${Math.round(still / 1000)} с — ${L0.m || '?'} ${L0.p?.item || L0.p?.target || L0.p?.mode || ''} (${L0.at ? Math.round((Date.now() - L0.at) / 1000) + ' с' : ''}${L0.pending ? ', ждёт ответа' : ', ответ ' + (L0.status || '?')}; ход ${b.swarmTask?.kind || '-'}${b.swarmExecuting ? '' : ' вне хода'}${L0.p?.timeoutSeconds ? '; срок ' + L0.p.timeoutSeconds + ' с' : ''}${L0.p?.climb ? ', climb' : ''}; y ${m.p.y.toFixed(0)}${Number.isFinite(goal?.y) ? '→' + goal.y.toFixed(0) + ' в ' + Math.round(dist3(goal, m.p)) + ' бл.' : ''}) — сброс`)
-      // Застрял наверху (крыша камеры, уступ галереи: спуск 6+ без воды pathfinder не планирует) — спрыгнуть.
-      // Человек высоко (соло, 12.10: «поднимаются ко мне и встают» — спрыгивали и телепортировались на старт): наверху — охота, не застревание.
-      if (m.p.y > Y + 3 && !(SOLO && Object.values(humans).some((h: any) => h.p && h.p.y > Y + 6))) b.needDrop = true
-      // Шёл выше (галерея, ярус) и встал — подбросить себя зарядом ветра (10.10), если есть.
-      else if (goal && Number.isFinite(goal.y) && goal.y - m.p.y >= 3 && (m.inv || {}).wind_charge) b.needLift = { x: goal.x, z: goal.z }
+      // Участок подъёма мог закончиться на промежуточном ярусе. Отсюда можно искать новый подход к верхней цели.
+      const ascendingRoute = L0.m === 'goto' && Number.isFinite(goal?.y) && goal.y > m.p.y
+      const dropToField = !ascendingRoute && m.p.y > Y + 3 &&
+        !(SOLO && Object.values(humans).some((h: any) => h.p && h.p.y > Y + 6))
       // Второй сброс на том же месте (2 бл.) — путь отсюда не строится (желоб у края поля с дном из плачущего обсидиана:
       // «застрял на air у air», 31i 22 сброса за 196 с, 15.10): выбраться простыми шагами — dig_to к цели (прыжок, подкоп, блок).
       b.frozen = b.frozen && dist3(b.frozen.p, m.p) < 2 ? { ...b.frozen, n: b.frozen.n + 1 } : { p: { ...m.p }, round: ctx.round, n: 1 }
@@ -369,10 +396,8 @@ export function watchStatus (ctx: ArenaContext) {
           if ((d.steps > 0 || d.dug > 0) && b.frozen?.recovery === recovery) delete b.frozen.recovery
           log(`🧊 ${b.name}: выбираюсь шагами — ${d.steps ?? 0} шаг., ${d.dug ?? 0} бл.${d.why ? ' (' + String(d.why).slice(0, 50) + ')' : ''}`)
         }).catch(() => {})
-      // Застрял наверху — спуск к полю с разрешённым падением (как было до разделения ffa.ts 14.10: needDrop ставился, а читателя
-      // не осталось; cl28s — бот на крыше Колизея y 153, 1749 путей боя noPath). Резерв: ход не перебивает спуск до ответа.
-      else if (b.needDrop && !b.swarmReserved) {
-        b.needDrop = false
+      // Застрял на крыше вне подъёма — спуск к полю с разрешённым падением. Резерв защищает спуск до ответа.
+      else if (dropToField && !b.swarmReserved) {
         const token = {}, from = m.p.y
         b.swarmReserved = token
         b.c.call('stop').catch(() => {}).then(() => ctx.between || ctx.round !== round || !ctx.alive(b.name) ? null :
@@ -452,7 +477,7 @@ export function watchStatus (ctx: ArenaContext) {
       // (под нагрузкой ответ идёт сотни мс; ревью 14.10).
       const asked = Date.now()
       b.c.call('status', {
-      swarm: true, dangers: arms,
+      swarm: true, dangers: arms, physics: b.last?.m === 'goto' && b.last.pending !== false,
       swarmAllies: teams ? bots.filter(o => o.team === b.team).map(o => o.name) : []
     }).then(s => {
       if (s) b.silentSince = 0
@@ -513,6 +538,8 @@ export function watchStatus (ctx: ArenaContext) {
       const now = Date.now(), frame = s.state.physicsTicks ?? tick, clockId = s.state.clock?.id
       const frameAt = was?.frame === frame && was?.clockId === clockId ? (was.frameAt ?? now) : now
       pos[b.name] = { p, v, hp: s.state.health, food: s.state.food, gliding: !!s.state.gliding, rescuing: !!s.detail?.rescuing, combo: s.detail?.combo || null, lance: s.state.lance || null, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: withOffHand(s.state.inventory, s.state.offHand), attackArrows: s.state.attackArrows, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
+      pos[b.name].loadedCrossbow = !!s.state.loadedCrossbow
+      pos[b.name].targetDig = s.detail?.physics?.pathfinder?.mining ? s.detail.physics.targetDig : null
       pos[b.name].antidote = s.state.antidote ? { ...s.state.antidote, receivedAt: now } : undefined
       if (dz && !pos[b.name].rescuing) b.c.onDanger?.({ pos: p, dangers: dz, observedAt: asked, status: true })
       // Реактивный сброс ветром (тело: combat/wind-out): попытки — в журнал, бросок — метка на цели для учёта смерти.

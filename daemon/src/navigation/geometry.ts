@@ -1,4 +1,5 @@
 import { Vec3 } from 'vec3'
+import { rayBox } from '../pick'
 
 export interface Point { x: number; y: number; z: number }
 export type Shape = readonly [number, number, number, number, number, number]
@@ -34,14 +35,25 @@ export function intersects(a: Box, b: Box): boolean {
 // Поиск модуля — раз, а не на каждую клетку тела (bodyClear зовут тысячи раз за пересчёт бега).
 let movementMod: typeof import('../movement') | null = null
 const waterCell = () => (movementMod ??= require('../movement') as typeof import('../movement')).waterCell
-export function bodyClear(world: CollisionWorld, pos: Point, { web = false, water = false, powder = false }: { web?: boolean; water?: boolean; powder?: boolean } = {}): boolean {
-  const body = bodyBox(world, pos)
-  for (let x = Math.floor(body.minX); x <= Math.floor(body.maxX); x++) {
-    for (let z = Math.floor(body.minZ); z <= Math.floor(body.maxZ); z++) {
-      for (let y = Math.floor(body.minY) - 1; y <= Math.floor(body.maxY); y++) {
+export function bodyClear(world: CollisionWorld, pos: Point, { web = false, water = false, powder = false, from }: { web?: boolean; water?: boolean; powder?: boolean; from?: Point } = {}): boolean {
+  const body = bodyBox(world, pos), start = from ? bodyBox(world, from) : body
+  const { half, height } = dimensions(world)
+  const delta = from && { x: pos.x - from.x, y: pos.y - from.y, z: pos.z - from.z }
+  for (let x = Math.floor(Math.min(body.minX, start.minX)); x <= Math.floor(Math.max(body.maxX, start.maxX)); x++) {
+    for (let z = Math.floor(Math.min(body.minZ, start.minZ)); z <= Math.floor(Math.max(body.maxZ, start.maxZ)); z++) {
+      for (let y = Math.floor(Math.min(body.minY, start.minY)) - 1; y <= Math.floor(Math.max(body.maxY, start.maxY)); y++) {
         const block = world.blockAt(new Vec3(x, y, z), false)
-        if (!block) return false
+        if (!block) {
+          // The extra sweep tests known hazards; unknown-space refusal keeps its original endpoint grid.
+          if (x >= Math.floor(body.minX) && x <= Math.floor(body.maxX) && z >= Math.floor(body.minZ) && z <= Math.floor(body.maxZ) &&
+              y >= Math.floor(body.minY) - 1 && y <= Math.floor(body.maxY)) return false
+          continue
+        }
         const cell = { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 }
+        // Entity.collidedWithFluid checks the moving AABB between native receipts, too.
+        if (from && /^(lava|fire|soul_fire)$/.test(block.name) && rayBox(from, delta,
+          { x: x - half + EPS, y: y - height + EPS, z: z - half + EPS },
+          { x: x + 1 + half - EPS, y: y + 1 - EPS, z: z + 1 + half - EPS }, 1) !== null) return false
         if (intersects(body, cell) && (HAZARD.test(block.name) && !(powder && block.name === 'powder_snow') || !web && block.name === 'cobweb' || !water && waterCell()?.(block))) return false
         if (shapeBoxes(block, { x, y, z }).some(box => intersects(body, box))) return false
       }

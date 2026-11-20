@@ -17,6 +17,16 @@ function bag (stock) {
   }
   return bot
 }
+test('capacity recovery stops before a second toss when the first toss is cancelled', async () => {
+  const bot = bag([{ name: 'soul_sand', count: 8 }, { name: 'respawn_anchor', count: 1 },
+    ...Array.from({ length: 34 }, () => ({ name: 'potion', count: 1 }))])
+  const ctl = { aborted: false }, toss = bot.tossStack
+  let tossed = 0
+  bot.tossStack = async it => { await toss(it); tossed++; ctl.aborted = true }
+  await makeRoom(bot, { slots: 2, forItem: 'netherite_boots', ctl })
+  assert.equal(tossed, 1)
+  assert.equal(bot.inventory.items().some(it => it.name === 'respawn_anchor'), true)
+})
 test('уборка соединяет одинаковые стопки, сохраняя их предметы', async () => {
   const bot = bag([{ name: 'bowl', type: 10, count: 1 }, { name: 'bowl', type: 10, count: 2 }])
   await tidy(bot)

@@ -224,7 +224,11 @@ function aim (from, target, k, u = null, airborne = false) {
 // жемчуг: не точка удара, а позиция жемчуга в начале тика, в котором он
 // ударился (ThrownEnderpearl.onHit → oldPosition()), до полутора блоков раньше
 // по пути и выше пола; падение после переноса обнуляется.
-function landing (bot, from, yaw, pitch, k, u = null, airborne = false) {
+function landing (bot, from, yaw, pitch, k, u = null, airborne = false, collideEntities = false) {
+  const pick: typeof import('./pick') = require('./pick')
+  const solid = { blockAt(p, extra) { const b = bot.blockAt(p, extra); return b?.boundingBox === 'block' ? b : null } }
+  const bodies = collideEntities ? (Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity && e.id !== bot.entity?.id && e.position && e.isValid !== false &&
+    (e.username || e.type === 'player' || e.type === 'mob') && bot.players?.[e.username]?.gamemode !== 3 && e._ndVisible !== false && pick.canHit(bot, e, { range: 64 })) : []
   const l = launch(pitch, k)
   let v = new Vec3(-Math.sin(yaw) * l.vh, l.vy, -Math.cos(yaw) * l.vh)
   if (u) v = v.plus(new Vec3(u.x, airborne ? u.y : 0, u.z))
@@ -235,7 +239,19 @@ function landing (bot, from, yaw, pitch, k, u = null, airborne = false) {
     if (len < 1e-4) return { at: p, tp: p, ticks: t }
     try {
       // Копией: Vec3.normalize() меняет сам вектор — скорость стала бы единичной.
-      const hit = bot.world.raycast(p, v.scaled(1 / len), len, b => b && b.boundingBox === 'block')
+      const direction = v.scaled(1 / len)
+      const block = collideEntities ? pick.blockOnRay(solid, p, direction, len) : null
+      let first = block?.t ?? len, entity = null
+      // ProjectileUtil.computeMargin / AABB.clip, 1.21.11: a fresh projectile starts at age one.
+      const margin = Math.max(0, Math.min(Math.fround(.3), Math.fround((t + 1 - 2) / 20)))
+      for (const e of bodies) {
+        const box = pick.hitboxOf(bot, e)
+        const hit = pick.rayBox(p, direction, { x: box.lo.x - margin, y: box.lo.y - margin, z: box.lo.z - margin },
+          { x: box.hi.x + margin, y: box.hi.y + margin, z: box.hi.z + margin }, first)
+        if (hit !== null && hit > 0 && hit < first) { first = hit; entity = e }
+      }
+      if (entity) return { at: p.plus(direction.scaled(first)), tp: p, entity, ticks: t + 1 }
+      const hit = collideEntities ? block && { ...block.block, intersect: p.plus(direction.scaled(block.t)) } : bot.world.raycast(p, direction, len, b => b && b.boundingBox === 'block')
       if (hit) return { at: hit.intersect || hit.position.offset(0.5, 1, 0.5), tp: p, block: hit, ticks: t + 1 }
     } catch { return null }
     p = p.plus(v)
@@ -361,14 +377,14 @@ async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null
       let sol
       if (pick) {
         const mv = { ...moved }
-        sol = pick({ from, moved: mv, airborne, landing: (yaw, pitch) => landing(bot, from, yaw, pitch, k, mv, airborne) })
+        sol = pick({ from, moved: mv, airborne, landing: (yaw, pitch, entities = false) => landing(bot, from, yaw, pitch, k, mv, airborne, entities) })
       } else {
         sol = mode === 'old'
           ? oldAim(from, typeof target === 'function' ? target(0) : target, k)
           : aim(from, target, k, moved, airborne)
       }
       if (sol) bot.look(sol.yaw, sol.pitch, true).catch(() => {})
-      const land = sol ? landing(bot, from, sol.yaw, sol.pitch, k, mode === 'old' ? null : moved, airborne) : null
+      const land = sol ? landing(bot, from, sol.yaw, sol.pitch, k, mode === 'old' ? null : moved, airborne, !!sol.entityCollision) : null
       const shot = { sol, land, from, airborne, moved: { ...moved } }
       ;(require('./edges') as typeof import('./edges')).afterPacket(bot, () => {
         if (!sol) { resolve(shot); return }
@@ -470,25 +486,45 @@ function safeLanding (bot, tp) {
 // maxDrop — насколько ниже своих ног можно оказаться: в бою на арене в небе
 // жемчуг «подальше от него» улетал в дыру и переносил на землю в полусотне
 // блоков внизу — вылет с ринга (прогон 2026-09-26).
-function escapePick (bot, score, { minDist = 8, maxDrop = Infinity }: any = {}) {
+function escapePick (bot, score, { rescue = false, minDist = rescue ? 0 : 8, maxDrop = Infinity }: any = {}) {
+  const nearBurn = rescue ? (require('./pvp/movement') as typeof import('./pvp/movement')).burnStepCost(bot) : null
   return (ctx) => {
-    let best = null
+    let exposure: { hp: number; pearl: number; lava: number; interval: number } | null = null
+    if (rescue) {
+      const model: typeof import('./pvp/damage-model') = require('./pvp/damage-model')
+      const own: typeof import('./pvp/combat-observe') = require('./pvp/combat-observe')
+      const read: typeof import('./read') = require('./read')
+      const def = model.defenseOf([5, 6, 7, 8].map(s => own.itemObs(bot, bot.inventory?.slots?.[s])), { resistance: own.effectAmp(bot, 'resistance') })
+      // Unknown hurt phase: lavaHurt is 4 raw HP, with the existing ten-tick iframe window.
+      exposure = { hp: (bot.health ?? 20) + read.absorptionOf(bot, bot.entity), pearl: (require('./pearl-hop') as typeof import('./pearl-hop')).pearlDamage(bot),
+        lava: own.effectAmp(bot, 'fire_resistance') >= 0 ? 0 : model.afterDefense(4, 'fire', def), interval: model.IFRAME_TICKS }
+    }
+    let best = null, fallback = null
     for (let i = 0; i < 16; i++) {
       const yaw = (i / 16) * Math.PI * 2
-      for (const deg of [5, 15, 25, 35]) {
+      for (const deg of rescue ? [-80, -35, -25, -15, -5, 5, 15, 25, 35, 45, 55, 65, 75, 80, 85, 88] : [5, 15, 25, 35]) {
         const pitch = deg * DEG
-        const land = ctx.landing(yaw, pitch)
+        const land = ctx.landing(yaw, pitch, rescue)
         if (!land || land.void || !land.tp) continue
         const tp = land.tp
         if (Math.hypot(tp.x - ctx.from.x, tp.z - ctx.from.z) < minDist) continue
         const ground = safeLanding(bot, tp)
         if (!ground) continue
+        if (rescue && !(require('./navigation/geometry') as typeof import('./navigation/geometry')).bodyClear(bot, tp, { water: true })) continue
         if (bot.entity && bot.entity.position.y - ground.floorY > maxDrop) continue
-        const sc = score(tp, land) - (ground.fall || 0) * 0.5
-        if (!best || sc > best.sc) best = { yaw, pitch, sc, tp }
+        const scored = score(tp, land)
+        if (!Number.isFinite(scored)) continue
+        const risk = nearBurn ? nearBurn({ position: tp.floored().offset(0, 1, 0) }) : 0
+        const candidate = { yaw, pitch, sc: rescue ? -risk : scored - (ground.fall || 0) * 0.5, tp, risk, ticks: land.ticks }
+        // Even the best initial iframe cannot save a flight longer than our remaining lava + pearl HP budget.
+        if (exposure && exposure.pearl + Math.max(0, Math.ceil(land.ticks / exposure.interval) - 1) * exposure.lava >= exposure.hp) continue
+        if (rescue && (!fallback || candidate.ticks < fallback.ticks || candidate.ticks === fallback.ticks && risk < fallback.risk)) fallback = candidate
+        if (exposure && exposure.pearl + Math.ceil(land.ticks / exposure.interval) * exposure.lava >= exposure.hp) continue
+        if (!best || candidate.sc > best.sc || rescue && candidate.sc === best.sc && candidate.ticks < best.ticks) best = candidate
       }
     }
-    return best ? { yaw: best.yaw, pitch: best.pitch, ticks: null, at: best.tp, sc: best.sc } : null
+    best ||= rescue && canSurvivePearl(bot) ? fallback : null
+    return best ? { yaw: best.yaw, pitch: best.pitch, ticks: rescue ? best.ticks : null, at: best.tp, sc: best.sc, entityCollision: rescue } : null
   }
 }
 

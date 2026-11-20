@@ -191,6 +191,12 @@ export class TacticalSystem {
       this.arbiter.hold(this.episode.action)
       return
     }
+    // The consumed bucket disappears before the water ACK. Keep this bounded action through extinguish + pickup.
+    if (this.pending && this.episode?.action.id === 'UseWater' && decision.level < 3 && !hazard &&
+        (!decision.selected || decision.selected.score <= this.episode.action.score)) {
+      this.arbiter.hold(this.episode.action)
+      return
+    }
     // Losing contact while a wall is placed must not cancel bounded defence for Shield. A flight runs to its own safe
     // distance: released at the 16-block sight edge, a pursuer still inside its FOLLOW_RANGE walked back into contact.
     // A calm sample is not the server receipt of a pending bite or recovery.
@@ -538,17 +544,8 @@ export class TacticalSystem {
       case 'UseWater': {
         const bucket = bot.inventory.items().find((item: MinecraftEntity) => item.name === 'water_bucket')
         if (!bucket || ctl.aborted) return { unavailable: true }
-        await bot.equip(bucket, 'hand')
-        if (ctl.aborted) return { cancelled: true }
-        await bot.look(bot.entity.yaw, -Math.PI / 2, true)
-        const feet = bot.entity.position.floored()
-        bot.activateItem()
-        await movement.sleep(200)
-        const extinguished = !!bot.entity.isInWater
-        // Воду — назад в ведро, как бой (pvp fireTurn: потушился и зачерпнул): иначе к следующему поджогу ведро пустое
-        // (стенд 21.10: меч чемпиона с Огненным аспектом поджигал синих раз за разом).
-        if (extinguished && !ctl.aborted) await (require('../../obsidian') as typeof import('../../obsidian')).scoopWater(bot, feet).catch(() => false)
-        return { extinguished }
+        const result = await (require('../../director/fire') as typeof import('../../director/fire')).escapeFire(session, ctl)
+        return { ...result, extinguished: result.status === 'done', ...(result.status === 'failed' ? { failed: true, reason: 'water extinguish not confirmed' } : {}) }
       }
       case 'Surface': return movement.escapeWater(bot, ctl, { timeoutMs: 15000, visibleOnly: true })
       case 'EnterPortal': return (require('../../nether') as typeof import('../../nether')).enter(session, ctl, { scan: 4, timeoutSeconds: 20, noIgniter: true })

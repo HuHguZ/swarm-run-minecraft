@@ -196,23 +196,30 @@ const throwPearl = async (target, options: any = {}) => {
     const inputs = quote()
     if (failedPearl?.inputs === inputs) return null
     const origin = ctx.bot.entity.position.clone()
+    let landed = origin, forced = false
+    const onMove = () => { landed = ctx.bot.entity.position.clone(); forced = !landed.equals(origin) }
+    ctx.bot.on?.('forcedMove', onMove)
+    try {
     const r = (await ctx.holdItem(pearl)) ? await ctx.throwMod.throwAt(ctx.bot, target, {
       ...options, item: ctx.bot.heldItem
     }).catch(() => null) : null
     if (!r?.thrown) { failedPearl = { inputs: quote(), why: r?.why || 'throw_unconfirmed' }; return r }
     const start = ctx.gameClock?.now()
-    const arrived = () => ctx.bot.entity.position.distanceTo(origin) > 2 && (!r.land || Math.hypot(ctx.bot.entity.position.x - r.land.x,
-      ctx.bot.entity.position.y - r.land.y, ctx.bot.entity.position.z - r.land.z) < 2)
+    const arrived = () => {
+      const at = forced ? landed : ctx.bot.entity.position
+      return (forced || at.distanceTo(origin) > 2) && (!r.land || Math.hypot(at.x - r.land.x, at.y - r.land.y, at.z - r.land.z) < 2)
+    }
     while (start != null && !ctx.ctl?.aborted && !arrived() && ctx.gameClock.now() - start < ((r.ticks || 40) + 2) * ctx.TICK_MS) await ctx.sleep(ctx.TICK_MS)
     failedPearl = arrived() ? null : { inputs: quote(), why: 'teleport_not_confirmed' }
     return { ...r, teleported: arrived() }
+    } finally { ctx.bot.removeListener?.('forcedMove', onMove) }
   }
 
-const escapePearl = async ({ jump = 'auto' }: any = {}) => {
+const escapePearl = async ({ jump = 'auto', rescue = false }: any = {}) => {
     const from = ctx.entity.position.clone()
     ctx.aim = 'free'
     const r = await throwPearl(null, { jump,
-      pick: ctx.throwMod.escapePick(ctx.bot, tp => Math.min(32, Math.hypot(tp.x - from.x, tp.z - from.z)), { maxDrop: 4 }) })
+      pick: ctx.throwMod.escapePick(ctx.bot, tp => Math.min(32, Math.hypot(tp.x - from.x, tp.z - from.z)), { maxDrop: 4, rescue }) })
     ctx.aim = 'target'
     if (!r?.thrown) { await ctx.holdWeapon(); return null }
     ctx.used('жемчуг: оторвался')

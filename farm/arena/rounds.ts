@@ -6,6 +6,8 @@ import { champTurn } from './champion'
 import { teamOfHuman } from './humans'
 import { dress } from './gear'
 import { LAN, lanCmd } from './server'
+import { restoreRoundRoster } from './fleet'
+import { configureRescue } from './map'
 import type { ArenaContext } from './context'
 import * as fs from 'fs'
 
@@ -84,10 +86,11 @@ export function installRounds (ctx: ArenaContext) {
   // ARMS_GIVE_ALL=1 — обеим командам (пользователь 24.10: «предметы все сразу ботам выдавать, чтобы быстрее тесты прошли»).
   const GIVE_TO = process.env.ARMS_GIVE_ALL === '1' ? '@a[gamemode=survival]' : '@a[team=blue,gamemode=survival]'
   ctx.giveBlue = async () => { for (const g of GIVE) await rcon(i, `give ${GIVE_TO} minecraft:${g}`).catch(() => {}); if (GIVE.length) log(`🎒 ${process.env.ARMS_GIVE_ALL === '1' ? 'всем' : 'синим'} выдано: ${GIVE.join(', ')}`) }
-  ctx.spreadBots = async () => {
+  ctx.spreadBots = async (joined?: Set<string>) => {
     const ready = new Set<string>()
     const park = (name: string) => rcon(i, `gamemode spectator ${name}`).catch(e => { ctx.stop = true; throw e })
     for (const [k, b] of bots.entries()) {
+      if (joined && !joined.has(b.name)) { out.add(b.name); continue }
       const h = ctx.armsHome(b, k)
       const command = `spreadplayers ${Math.floor(h.x)} ${Math.floor(h.z)} 0 3 under ${Math.max(Y + 3, h.y + 3)} false ${b.name}`
       const spread = async () => String(await (LAN ? lanCmd(command, 20000, /^(Spread |Could not spread|Invalid maxHeight|No (?:player|entity))/) : rcon(i, command, 20000))).trim()
@@ -140,8 +143,15 @@ export function installRounds (ctx: ArenaContext) {
     ctx.round++
     ctx.swarmDriver.reset()
     for (const t of ['item', 'arrow', 'experience_orb', 'splash_potion']) await rcon(i, `kill @e[type=${t},${BOX}]`).catch(() => {})
-    await ctx.restoreArena()
-    await ctx.stockChests(ctx.round)
+    const rebuild = async () => { await ctx.restoreArena(); await ctx.stockChests(ctx.round) }
+    let joined: Set<string> | undefined
+    if (!LAN && ctx.COLOS_MAP && process.env.ARMS_RESET !== '0') {
+      try {
+        joined = await restoreRoundRoster(i, bots, rcon, rebuild, log)
+        for (const b of bots) if (joined.has(b.name)) await rcon(i, `gamemode spectator ${b.name}`)
+        await Promise.all(bots.filter(b => joined!.has(b.name)).map(b => configureRescue(ctx, b)))
+      } catch (error) { ctx.stop = true; log(`⚠ восстановление раунда ${ctx.round}: ${error}`); throw error }
+    } else await rebuild()
     for (const k of Object.keys(deathAt)) delete deathAt[k]
     for (const k of Object.keys(radio)) delete radio[k]
     opened.clear(); chestBy.clear(); chestFail.clear(); refills.clear()
@@ -149,6 +159,7 @@ export function installRounds (ctx: ArenaContext) {
     for (const k of Object.keys(brewed)) delete brewed[k]
     for (const k of Object.keys(alchemist)) delete alchemist[k]
     for (const [k, b] of bots.entries()) {
+      if (joined && !joined.has(b.name)) continue
       const h = ctx.armsHome(b, k)
       for (const c of [`tp ${b.name} ${h.x} ${h.y} ${h.z}`, `clear ${b.name}`, `effect clear ${b.name}`, `effect give ${b.name} minecraft:instant_health 1 10 true`, `effect give ${b.name} minecraft:saturation 1 20 true`]) await rcon(i, c).catch(() => {})
       await ctx.roundKit(b)
@@ -156,7 +167,7 @@ export function installRounds (ctx: ArenaContext) {
     // По списку онлайн, а не по карте humans: под нагрузкой сброса раунда чтение Pos у неё отваливается (10.10: «не телепортировало»).
     // Успешно размещённые продолжают раунд; остальные остаются зрителями и не считаются живыми.
     out.clear()
-    await ctx.spreadBots()
+    await ctx.spreadBots(joined)
     ctx.readDeaths()
     deadNow.clear(); ctx.humanOut.clear()
     for (const b of bots) if (!out.has(b.name)) await rcon(i, `gamemode survival ${b.name}`)
@@ -236,11 +247,11 @@ export async function fighterLoop (ctx: ArenaContext, b) {
   // Тело не в игре (отвалилось, выкинуто) — переподключить; новое — только когда прежнее кончилось: без этого оно числилось
   // живым до конца раунда, команда не пустела и раунд кончался по времени (бой роя 24.10: трое, 1600 ходов впустую).
   const reconnect = async (b) => {
-    if (b.reconnecting) return
+    if (b.reconnecting || ctx.between) return
     b.reconnecting = true
     try {
       const st = await b.c.call('status').catch(() => null)
-      if (st?.state?.pos) return
+      if (st?.state?.pos || ctx.between) return
       const r = await b.c.call('connect').catch(x => ({ why: x.message }))
       log(`🔌 ${b.name}: тело не в игре — переподключаю: ${r?.why || (r?.already ? 'уже в игре' : 'ok')}`)
       if (ctx.arms && out.has(b.name)) await rcon(i, `gamemode spectator ${b.name}`).catch(() => {})

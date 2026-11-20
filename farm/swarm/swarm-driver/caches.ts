@@ -194,7 +194,7 @@ export function swarmCaches (sw: SwarmDriverCtx) {
     return dropped
   }
   // Сундуки, открытые своими (взятием тайника и обычным лутом), — повторно не брать (их содержимое команда уже знает). Свой
-  // набор у команды (общий emptyChests драйвера — на обе команды, его копатель не трогает). Отмечается после того, как окно
+  // набор у команды. Отмечается после того, как окно
   // открылось или вещи подобраны; неудача взятия — retry.ts (с того же места не повторять).
   const teamOpened = new Map<string, Set<string>>()
   const openedBy = b => { const t = teamOf(b) + ':' + sw.generation; let set = teamOpened.get(t); if (!set) { set = new Set(); teamOpened.set(t, set) } return set }

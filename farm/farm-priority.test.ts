@@ -13,17 +13,18 @@ test('nice and slot priority include both farm fighters and exclude live/boundar
   const priorities = []; const affinity = []
   const context = vm.createContext(cjsContext({ __dirname, __filename: cli, Buffer, setTimeout, clearTimeout,
     process: { argv: ['node', cli, 'nice'], env: {}, pid: 99 }, console: { log () {}, error: message => { throw new Error(message) } },
-    require: name => name === 'fs' ? { readFileSync: () => JSON.stringify({ maxUp: 4, cores: 'ccd1', prio: '30' }) }
+    require: name => name === './listeners' ? { listenerOwners: async ports => {
+      assert.ok(ports.every(port => ![8765, 8768, 25565].includes(port)))
+      return new Map(entries as [number, number][])
+    } } : name === 'fs' ? { readFileSync: () => JSON.stringify({ maxUp: 4, cores: 'ccd1', prio: '30' }) }
       : name === 'os' ? { constants: { priority: { PRIORITY_BELOW_NORMAL: 10, PRIORITY_NORMAL: 0 } }, setPriority: (pid, priority) => priorities.push([pid, priority]) }
       : name === 'child_process' ? { execFileSync: (exe, args) => {
-        if (exe === 'netstat') return entries.map(([port, pid]) => `TCP 127.0.0.1:${port} 0.0.0.0:0 LISTENING ${pid}`).join('\n')
         assert.equal(exe, 'powershell'); affinity.push(args.at(-1)); return ''
       } } : load(name)
   }))
   context.module = { exports: {} }
   context.require.main = context.module
-  vm.runInContext(fs.readFileSync(cli, 'utf8'), context)
-  await Promise.resolve()
+  await vm.runInContext(fs.readFileSync(cli, 'utf8'), context)
   assert.deepEqual(priorities.filter(([, p]) => p === 10).map(([pid]) => pid), [99, 200, 201, 202, 203])
   assert.deepEqual(priorities.filter(([, p]) => p === 0).map(([pid]) => pid), [200, 201, 202])
   assert.equal(affinity.length, 5)

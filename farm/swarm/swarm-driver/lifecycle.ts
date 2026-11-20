@@ -5,7 +5,7 @@ export const currentTurn = (sw: SwarmDriverCtx, b, round: number) =>
   round === sw.generation && sw.alive(b.name) && !b.swarmTurnOwner?.cancelled
 
 export function swarmLifecycle (sw: SwarmDriverCtx) {
-  const { bots, ladderSites, now, alive, boards, holes, walls, ladderRoutes, boxed, boxTries, tourBad, blockedRoutes, blueprints, transfers, planned, plannedAt, visited, cooldown, placed, toured, emptyChests, fullFor, knownChests, telemetry, teamOf, turn } = sw
+  const { bots, ladderSites, now, alive, boards, holes, walls, ladderRoutes, boxed, boxTries, tourBad, blockedRoutes, blueprints, transfers, planned, plannedAt, visited, cooldown, placed, toured, fullFor, knownChests, telemetry, teamOf, turn } = sw
   const turning = new WeakSet<object>()
   function reset() {
     sw.generation++
@@ -17,7 +17,7 @@ export function swarmLifecycle (sw: SwarmDriverCtx) {
     holes.length = 0; walls.clear(); for (const w of ladderSites) walls.set(w.key, { ...w }); ladderRoutes.length = 0; boxed.clear(); boxTries.clear()
     for (const b of bots) { b.boxedCamp = null; b.boxOutTries = 0; delete b.campReacting; delete b.arrowThreat; delete b.swarmAscent; delete b.bowShieldHold; delete b.grabbing; b.climbing = false }
     tourBad.clear(); blockedRoutes.clear()
-    blueprints.clear(); transfers.clear(); planned.clear(); plannedAt.clear(); sw.plannedFoes.clear(); visited.clear(); cooldown.clear(); placed.clear(); toured.clear(); emptyChests.clear(); fullFor.clear(); knownChests.clear(); sw.retries.clear(); sw.sites.clear()
+    blueprints.clear(); transfers.clear(); planned.clear(); plannedAt.clear(); sw.plannedFoes.clear(); visited.clear(); cooldown.clear(); placed.clear(); toured.clear(); fullFor.clear(); knownChests.clear(); sw.retries.clear(); sw.sites.clear()
     for (const b of bots) Promise.resolve(b.c?.call('swarm_keep', { clear: true })).catch(() => {})
   }
   const snapshot = () => Object.fromEntries([...boards].map(([team, board]) => [team, { enemies: board.enemies(), tasks: board.tasks(), stats: { ...telemetry }, learning: board.tacticStats() }]))

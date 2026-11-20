@@ -161,6 +161,12 @@ export function gotoGoal (bot, goal, opts: any = {}) {
           else if (r.status === 'success') {
             const first = prefix[0]
             const ready = []
+            if (r.path[0]?.toPlace?.length && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() &&
+                !first.toBreak?.length && !first.toPlace?.length && !first.ndBridge && !first.ndDescend) {
+              // Rebase a different complete construction route; native owns its landing and placement from the actual body.
+              continuePrefix = true; r.path.length = 0
+              return
+            }
             if (bot.entity?.onGround && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() &&
                 !first.toBreak?.length && !first.toPlace?.length && !first.ndBridge && !first.ndDescend &&
                 bot.pathfinder.canMove?.(prefix) === false) {

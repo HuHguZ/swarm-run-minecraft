@@ -1,7 +1,7 @@
 // Рой: стройка по чертежу, копка вверх к врагу, динамит.
 import { type BlueprintCell, addBlueprint, nextBuild } from '../../../daemon/src/swarm'
 import { swarmBlueprint } from '../../../daemon/src/swarm-work'
-import { BLOCK, blockCount, distance, cellKey } from './common'
+import { BLOCK, blockCount, buildStock, distance, cellKey } from './common'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmBuild (sw: SwarmDriverCtx) {
@@ -10,7 +10,7 @@ export function swarmBuild (sw: SwarmDriverCtx) {
     // Пауза после отказа клетки — для всех путей стройки (31ao, выступ 15.10: «не к чему прислонить» 13 раз за 25 с по задаче build).
     // Клетка не легла (нет блока, далеко, занято, не к чему прислонить) — с того же места и с тем же запасом снова не браться:
     // повтор, когда принесли блоки или бот ушёл (retry.ts), а не через 2/15 с.
-    if (sw.blocked(b, `work:${b.name}`, String(blockCount(pos[b.name]?.inv)))) return false
+    if (sw.blocked(b, `work:${b.name}`, buildStock(pos[b.name]?.inv))) return false
     const { board, member } = context, m = pos[b.name]
     let item = Object.keys(m.inv || {}).find(n => BLOCK.test(n) && m.inv[n] > 0)
     if (!item) return false
@@ -61,10 +61,22 @@ export function swarmBuild (sw: SwarmDriverCtx) {
     const blueprint = blueprints.get(board.team + ':' + cell.data.blueprint)
     if (!blueprint) { board.release(cell.id, b.name, cell.claim.token); return false }
     try {
-      if (blueprint.kind === 'outpost' && cell.position.y === blueprint.origin.y - 1) {
+      const floor = blueprint.kind === 'outpost' && cell.position.y === blueprint.origin.y - 1
+      const stock = pos[b.name]?.inv || {}
+      if (floor || !stock[cell.data.block]) {
         const existing = detail(await b.c.call('swarm_pose', { at: cell.position, inspectOnly: true })).existing
-        if (existing?.solid && existing.name !== cell.data.block && board.release(cell.id, b.name, cell.claim.token)) {
-          board.upsert({ ...cell, data: { ...cell.data, block: existing.name } })
+        // У чертежа общий материал для снабжения, но на пустой клетке годится свой полнотелый блок.
+        // Песок не заменяет камень: в проёме или на крыше он может упасть после установки.
+        let material = cell.data.block
+        if (floor && existing?.solid) material = existing.name
+        else if (!stock[material] && existing?.name !== material) {
+          material = Object.keys(stock).filter(n => stock[n] > 0 && BLOCK.test(n) && n !== 'sand' && n !== 'red_sand')
+            .sort((a, c) => stock[c] - stock[a])[0]
+          if (!material) return false
+        }
+        if (material !== cell.data.block) {
+          if (!board.release(cell.id, b.name, cell.claim.token)) return false
+          board.upsert({ ...cell, data: { ...cell.data, block: material } })
           cell = board.claim(cell.id, b.name, 25000)
           if (!cell) return false
         }
@@ -75,7 +87,8 @@ export function swarmBuild (sw: SwarmDriverCtx) {
       const params = { kind: 'place', at: cell.position, item: actualItem, allies: context.members.map(a => a.id), protected: blueprint.protected.filter(p => cellKey(p) !== cellKey(cell.position)), contained: request.contained || [], timeoutSeconds: 3 }
       if (!renew(board, b, cell)) return false
       let r = detail(await b.c.call('swarm_work', params))
-      if (!r.done && (!r.aborted || r.why === 'direct_threat')) {
+      const missingItem = () => r.why === `нет ${actualItem} в инвентаре`
+      if (!r.done && !missingItem() && (!r.aborted || r.why === 'direct_threat')) {
         let poses = detail(await b.c.call('swarm_pose', { at: cell.position })).poses || []
         if (!poses.length && !r.aborted) {
           const origin = blueprint.origin
@@ -100,7 +113,7 @@ export function swarmBuild (sw: SwarmDriverCtx) {
           if (arrived && [arrived.x, arrived.y, arrived.z].every(Number.isFinite)) m.p = { ...arrived }
           if (!renew(board, b, cell)) return false
           r = detail(await b.c.call('swarm_work', params))
-          if (r.done || r.aborted && r.why !== 'direct_threat') break
+          if (r.done || missingItem() || r.aborted && r.why !== 'direct_threat') break
         }
       }
       // Крыша кокона над целью и над щелью кладётся только сверху: грани соседних клеток крыши смотрят внутрь, с земли и в
@@ -108,7 +121,7 @@ export function swarmBuild (sw: SwarmDriverCtx) {
       // диагонали: места у щелей держит оцепление) и кладка с его верха.
       // Столб к крыше не вышел — к той же крыше с того же места и с теми же блоками не повторять (retry.ts), а не 15 с.
       const roofSig = `${cellKey(blueprint.origin)}:${blockCount(pos[b.name]?.inv)}`
-      if (!r.done && !r.aborted && blueprint.kind === 'cocoon' && cell.position.y === blueprint.origin.y + 2 && !sw.blocked(b, `roof:${b.name}`, roofSig)) {
+      if (!r.done && !r.aborted && !missingItem() && blueprint.kind === 'cocoon' && cell.position.y === blueprint.origin.y + 2 && !sw.blocked(b, `roof:${b.name}`, roofSig)) {
         sw.failed(b, `roof:${b.name}`, roofSig)
         const o = blueprint.origin
         const corners = [[2, 2], [2, -2], [-2, 2], [-2, -2]].map(([dx, dz]) => ({ x: o.x + dx + .5, y: o.y, z: o.z + dz + .5 }))
@@ -133,9 +146,7 @@ export function swarmBuild (sw: SwarmDriverCtx) {
       } else {
         // A timed out worker must never reset a newer owner's claim.
         if (board.release(cell.id, b.name, cell.claim.token)) board.upsert({ ...cell, priority: (cell.priority || 60) - 1 })
-        // Нет блока плана в рюкзаке («нет oak_planks» каждые 2 с, арена 40) — 15 с не браться: принесут передачи или возьмёт другой.
-        // Клетка вне прорисовки (unloaded_cell — далеко) — тоже 15 с: каждые 2 с тот же отказ (крыша s28: 13 раз за 20 с).
-        sw.failed(b, `work:${b.name}`, String(blockCount(pos[b.name]?.inv))); log(`🧱 ${b.name}: ${r.why || 'клетка не подтверждена'}`)
+        sw.failed(b, `work:${b.name}`, buildStock(pos[b.name]?.inv)); log(`🧱 ${b.name}: ${r.why || 'клетка не подтверждена'}`)
       }
       return true
     } finally { if (cell) board.release(cell.id, b.name, cell.claim.token) }

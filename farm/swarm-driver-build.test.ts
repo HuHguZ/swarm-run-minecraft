@@ -51,15 +51,17 @@ test('an outpost reuses witnessed stone flooring without requiring stone in its 
   assert.ok(floor.every(p => p.item === 'stone'), 'native worker witnesses the existing floor rather than trying to replace it')
   assert.equal(driver.snapshot().blue.tasks.filter(t => t.kind === 'build' && t.status === 'done').length, 32)
 })
-async function placementRetryFixture(reply, poses) {
+async function placementRetryFixture(reply, poses, blocks = { cobblestone: 64 } as Record<string, number>, existing?: string) {
   const calls: any[] = [], foe = { x: 8.5, y: 64, z: .5 }
   const armor = { head: 'netherite_helmet', torso: 'netherite_chestplate', legs: 'netherite_leggings', feet: 'netherite_boots' }
   const bots = ['A', 'B', 'C', 'D'].map(name => ({ name, team: 'blue', c: null }))
   const pos: any = Object.fromEntries(bots.map((b, k) => [b.name, { p: { x: .5, y: 64, z: .5 + k }, hp: 20, inv: { iron_sword: 1, iron_pickaxe: 1, cobblestone: 64 }, armor }]))
+  pos.A.inv = { iron_sword: 1, iron_pickaxe: 1, ...blocks }
   let work = 0, moves = 0
   for (const b of bots) b.c = { async call(method, params) {
     calls.push({ method, params })
     if (method === 'goto') { moves++; pos[b.name].p = { x: params.x, y: params.y, z: params.z }; return { detail: { arrived: pos[b.name].p } } }
+    if (method === 'swarm_pose' && params.inspectOnly) return { detail: { existing: existing ? { name: existing, solid: true } : { name: 'air', solid: false } } }
     if (method === 'swarm_pose') return { detail: { poses: poses(moves) } }
     if (method === 'swarm_work') return { detail: reply(++work, params, pos[b.name].p) }
     return { detail: {} }
@@ -67,8 +69,41 @@ async function placementRetryFixture(reply, poses) {
   const driver = createSwarmDriver({ bots, pos, alive: () => true, arena: { x: 0, y: 64, z: 0, r: 24 }, home: () => pos.A.p, hostile: (_, id) => id === 'Foe', log: () => {} })
   driver.observe(bots[0], [{ id: 'Foe', visible: true, position: foe, equipment: { weapon: 'wooden_sword' } }])
   await driver.turn(bots[0])
-  return { calls, snapshot: driver.snapshot().blue }
+  return { calls, snapshot: driver.snapshot().blue, driver, bot: bots[0], pos }
 }
+test('a builder contributes its own solid blocks to an ally’s blueprint and records the actual material', async () => {
+  const { calls, snapshot } = await placementRetryFixture((_, p) => p.item === 'oak_planks'
+    ? { done: true, at: p.at, after: p.item } : { done: false, why: `нет ${p.item} в инвентаре` }, () => [], { sand: 64, oak_planks: 16 })
+  assert.deepEqual(calls.filter(c => c.method === 'swarm_work').map(c => c.params.item), ['oak_planks'])
+  const cells = snapshot.tasks.filter(t => t.kind === 'build')
+  assert.equal(cells.find(c => c.status === 'done')?.data.block, 'oak_planks')
+  assert.ok(cells.some(c => c.status === 'pending' && c.data.block === 'cobblestone'))
+})
+test('a builder can witness an already placed planned block even when only carrying other materials', async () => {
+  const { calls, snapshot } = await placementRetryFixture((_, p) => ({ done: true, at: p.at, after: p.item }), () => [], { oak_planks: 16 }, 'cobblestone')
+  assert.deepEqual(calls.filter(c => c.method === 'swarm_work').map(c => c.params.item), ['cobblestone'])
+  assert.equal(snapshot.stats.built, 1)
+})
+test('a missing item reported by the worker makes changing stance pointless', async () => {
+  const { calls, snapshot } = await placementRetryFixture((_, p) => ({ done: false, why: `нет ${p.item} в инвентаре` }), () => [{ x: -2.5, y: 64, z: .5 }])
+  assert.equal(calls.filter(c => c.method === 'swarm_work').length, 1)
+  assert.ok(!calls.some(c => c.method === 'goto' || c.method === 'swarm_pose'))
+  assert.equal(snapshot.stats.built, 0)
+  assert.ok(!snapshot.tasks.some(t => t.claim))
+})
+test('receiving a different material reopens building at the same position with the same total block count', async () => {
+  let received = false
+  const f = await placementRetryFixture((_, p) => received
+    ? { done: true, at: p.at, after: p.item } : { done: false, why: `нет ${p.item} в инвентаре` }, () => [])
+  await f.driver.turn(f.bot)
+  assert.equal(f.calls.filter(c => c.method === 'swarm_work').length, 1)
+  delete f.pos.A.inv.cobblestone
+  f.pos.A.inv.oak_planks = 64
+  received = true
+  await f.driver.turn(f.bot)
+  assert.deepEqual(f.calls.filter(c => c.method === 'swarm_work').map(c => c.params.item), ['cobblestone', 'oak_planks'])
+  assert.equal(f.driver.snapshot().blue.stats.built, 1)
+})
 test('a threat-aborted placement moves to the safer witnessed pose before retrying and acknowledging', async () => {
   const near = { x: 2.5, y: 64, z: .5 }, safer = { x: -2.5, y: 64, z: .5 }
   const { calls, snapshot } = await placementRetryFixture((n, p, at) => {

@@ -1,4 +1,5 @@
 'use strict'
+import * as gameClock from './game-clock'
 // Рюкзак полон, а под ногами лежит то, за чем шли. Живой игрок в этот момент
 // думает: что у меня самое дешёвое — выкинуть; нечего выкинуть — поставить
 // сундук и оставить схрон, а не бросить алмаз в шахте. До этого файла тело
@@ -150,14 +151,15 @@ function tossPlan (bot, { below = Infinity, reserve = null, inventory = bot.inve
 // дешевле него (алмаз ради булыжника не выкидывают). away — точка, от которой
 // бросать (дроп летит туда, куда смотрим, и через 2 с подбирается обратно,
 // если стоять над ним): бросаем в обратную сторону.
-async function makeRoom (bot, { slots = 1, forItem = null, away = null, preserve = null, allowEqual = false }: any = {}) {
+async function makeRoom (bot, { slots = 1, forItem = null, away = null, preserve = null, allowEqual = false, ctl = null, deadline = Infinity }: any = {}) {
   const need = Math.max(0, slots - bot.inventory.emptySlotCount())
   if (need === 0) return { freed: 0, tossed: [] }
   const value = forItem ? worth(forItem) : 2
   const below = allowEqual && forItem && value <= 1 ? value + 1 : value
   const plan = tossPlan(bot, { below, preserve })
   const tossed = []
-  if (away) {
+  const stopped = () => ctl?.aborted || gameClock.now() >= deadline
+  if (away && !stopped()) {
     const me = bot.entity.position
     const dx = me.x - away.x
     const dz = me.z - away.z
@@ -165,12 +167,13 @@ async function makeRoom (bot, { slots = 1, forItem = null, away = null, preserve
     try { await bot.lookAt(me.offset(dx / n * 4, 0.5, dz / n * 4), true) } catch {}
   }
   for (const s of plan) {
-    if (tossed.length >= need) break
+    if (tossed.length >= need || stopped()) break
     const it = bot.inventory.slots[s.slot]
     if (!it || it.name !== s.name) continue
     try {
       await bot.tossStack(it)
       tossed.push(`${s.name}×${s.count}`)
+      if (stopped()) break
     } catch {}
   }
   return { freed: tossed.length, tossed, short: Math.max(0, need - tossed.length) }

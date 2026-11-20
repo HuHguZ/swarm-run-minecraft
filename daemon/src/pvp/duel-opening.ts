@@ -6,6 +6,8 @@ import { countOf, findItem, potionOf, potionRole } from './potions'
 import { BOX_FRONT_MS, FIX, TICK_MS } from './rules'
 import { type DuelCtx } from './turn'
 import { isAlly } from '../combat/ally-safety'
+import { burnContact } from './lava-exit'
+import { hasEffect } from './body'
 
 // Начало боя: план против мобов, оружие, щит, дебют по темпу.
 export async function openDuel (ctx: DuelCtx) {
@@ -34,7 +36,7 @@ export async function openDuel (ctx: DuelCtx) {
       const until = gameClock.now() + style.openDelayMs
       for (;;) {
         // Наблюдатель уже работает: добровольная пауза не должна съесть окно штатной защиты от булавы.
-        if (ctx.ctl.aborted || ctx.mc.threat()) return
+        if (ctx.ctl.aborted || ctx.mc.threat() || burnContact(bot) && !hasEffect(bot, 'fire_resistance')) return
         const left = until - gameClock.now()
         if (left <= 0) break
         await ctx.sleep(Math.min(TICK_MS, left))

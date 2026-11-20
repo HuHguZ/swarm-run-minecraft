@@ -25,8 +25,8 @@ function fixture({ finishing = true, hunt = false, cache = false } = {}) {
   const sw: any = { generation: 1, now, arena, pos, bots: [b], arms: true, alive: () => true, log() {}, say() {},
     boardOf: () => board, teamOf: () => 'blue', detail: r => r?.detail || r, home: () => member.position,
     refresh: () => ({ board, member, members: [member], task }), onslaught: () => false,
-    hideouts: [], chestTops: [], toured: new Map(), cooldown: new Map(), tourBad: new Map(), emptyChests: new Set(),
-    knownChests: new Map(cache ? [] : [['chest:1,64,0', { x: 1, y: 64, z: 0 }]]), fullFor: new Map(), blockedRoutes: new Map(),
+    hideouts: [], chestTops: [], toured: new Map(), cooldown: new Map(), tourBad: new Map(),
+    knownChests: new Map([['blue', new Map(cache ? [] : [['chest:1,64,0', { at: { x: 1, y: 64, z: 0 } }]])]]), fullFor: new Map(), blockedRoutes: new Map(),
     lootThreat: () => ({ r: 14, foes: board.enemies() }), weakLoot: () => false, lootArena: () => arena,
     drops: () => [{ p: { x: -20, y: 64, z: .5 }, at: 1 }], blocked: () => false, failed() {}, renew: () => true,
     async go(_b, at, range, timeoutSeconds, _arena, loot) {

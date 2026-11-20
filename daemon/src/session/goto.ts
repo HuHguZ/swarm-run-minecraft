@@ -15,6 +15,7 @@ import * as hopgoto from '../hopgoto'
 import { skyLightAt, HOLDING } from './shared'
 import { surfaceWalkOn, startSurfaceWalk, stopSurfaceWalk, surfaceDropGuard, recoverSurface } from './surface-walk'
 import { startWaterRoute, stopWaterRoute, recordWaterRouteFailure, waterRouteRefusal } from './water-route'
+import { supportAt } from '../navigation/geometry'
 
 // Ленивые модули (загрузка при первом вызове, как было), запомненные: require из папки части не попадает в быстрый кеш
 // Node по (папка, spec), и в горячем цикле (клетка A*, физический тик) каждый вызов разбирал бы путь заново.
@@ -60,6 +61,7 @@ interface GotoRun {
   bz?: number
   goal?: any
   arrival?: () => boolean
+  support?: import('../navigation/geometry').Point
   resolvedTo?: any
   surfaceWalk?: boolean
   waterRoute?: ReturnType<typeof startWaterRoute>
@@ -74,7 +76,7 @@ interface GotoRun {
 
 // Native A* uses the cell above a fractional solid in the feet cell (index.js:80–85),
 // then postProcessPath mutates that same node to the physical shape top.
-function supportedNearGoal(bot, x: number, y: number, z: number, range: number) {
+function supportedNearGoal(bot, x: number, y: number, z: number, range: number, exactHeight = false) {
   const physical = new goals.GoalNear(x, y, z, range)
   const empty = bot.pathfinder.movements.emptyBlocks
   const nodeAt = (at, grounded: boolean) => {
@@ -97,8 +99,10 @@ function supportedNearGoal(bot, x: number, y: number, z: number, range: number) 
       return end(p)
     }
   }
-  return { goal, arrival: () => physical.isEnd(bot.entity.position.floored()) &&
-    end(nodeAt(bot.entity.position, !!bot.entity.onGround)) }
+  const support = exactHeight && supportAt(bot, new Vec3(x + .5, y, z + .5), .01)
+  return { goal, support: support ? support.block.position : undefined, arrival: () => physical.isEnd(bot.entity.position.floored()) &&
+    end(nodeAt(bot.entity.position, !!bot.entity.onGround)) && (!exactHeight || bot.entity.onGround &&
+      Math.abs(bot.entity.position.y - y) < 1e-3 && Math.abs((supportAt(bot, bot.entity.position, .01)?.top ?? -Infinity) - y) < 1e-3) }
 }
 
 // runIntent's clock ran out, and on an abort it throws — so the report was
@@ -123,6 +127,12 @@ function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface
     const bounds = gotoArenaBounds.call(this, bot, ctl, boundedArena, avoiding, climb)
     const run: GotoRun = { bot, ctl, x, y, z, range, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuckWanted, climb, exactY, walkOnly,
       secs, boundedArena, avoiding, bounds }
+    const previousSupport = this.gotoSupport
+    const restoreSupport = () => {
+      if (this.gotoSupport !== run) return
+      this.gotoSupport = previousSupport?.ctl.aborted ? undefined : previousSupport
+      this.updateMovements(true)
+    }
     let surfaceScope
     const stopSurface = () => stopSurfaceWalk(bot, surfaceScope)
     ctl.onAbort.push(stopSurface)
@@ -147,6 +157,7 @@ function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface
       if (bounds.error) throw bounds.error
       if (!boundedArena) run.waterRoute = startWaterRoute(bot, { x, y, z, range })
       await gotoPrepare.call(this, run)
+      if (run.support) { this.gotoSupport = run; ctl.onAbort.push(restoreSupport); this.updateMovements(true) }
       // Явная цель ниже тела — намеренный спуск; контекст разведки ему не навязываем.
       if (run.surfaceWalk && !boundedArena && (y == null || Number(y) >= bot.entity.position.y - 2)) surfaceScope = startSurfaceWalk(bot)
       await gotoPreMoves.call(this, run)
@@ -157,6 +168,8 @@ function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface
       const waterOff = ctl.onAbort.indexOf(abortWater); if (waterOff >= 0) ctl.onAbort.splice(waterOff, 1)
       stopSurface()
       const off = ctl.onAbort.indexOf(stopSurface); if (off >= 0) ctl.onAbort.splice(off, 1)
+      const supportOff = ctl.onAbort.indexOf(restoreSupport); if (supportOff >= 0) ctl.onAbort.splice(supportOff, 1)
+      restoreSupport()
       bounds.restore()
     }
   }, { timeoutMs: (secs + 15) * 1000, params: { climb: !!climb, arena: boundedArena }, ...(climb ? { interruptOn: HOLDING } : {}) })
@@ -275,12 +288,14 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   } else {
     // exactY — ровно на эту высоту, хоть в воздух (столбик к цели на краю крыши): standableY нашёл бы пол ниже, и «дошёл»
     // засчитывался внизу (Codex 15.10, паузы стенда «-2.5 по высоте»).
-    const yy = exactY && climb ? Math.floor(y) : standableY(bot, bx, Math.floor(y), bz) ?? (strict ? Math.floor(y) : null)
+    const fractional = exactY && climb && Number(y) % 1 ? supportAt(bot, new Vec3(bx + .5, Number(y), bz + .5), 1e-3) : null
+    const supportedHeight = fractional && Math.abs(fractional.top - Number(y)) < 1e-3
+    const yy = exactY && climb ? (supportedHeight ? Number(y) : Math.floor(y)) : standableY(bot, bx, Math.floor(y), bz) ?? (strict ? Math.floor(y) : null)
     if (yy === null) {
       goal = new goals.GoalNearXZ(bx, bz, Math.max(2, range))
       resolvedTo = { x: bx, y: null, z: bz, mode: 'xz (нет места встать на заданной высоте)' }
     } else {
-      ;({ goal, arrival } = supportedNearGoal(bot, bx, yy, bz, range))
+      ;({ goal, arrival, support: run.support } = supportedNearGoal(bot, bx, yy, bz, range, !!supportedHeight))
       resolvedTo = { x: bx, y: yy, z: bz, mode: 'near' }
     }
   }

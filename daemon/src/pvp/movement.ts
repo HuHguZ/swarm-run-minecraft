@@ -37,6 +37,39 @@ export function burnStepCost (bot) {
   }
 }
 
+const burnPriced = new WeakSet<object>()
+export function priceBurnSteps (bot, movements) {
+  if (burnPriced.has(movements)) return () => {}
+  burnPriced.add(movements)
+  const burn = burnStepCost(bot), fb = bot._ndFastBlocks
+  const risk = (block: any) => {
+    if (fb?.live && block && block._ndBurnVer === fb.ver) return block._ndBurnV
+    const value = burn(block)
+    if (fb?.live && block) { block._ndBurnVer = fb.ver; block._ndBurnV = value }
+    return value
+  }
+  let from = 0
+  const cost = block => {
+    const value = risk(block)
+    // Native adds feet/head prices several times and rejects totals above 100; existing heat must not forbid its exit.
+    return value >= 100 ? value : Math.max(0, value - from)
+  }
+  const neighbors = movements.getNeighbors
+  const priced = function (node) {
+    const previous = from
+    from = risk(this.getBlock(node, 0, 0, 0))
+    try { return neighbors.call(this, node) } finally { from = previous }
+  }
+  movements.getNeighbors = priced
+  movements.exclusionAreasStep.push(cost)
+  return () => {
+    const i = movements.exclusionAreasStep.indexOf(cost)
+    if (i >= 0) movements.exclusionAreasStep.splice(i, 1)
+    if (movements.getNeighbors === priced) movements.getNeighbors = neighbors
+    burnPriced.delete(movements)
+  }
+}
+
 // Acquisition and the duel must use the same route constraints, including intermediate nodes.
 export function combatMovement (bot, arena = null) {
   const mv = bot.pathfinder?.movements
@@ -48,8 +81,7 @@ export function combatMovement (bot, arena = null) {
   // Путь в бою — не вплотную к лаве и огню (стенд 15×15 a8 21.10: погоня по краю ямы с лавой, срезанный угол на спринте —
   // 4 смерти «tried to swim in lava» без чужого удара). Клетка у лавы (на уровне ног или пола, вкл. диагональ) — дорого,
   // в обход, если обход есть; сама лава — уже не клетка пути (pathfinder blocksToAvoid).
-  const nearBurn = Array.isArray(mv.exclusionAreasStep) ? burnStepCost(bot) : null
-  if (nearBurn) mv.exclusionAreasStep.push(nearBurn)
+  const stopBurn = Array.isArray(mv.exclusionAreasStep) ? priceBurnSteps(bot, mv) : null
   mv.allow1by1towers = false; mv.scafoldingBlocks = []; mv.allowParkour = false
   // Pathfinder compares feet Y to the solid support's block Y, one below landing feet.
   mv.maxDropDown = edges.SAFE_FALL + 1
@@ -57,16 +89,17 @@ export function combatMovement (bot, arena = null) {
   // A hole through a suspended arena's floor is not a route toward an opponent below it.
   const floorGuard = arenaOk && Array.isArray(mv.exclusionAreasBreak) ? b => b?.position?.y <= arenaOk.y - 1 ? 100 : 0 : null
   if (floorGuard) mv.exclusionAreasBreak.push(floorGuard)
-  if (arenaOk && typeof before.getNeighbors === 'function') mv.getNeighbors = function (node) {
-    const out = before.getNeighbors.call(this, node)
+  const neighbors = mv.getNeighbors
+  if (arenaOk && typeof neighbors === 'function') mv.getNeighbors = function (node) {
+    const out = neighbors.call(this, node)
     if (!onField(bot.entity?.position)) return out
     // A fighter already in a shallow crater must be able to walk along its floor to the exit.
     const floor = Math.min(arenaOk.y, Math.floor(bot.entity.position.y))
     return out.filter(m => m.y >= floor && Math.abs(m.x + .5 - arenaOk.x) <= arenaOk.r && Math.abs(m.z + .5 - arenaOk.z) <= arenaOk.r)
   }
   return { arena: arenaOk, onField, restore () {
+    stopBurn?.()
     Object.assign(mv, before)
-    if (nearBurn) { const i = mv.exclusionAreasStep.indexOf(nearBurn); if (i >= 0) mv.exclusionAreasStep.splice(i, 1) }
     if (floorGuard) { const i = mv.exclusionAreasBreak.indexOf(floorGuard); if (i >= 0) mv.exclusionAreasBreak.splice(i, 1) }
   } }
 }
