@@ -57,7 +57,7 @@ function strikeSlotOf (ctx: DuelCtx, now: number) {
 
 export function targetStrikeWait (ctx: DuelCtx, now: number) {
   const { bot, mf } = ctx
-  const known = ctx.foeEst?.iframe?.known
+  const known = ctx.calc?.iframe?.known ?? (ctx.foeEst as any)?.iframe?.known
   const raw = known && meleeRaw({ weapon: bot.heldItem?.name, sharpness: read.enchLevel(bot, bot.heldItem, 'sharpness'),
     strength: effectAmp(bot, 'strength'), weakness: effectAmp(bot, 'weakness'), charge: mf.clock.charge?.(0) ?? 0 })
   // hurtServer accepts damage above lastHurt inside the window; keep the allies' slot delay.

@@ -11,8 +11,10 @@ const covered = new WeakMap<object, Map<string, Lid>>()
 
 export async function chestLidTurn(sw: SwarmDriverCtx, { b, task, round, m, enemies, board, context }: TurnCtx) {
   const memory = sw.knownChests?.get(sw.teamOf(b))
+  const recentlyHurt = m?.hurtTick > 0 && Number.isFinite(m.tick) && m.tick - m.hurtTick <= 20
   if (!memory?.size || !m?.p || m.rescuing || m.water || m.tactics?.action || underArrowFire(b, sw.now()) ||
-      /^(flee|recover|heal|transfer)$/.test(task.kind) || task.data?.panic || task.data?.risk?.lethal || task.data?.commanded || task.data?.finishing) return false
+      /^(flee|recover|heal|transfer)$/.test(task.kind) || task.data?.panic || task.data?.risk?.lethal || task.data?.commanded || task.data?.finishing ||
+      recentlyHurt || task.kind === 'fight' && (m.hp ?? 20) < 14) return false
   const team = context.members || [], now = sw.now(), near = enemies.filter(e => now - e.seenAt < 1500)
   const records = covered.get(memory)
   if (!near.length && !records?.size) return false

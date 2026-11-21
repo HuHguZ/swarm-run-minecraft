@@ -50,25 +50,124 @@ export function swarmTeam (sw: SwarmDriverCtx) {
   // Союзник в бою (свой fight, бой из уворота, враг вплотную) — не брать на обмен и ветер: assist/stop рвали его бой (Codex 15.10).
   const fighting = o => o.last?.m === 'fight' || o.swarmExecuting && /^(fight|flee)$/.test(o.swarmTask?.kind || '') ||
     !!pos[o.name]?.p && boardOf(o).enemies().some(e => now() - e.seenAt < 1000 && distance(e.position, pos[o.name].p) <= 3.5)
-  const enemyHeight = b => {
-    const foes = boardOf(b).enemies(), at = now()
-    return Math.max(...foes.filter(e => at - e.seenAt < 15000).map(e => e.position.y))
+  const enemyHeight = (b, preloadedFoes?: ReturnType<SwarmBoard['enemies']>) => {
+    const foes = preloadedFoes ?? boardOf(b).enemies(), at = now()
+    let top = -Infinity, nextExpiry = Infinity
+    for (const e of foes) {
+      if (at - e.seenAt < 15000) top = Math.max(top, e.position.y)
+      nextExpiry = Math.min(nextExpiry, e.seenAt + boardOf(b).enemyTtlMs)
+    }
+    return { top, nextExpiry }
   }
+  const invSum = inv => {
+    let s = 0
+    if (inv) for (const k in inv) s += Number(inv[k]) || 0
+    return s
+  }
+  const assignTeamRoles = (live: any[], roster: any[], allFoes: ReturnType<SwarmBoard['enemies']>, tNow: number, assault: boolean, teamName: string) => {
+    const assigned = new Map<string, 'healer' | 'miner-builder' | 'ranged' | 'flank' | 'fighter'>()
+    const foes = allFoes.filter(e => tNow - e.seenAt < 3000)
+    const teamWounded = live.some(o => (pos[o.name]?.hp ?? 20) < 16)
+    const minTeamY = live.reduce((y, o) => Math.min(y, pos[o.name].p.y), Infinity)
+    const teamHasBlueprints = [...blueprints.keys()].some(k => k.startsWith(teamName + ':'))
+    const needBuildOrDig = !assault && (teamHasBlueprints || foes.some(e => e.position.y > minTeamY + 2) ||
+      live.some(o => o.swarmTask?.data?.dig || o.swarmTask?.data?.buildKind))
+    const stats = live.map(o => {
+      const m = pos[o.name], inv = m.inv || {}, names = Object.keys(inv).filter(n => inv[n] > 0)
+      const k = roster.indexOf(o)
+      const healCount = Object.entries(m.potions || {}).reduce((s, [n, c]: any) => s + (/^splash_.*(healing|regeneration)$/.test(n) && c > 0 ? Number(c) : 0), 0)
+      const pickTier = names.reduce((best, n) => Math.max(best, n === 'netherite_pickaxe' ? 4 : n === 'diamond_pickaxe' ? 3 : n === 'iron_pickaxe' ? 2 : /_pickaxe$/.test(n) ? 1 : 0), 0)
+      const blocks = blockCount(inv)
+      const arrows = m.attackArrows ?? (inv.arrow || 0) + (inv.spectral_arrow || 0)
+      const rangedScore = inv.bow && arrows > 0 ? 3 + Math.min(3, arrows / 16) : inv.crossbow && (arrows > 0 || m.loadedCrossbow) ? 2 + Math.min(2, arrows / 16) : 0
+      const meleeScore = names.filter(n => /(_sword|_axe)$|^(mace|trident)$/.test(n)).reduce((best, n) => Math.max(best, weaponScore(n)), 0)
+      const mobility = (inv.elytra || m.armor?.torso === 'elytra' ? 4 : 0) + Math.min(3, inv.ender_pearl || 0) + Math.min(2, (inv.wind_charge || 0) / 4)
+      const armorPieces = Object.values(m.armor || {}).filter(Boolean) as string[]
+      const worn = armorPieces.length
+      const armorRating = armorPieces.reduce((sum, n) => sum + powerOf([{ name: n }]).armor, 0)
+      const hpRatio = Math.max(0, Math.min(1, (m.hp ?? 20) / 20))
+      const nearFoe = foes.reduce((best, e) => Math.min(best, distance(e.position, m.p)), Infinity)
+      const seenCloseFoe = foes.reduce((best, e) => !e.nametag && !e.glowing && (!e.sources?.length || e.sources.includes(o.name)) ? Math.min(best, distance(e.position, m.p)) : best, Infinity)
+      const inCloseCombat = seenCloseFoe <= 4.5 || (o.last?.m === 'fight' && o.last.pending === true)
+      const gearPower = meleeScore + armorRating * .5
+      const frontlineReady = meleeScore >= 6 && armorRating >= 10 && hpRatio >= .75
+      const topGeared = meleeScore >= 7 && armorRating >= 16 && hpRatio >= .75
+      const supportNeed = (1 - hpRatio) * 6 + Math.max(0, 14 - gearPower) * .45
+      return { o, k, healCount, pickTier, blocks, rangedScore, meleeScore, mobility, worn, armorRating, hpRatio, nearFoe, inCloseCombat, gearPower, frontlineReady, topGeared, supportNeed }
+    })
+    const pick = (role: 'healer' | 'miner-builder' | 'ranged' | 'flank', cap: number, eligible: (s: typeof stats[number]) => boolean, score: (s: typeof stats[number]) => number, tie?: (s: typeof stats[number]) => number) => {
+      if (cap <= 0) return
+      const chosen = stats.filter(s => !assigned.has(s.o.name) && eligible(s))
+        .sort((a, c) => score(c) - score(a) || (tie ? tie(a) - tie(c) : 0) || a.k - c.k)
+        .slice(0, cap)
+      for (const s of chosen) assigned.set(s.o.name, role)
+    }
+    // Рокировка ролей по текущей обстановке и предельной полезности: одетые без стройзапаса и вступившие в ближний бой
+    // переходят в бойцы; раненые/недоодетые с утилитой (зелья, кирка, лук) — в поддержку.
+    pick('healer', Math.max(1, Math.ceil(live.length / 4)),
+      s => s.healCount > 0 && (teamWounded || !s.inCloseCombat && !s.frontlineReady),
+      s => s.healCount * 3 + s.supportNeed - s.gearPower * .35 - (s.inCloseCombat ? 10 : 0))
+    const otherBlockPickers = stats.filter(s => s.pickTier > 0 && s.blocks >= 16).length
+    pick('miner-builder', assault ? Math.min(1, Math.floor(live.length / 4)) : Math.max(1, Math.ceil(live.length / 3)),
+      s => s.pickTier > 0 && (!s.inCloseCombat || s.blocks >= 16 && otherBlockPickers === 1 && !(s.o.last?.m === 'fight' && s.o.last.pending === true)) &&
+        (!s.topGeared || needBuildOrDig || s.blocks >= 16 || s.nearFoe <= 8),
+      s => s.pickTier * 2.5 + Math.min(1, s.blocks / 16) + s.supportNeed - s.gearPower * .35,
+      s => s.k % 3 === 0 ? 0 : 1)
+    const pureRanged = stats.filter(s => !assigned.has(s.o.name) && s.rangedScore > 0 && s.meleeScore < 5).length
+    pick('ranged', Math.max(1, Math.ceil(live.length / 3), pureRanged),
+      s => s.rangedScore > 0 && (s.nearFoe > 6 || s.meleeScore < 5),
+      s => s.rangedScore + (s.meleeScore < 5 ? 4 : 0) + s.supportNeed * .6 - s.meleeScore * .35 - (s.nearFoe <= 6 ? 8 : 0))
+    const mobilePool = stats.filter(s => !assigned.has(s.o.name) && s.mobility > 0).length
+    if (live.length >= 3) pick('flank', Math.min(Math.floor(live.length / 3), Math.max(3, mobilePool)),
+      s => s.hpRatio >= .5,
+      s => s.mobility + s.gearPower * .2 - s.worn * .2)
+    for (const s of stats) if (!assigned.has(s.o.name)) assigned.set(s.o.name, 'fighter')
+    return assigned
+  }
+  const membersCache = new Map<string, { at: number; gen: number; boardVer: number; nextExpiry: number; assault: boolean; blueprints: number; entries: any[]; list: any[] }>()
   const membersOf = b => {
-    const roster = bots.filter(o => teamOf(o) === teamOf(b))
+    const teamName = teamOf(b), board = boardOf(b), tNow = now(), assault = onslaught(b)
+    const roster = bots.filter(o => teamOf(o) === teamName)
+    const live = roster.filter(o => alive(o.name) && pos[o.name]?.p)
+    const cached = membersCache.get(teamName)
+    if (cached && cached.gen === sw.generation && cached.boardVer === board.sightingVersion &&
+        cached.assault === assault && cached.blueprints === blueprints.size &&
+        tNow >= cached.at && tNow - cached.at < 100 && tNow < cached.nextExpiry &&
+        cached.entries.length === live.length &&
+        cached.entries.every((e, i) => {
+          const o = live[i], m = pos[o.name]
+          return e.o === o && e.m === m && e.hp === m.hp && e.food === m.food &&
+            e.px === m.p.x && e.py === m.p.y && e.pz === m.p.z &&
+            e.task === o.swarmTask && e.finishing === !!o.swarmTask?.data?.finishing && e.gather === !!o.swarmTask?.data?.gather &&
+            e.last === o.last && e.pending === o.last?.pending && e.cancelled === !!o.swarmTurnOwner?.cancelled &&
+            e.arrow === o.arrowThreat && e.invSum === invSum(m.inv)
+        })) {
+      return [...cached.list]
+    }
     const stock = [...new Set<string>(roster.filter(a => alive(a.name)).flatMap(a => Object.keys(pos[a.name]?.inv || {})))]
-    // Номер в составе команды, а не среди живых: смерть одного не перетасовывает роли всех (ревью 13.10).
-    const live = roster.filter(o => alive(o.name) && pos[o.name]?.p), assault = onslaught(b)
-    const top = assault || live.some(o => o.swarmTask?.data?.finishing) ? enemyHeight(b) : -Infinity
-    const team = live.map(o => member(o, roster.indexOf(o), stock, b, assault || o.swarmTask?.data?.finishing ? top : -Infinity))
-    const forager = pickForager(team, sw.forager?.[teamOf(b)])
-    if (forager && sw.forager?.[teamOf(b)] !== forager.id) { (sw.forager ||= {})[teamOf(b)] = forager.id; log(`🧺 ${teamOf(b)}: фуражир ${forager.id} — свои запасы отдаёт бойцам`) }
-    return team
+    const needTop = assault || live.some(o => o.swarmTask?.data?.finishing)
+    const allFoes = board.enemies()
+    const height = needTop ? enemyHeight(b, allFoes) : { top: -Infinity, nextExpiry: Infinity }
+    const roleMap = assignTeamRoles(live, roster, allFoes, tNow, assault, teamName)
+    const team = live.map(o => member(o, roster.indexOf(o), stock, b, assault || o.swarmTask?.data?.finishing ? height.top : -Infinity, roleMap.get(o.name)))
+    const forager = pickForager(team, sw.forager?.[teamName])
+    if (forager && sw.forager?.[teamName] !== forager.id) { (sw.forager ||= {})[teamName] = forager.id; log(`🧺 ${teamName}: фуражир ${forager.id} — свои запасы отдаёт бойцам`) }
+    membersCache.set(teamName, {
+      at: tNow, gen: sw.generation, boardVer: board.sightingVersion, nextExpiry: height.nextExpiry, assault, blueprints: blueprints.size,
+      entries: live.map(o => {
+        const m = pos[o.name]
+        return { o, m, hp: m.hp, food: m.food, px: m.p.x, py: m.p.y, pz: m.p.z, task: o.swarmTask, finishing: !!o.swarmTask?.data?.finishing, gather: !!o.swarmTask?.data?.gather, last: o.last, pending: o.last?.pending, cancelled: !!o.swarmTurnOwner?.cancelled, arrow: o.arrowThreat, invSum: invSum(m.inv) }
+      }),
+      list: team
+    })
+    return [...team]
   }
-  const member = (o, k, stock, b, top = onslaught(o) || o.swarmTask?.data?.finishing ? enemyHeight(o) : -Infinity) => {
+  const member = (o, k, stock, b, top = onslaught(o) || o.swarmTask?.data?.finishing ? enemyHeight(o).top : -Infinity, assignedRole?: 'healer' | 'miner-builder' | 'ranged' | 'flank' | 'fighter') => {
     const m = pos[o.name], inv = m.inv || {}, names = Object.keys(inv).filter(n => inv[n] > 0)
     const heal = Object.entries(m.potions || {}).some(([n, c]: any) => /^splash_.*(healing|regeneration)$/.test(n) && c > 0)
-    const role = heal && k % 3 === 1 ? 'healer' : names.some(n => /_pickaxe$/.test(n)) && k % 3 === 0 ? 'miner-builder' : inv.bow && (m.attackArrows ?? (inv.arrow || 0) + (inv.spectral_arrow || 0)) && k % 2 ? 'ranged' : k % 3 === 2 ? 'flank' : 'fighter'
+    const arrows = m.attackArrows ?? (inv.arrow || 0) + (inv.spectral_arrow || 0)
+    const hasRanged = !!(inv.bow && arrows > 0 || inv.crossbow && (arrows > 0 || m.loadedCrossbow))
+    const role = assignedRole ?? (heal ? 'healer' : names.some(n => /_pickaxe$/.test(n)) ? 'miner-builder' : hasRanged ? 'ranged' : 'fighter')
     const reserve: Record<string, number> = {}, needs: Record<string, number> = {}
     for (const n of names) reserve[n] = BLOCK.test(n) ? 16 : FOOD.test(n) ? 4 : WEAPON.test(n) || /_pickaxe$/.test(n) ? 1 : /potion|pearl|totem|wind_charge/.test(n) ? 1 : 0
     const weaponRating = n => Math.max(weaponScore(n), ...(m.enchants || []).filter(it => it.name === n && it.slot >= 9 && it.slot <= 44).map(it => weaponScore(n, it.ench)))
@@ -107,8 +206,9 @@ export function swarmTeam (sw: SwarmDriverCtx) {
     if (o.swarmTask?.data?.gather) for (const n of names) if (BLOCK.test(n)) reserve[n] = 0
     const worn = Object.values(m.armor || {}).filter(Boolean).length
     const strength = m.hp * (1 + (names.some(n => WEAPON.test(n)) ? 1 : 0)) * (1 + worn * .25)
-    const weapon = melee[0] || names.find(n => /(_spear)$|^(mace|trident)$/.test(n))
-    const ench = { knockback: Math.max(0, ...(m.enchants || []).filter(it => it.name === weapon).map(it => it.ench?.knockback || 0)), sharpness: Math.max(0, ...(m.enchants || []).filter(it => it.name === weapon).map(it => it.ench?.sharpness || 0)), protection: (m.enchants || []).filter(it => it.slot >= 5 && it.slot <= 8).reduce((sum, it) => sum + (it.ench?.protection || 0), 0) }
+    const rangedWeapon = inv.bow && arrows > 0 ? 'bow' : inv.crossbow && (arrows > 0 || m.loadedCrossbow) ? 'crossbow' : undefined
+    const weapon = melee[0] || names.find(n => /(_spear)$|^(mace|trident)$/.test(n)) || rangedWeapon
+    const ench = { knockback: Math.max(0, ...(m.enchants || []).filter(it => it.name === weapon).map(it => it.ench?.knockback || 0)), sharpness: Math.max(0, ...(m.enchants || []).filter(it => it.name === weapon).map(it => it.ench?.sharpness || 0)), power: Math.max(0, ...(m.enchants || []).filter(it => it.name === 'bow').map(it => it.ench?.power || 0)), protection: (m.enchants || []).filter(it => it.slot >= 5 && it.slot <= 8).reduce((sum, it) => sum + (it.ench?.protection || 0), 0) }
     // Левая рука (щит, тотем) в рюкзак не входит: без неё надетый щит для доски «пропадал», и кольцо не строилось.
     const offHand = typeof m.offHand === 'string' ? m.offHand : m.offHand?.item || undefined
     if (offHand === 'shield') reserve.shield = 1

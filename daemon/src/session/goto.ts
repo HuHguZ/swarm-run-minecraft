@@ -180,6 +180,8 @@ function gotoArenaBounds (this: Session, bot, ctl, boundedArena, avoiding: boole
   const previousArena = this.gotoArena, previousStrict = this.surfaceStrict
   const previousSurface = this.surfaceWalk, previousY = this.pathGoalY
   const previousThinkTimeout = bot.pathfinder.thinkTimeout
+  const arenaThinkMs = Number(process.env.ND_ARENA_THINK_MS ?? 2000)
+  let thinkAdjusted = false
   let rejectBounds, restored = false
   const boundsFailure = new Promise((resolve, reject) => { rejectBounds = reject })
   boundsFailure.catch(() => {})
@@ -189,7 +191,7 @@ function gotoArenaBounds (this: Session, bot, ctl, boundedArena, avoiding: boole
     if (this.gotoArena !== boundedArena) return
     this.gotoArena = previousArena; this.surfaceStrict = previousStrict
     this.surfaceWalk = previousSurface; this.pathGoalY = previousY
-    if (avoiding) bot.pathfinder.thinkTimeout = previousThinkTimeout
+    if (avoiding || thinkAdjusted) bot.pathfinder.thinkTimeout = previousThinkTimeout
     this.updateMovements(true)
   }
   const checkBounds = () => {
@@ -210,6 +212,12 @@ function gotoArenaBounds (this: Session, bot, ctl, boundedArena, avoiding: boole
     // В границах арены — по поверхности (без копания и столбов), кроме подъёма к цели (climb, пользователь 14.10: «залез
     // наверх — не строятся»): столбы из своих блоков и прокоп разрешены, границы те же.
     this.gotoArena = boundedArena; this.surfaceStrict = !climb
+    // В ограниченной арене 99%+ достижимых маршрутов находятся за < 2 с; полный 5-секундный A* на недостижимых
+    // крышах/галереях жжёт 10k+ узлов впустую, пока бот уже идёт по частичному пути (timeoutWalkOn доведёт и перепланирует).
+    if (arenaThinkMs > 0 && Number.isFinite(arenaThinkMs) && typeof previousThinkTimeout === 'number' && previousThinkTimeout > arenaThinkMs) {
+      bot.pathfinder.thinkTimeout = arenaThinkMs
+      thinkAdjusted = true
+    }
     ctl.onAbort.push(restoreBounds); bot.on('physicsTick', checkBounds)
   }
   return bounds
@@ -376,7 +384,8 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
   const mv = bot.pathfinder.movements
   const dug = mv ? mv.canDig : undefined
   const scaffold = mv ? mv.scafoldingBlocks : undefined
-  if (strict && mv) { mv.canDig = false; mv.scafoldingBlocks = [] }
+  const keepWaterScaffold = !!mv?._ndBridge?.waterOnly
+  if (strict && mv) { mv.canDig = false; if (!keepWaterScaffold) mv.scafoldingBlocks = [] }
   this.surfaceWalk = surfaceWalk
   this.pathGoalY = typeof g.y === 'number' ? g.y : null
   this.surfaceStrict = strict
@@ -418,7 +427,7 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
   const cancelPath = () => pathRequest?.cancel?.()
   ctl.onAbort.push(cancelPath)
   try {
-    pathRequest = waitPartial ? gotoGoal(bot, g, { unstuck: un }) : bot.pathfinder.goto(g)
+    pathRequest = waitPartial ? gotoGoal(bot, g, { unstuck: un, boundedArena: !!boundedArena }) : bot.pathfinder.goto(g)
     if (ctl.aborted) cancelPath()
     await Promise.race([pathRequest, guard.promise, dropGuard.promise, placeGuard, descentGuard, ...(boundedArena ? [bounds.failure] : [])])
     if (bounds.error) throw bounds.error
@@ -446,7 +455,7 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
     this.surfaceWalk = false
     this.pathGoalY = null
     this.surfaceStrict = !!boundedArena && !climb
-    if (strict && mv) { mv.canDig = dug; mv.scafoldingBlocks = scaffold }
+    if (strict && mv) { mv.canDig = dug; if (!keepWaterScaffold) mv.scafoldingBlocks = scaffold }
     dropGuard.stop(); guard.stop()
   }
 }

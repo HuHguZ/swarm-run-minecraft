@@ -105,9 +105,8 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
     if (rangedAim && seesBody && !turn.bolt && !meInWeb) {
       const eye = ctx.entity.position.offset(0, pick.eyeHeight(bot, ctx.entity), 0)
       const cover = archerCover(bot, eye, { arena: ctx.AR, advance: true })
-      if (ctx.pathing) { pathTo(false); ctx.pathing = false }
-      clear()
       if (cover && steerArcherCover(bot, cover)) {
+        if (ctx.pathing) { pathTo(false); ctx.pathing = false; steerArcherCover(bot, cover) }
         await ctx.sleep(TICK_MS); return NEXT
       }
     }
@@ -191,11 +190,28 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
       await ctx.sleep(TICK_MS)
       return NEXT
     }
-    if (!ctx.pathing && (ctx.failedReposition?.inputs === routeInputs() || ctx.failedFlank?.inputs === routeInputs())) {
-      strafeStep(); clear()
-      set(ctx.strafeKey, stepSafe(bot, keyDir(bot, ctx.strafeKey)))
-      await ctx.sleep(TICK_MS)
-      return NEXT
+    const ri = !ctx.pathing ? routeInputs() : null
+    const failedMove = ri != null && (
+      (ctx.failedReposition?.inputs === ri && ctx.failedReposition) ||
+      (ctx.failedFlank?.inputs === ri && ctx.failedFlank)
+    )
+    if (failedMove) {
+      const now = turn.now ?? gameClock.now()
+      const unroutable = failedMove.why === 'noPath'
+      if (!unroutable && failedMove.farRetryAt == null) failedMove.farRetryAt = now + 2500
+      if (unroutable || now < failedMove.farRetryAt) {
+        strafeStep(); clear()
+        const side = [ctx.strafeKey, ctx.strafeKey === 'left' ? 'right' : 'left'].find(k => stepSafe(bot, keyDir(bot, k)))
+        if (side) {
+          ctx.strafeKey = side
+          set(side, true)
+        }
+        await ctx.sleep(TICK_MS)
+        return NEXT
+      }
+      // Bounded backoff for transient no_progress/view_blocked stalls: retry pathing instead of strafing forever.
+      failedMove.farBackoffMs = Math.min(10000, (failedMove.farBackoffMs || 2500) * 2)
+      failedMove.farRetryAt = now + failedMove.farBackoffMs
     }
     if (!ctx.pathing) { pathTo(true); ctx.pathing = true; clear() }
     set('sprint', true)
@@ -406,7 +422,16 @@ export async function spearTurn (ctx: DuelCtx, turn: TurnFrame) {
     // Он ближе 3.4, а отойти некуда (угол, стена, край) и укол не готов — мечом, а не стоять с копьём под его мечом (игра
     // пользователя 25.10: «в углу мечом забиваю — не бьют в ответ»).
     if (r < 3.4 && !backS && !(sj.ok && sReady === 0) && bestWeapon(bot)) {
-      if (seesBody && vision.visible(ctx.entity)) exitSide = spearWallExit(bot, ctx.entity, vS, ctx.AR, ctx.strafeKey)
+      if (seesBody && vision.visible(ctx.entity)) {
+        const fast = bot._ndFastBlocks
+        const wKey = `${me.floored().toString()}|${ctx.entity.position.floored().toString()}|${Math.round((vS.x || 0) * 20)},${Math.round((vS.z || 0) * 20)}|${fast?.live ? fast.ver : ''}|${ctx.strafeKey}`
+        const cached = (ctx as any)._spearWallCache
+        if (cached && cached.key === wKey && now < cached.until) exitSide = cached.side
+        else {
+          exitSide = spearWallExit(bot, ctx.entity, vS, ctx.AR, ctx.strafeKey)
+          ;(ctx as any)._spearWallCache = { key: wKey, side: exitSide, until: now + 200 }
+        }
+      }
       if (!exitSide) {
         ctx.spearOffUntil = now + 3000
         ctx.clear()

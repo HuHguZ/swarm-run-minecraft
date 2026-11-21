@@ -81,6 +81,7 @@ export function pvpFlee(S: PvpPlan): void {
     // бросал бой ради насеста за гребнем, куда не долететь (игра пользователя 23.10: «бегут навстречу и ничего не делают», хп 20).
     const airExit = risk.lethal && inContact(m, enemies, true, aggressive) ? perchFor(m) : null
     if (airExit) {
+      markFled(board, m.id)
       put(m, 'flee', { target: risk.target, perch: true, panic: true, risk, reason: 'воздушный отход, ' + risk.reason }, airExit)
       continue
     }
@@ -111,10 +112,11 @@ export function pvpFlee(S: PvpPlan): void {
     // сел в 8 бл., «ухожу от лучника за укрытие» — смерть спиной через 4 с).
     const ranged = !!near && gap > Math.max(8, 4.5 + Math.hypot(v?.x || 0, v?.z || 0) * 30) && archer(near)
     // Погоня помнит своё начало отдельно от способа ухода: остановка врага не отправляет нас в копатели.
-    const pursuing = coming || ranged && board.now() - near.seenAt < 1000 || board.tasks().some(t => t.assignedTo === m.id && t.kind === 'flee' && (t.data?.kite || t.data?.pursuit) && t.data.target === near?.id)
+    const prevTask = board.taskView(`pvp:${m.id}`)
+    const pursuing = coming || ranged && board.now() - near.seenAt < 1000 || (prevTask?.kind === 'flee' && (prevTask.data?.kite || prevTask.data?.pursuit) && prevTask.data.target === near?.id)
     // Начатая рукопашная не рвётся погоней (в контакте он всегда «идёт на меня»; стенд rush 15.10: fight → flee 66 раз, каждый —
     // stop боя): дерущийся уходит, только когда он дальше 6 бл.
-    const prevKind = board.tasks().find(t => t.id === `pvp:${m.id}`)?.kind
+    const prevKind = prevTask?.kind
     // Лутающий уходит от погони с той же границы 16, что и ветка слабых (Codex 15.10: правило погони с 22 обходило
     // гистерезис 16/22 — «лут ↔ бегство» на 17–22 бл.).
     const far = near ? threatReach(near) : 16
@@ -171,7 +173,7 @@ export function pvpFlee(S: PvpPlan): void {
     if (why === 'залп' && held && nearestGap(m, enemies) > SAFE) { put(m, 'recover', { ally: m.id, reason: 'держу залп, лечусь' }, shelter ? middle(shelter) : m.position); continue }
     const threat = enemies.find(e => e.id === risk.target) || [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
     // Оторвался — дальше к своим и без врагов в виду (исполнитель идёт к точке), а не назад к ним.
-    if (!threat && held && shelter) { put(m, 'flee', { target: held.foes[0], panic: true, regroup: true, reason: `держу ${why}, к своим` }, middle(shelter)); continue }
+    if (!threat && held && shelter) { markFled(board, m.id); put(m, 'flee', { target: held.foes[0], panic: true, regroup: true, reason: `держу ${why}, к своим` }, middle(shelter)); continue }
     if (!threat) continue
     let dx = m.position.x - threat.position.x; let dz = m.position.z - threat.position.z
     if (Math.hypot(dx, dz) < 0.1) { dx = -forward.x; dz = -forward.z }
@@ -198,17 +200,20 @@ export function pvpFlee(S: PvpPlan): void {
     // если не можешь убежать быстро»). Выход — box_out, когда план даст другое дело (угроза ушла), не по таймеру.
     // Коробка не встаёт или из неё не выйти — стенка на линии подлёта (take_cover wall: 2 бл. высотой в 1.5 бл. в его сторону, при
     // пикировании — 3): луч копья обрывают блоки (ProjectileUtil.getHitEntitiesAlong — COLLIDER, jar 1.21.11), выходить не нужно.
-    const boxFailed = board.facts().some(f => f.id === `box-failed:${m.id}:${cellKey(m.position)}`)
+    const hereCell = { x: Math.floor(m.position.x), y: Math.floor(m.position.y), z: Math.floor(m.position.z) }
+    const hereKey = cellKey(hereCell)
+    const boxFailed = !!board.factView(`box-failed:${m.id}:${hereKey}`)
     const box = !boxFailed && boxBlocks(m) >= 10 && BOX_SECONDS <= arrivalSeconds(m, threat)
-    const wall = !box && !board.facts().some(f => f.id === `wall-failed:${m.id}:${cellKey(m.position)}`) && anyBlocks(m) >= 2 && WALL_SECONDS <= arrivalSeconds(m, threat)
+    const wall = !box && !board.factView(`wall-failed:${m.id}:${hereKey}`) && anyBlocks(m) >= 2 && WALL_SECONDS <= arrivalSeconds(m, threat)
     // Выбор по времени: построить на месте (коробка ≈ 2 с, стенка ≈ 0.5 с) быстрее, чем дойти до готовой крыши, — строить; свои
     // рядом в срок подлёта — к ним, как прежде.
     const build = box ? BOX_SECONDS : wall ? WALL_SECONDS : Infinity
     if (threat.threat === 'aerial' && build < (roof ? walkSeconds(m, roof) : Infinity) && !(home && walkSeconds(m, middle(home)) <= arrivalSeconds(m, threat))) {
-      put(m, 'goto', { hold: 'ambush', camp: cellKey(m.position), ...(box ? { ramBox: true } : { ramWall: true }), target: threat.id, range: .8, reason: `${cause}, ${box ? 'коробка' : 'стенка'} от тарана` }, { ...m.position })
+      put(m, 'goto', { hold: 'ambush', camp: hereKey, ...(box ? { ramBox: true } : { ramWall: true }), target: threat.id, range: .8, reason: `${cause}, ${box ? 'коробка' : 'стенка'} от тарана` }, { ...m.position })
       continue
     }
     const perch = roof || threat.threat === 'aerial' || home && (why === 'один' || held?.why === 'пустой размен') ? null : perchFor(m)
+    markFled(board, m.id)
     put(m, 'flee', { target: threat.id, enemyPosition: threat.position, panic: true, risk, reason: cause + ', ' + risk.reason + (roof ? ', под крышу от тарана' : ''), ...(roof ? { hide: true } : perch ? { perch: true } : home ? { regroup: true } : {}) },
       roof ?? perch ?? (home ? middle(home) : away))
   }
@@ -229,15 +234,27 @@ export function pvpRecover(S: PvpPlan): void {
     // регенерации; стороны минутами отходили друг от друга, раунд до 600 с) — бой дальше. Цена, не запрет: появилась еда или
     // зелье, голод 18+ — снова отход.
     if (!canMend(m)) return false
-    // Натиск: у врага под носом не есть и не отходить — добьёт в спину; лечиться — оторвавшись (дальше 8 бл.).
-    // Но если его один ближний удар меня убивает — сперва лечиться и при натиске (игра пользователя 25.10: h с 7 хп по голосу
-    // штурма полетел к нему на элитрах и умер за 1 с; NeuroFarm30 так же с 2 хп).
-    if ((aggressive || S.endgame) && (enemies.some(e => distance(e.position, m.position) <= 8) || (assault || hunting(m)) && !assessSwarmFight(m, enemies, team).burst)) return false
+    const fastHeal = count(m.inventory, 'golden_apple') > 0 || count(m.inventory, 'enchanted_golden_apple') > 0 ||
+      Object.entries(m.potions || {}).some(([n, c]) => /(healing|regeneration)$/.test(n) && c > 0)
+    // Если тело уже подтвердило пустой eat (сыт / нечего есть, хп не растёт), не держать бота в вечном recover.
+    if (board.factView(`recover-noop:${m.id}`) && !fastHeal && (m.food === undefined || m.food >= 18)) return false
+    // Натиск: под прямым ударом рядом на том же ярусе не есть — добьёт в спину; враг за стеной/на другом ярусе не блокирует
+    // лечение, а при смертельном залпе с золотым яблоком/зельем на дистанции > 4 бл. лечение выгоднее смерти.
+    const now = board.now()
+    const directClose = enemies.some(e => {
+      if (now - e.seenAt > 1500 || e.nametag || e.glowing) return false
+      if (Math.abs(e.position.y - m.position.y) >= 3) return false
+      const gap = distance(e.position, m.position)
+      return gap <= 8 && (S.witnesses.get(e.id)?.has(m.id) || gap <= 4.5)
+    })
+    const burst = (aggressive || S.endgame) ? !!assessSwarmFight(m, enemies, team).burst : false
+    const canFastHealBeforeHit = fastHeal && burst && enemies.every(e => now - e.seenAt > 1500 || e.nametag || e.glowing || Math.abs(e.position.y - m.position.y) >= 3 || distance(e.position, m.position) > 4)
+    if ((aggressive || S.endgame) && (directClose && !canFastHealBeforeHit || (assault || hunting(m)) && !burst)) return false
     // Врагов не видно — отход только от настоящей раны (< 70 %): царапина от падения не срывает лут (ревью 13.10).
     if (!enemies.length) return ratio(m) < .7
     const nearby = enemies.filter(e => distance(m.position, e.position) < 12).length
     // Ушедший лечиться — до 70 % при любом приёме (гистерезис по миру; ниже — порог входа).
-    if (board.tasks().find(t => t.id === `pvp:${m.id}`)?.kind === 'recover' && ratio(m) < .7) return true
+    if (board.taskView(`pvp:${m.id}`)?.kind === 'recover' && ratio(m) < .7) return true
     // Кольцо и «стадо» для того и строятся, чтобы раненый ушёл в середину, — там прежний счёт (с 62–70 %).
     if (doctrine === 'ring' || doctrine === 'weak-center') return (1 - ratio(m)) * (8 + nearby * 2) - ratio(m) * 2 > ratio(m) * 4
     // В остальном бою — на хилку с половины хп (больше врагов рядом — чуть раньше, до 60 %), и сразу назад: с 62–70 % бой

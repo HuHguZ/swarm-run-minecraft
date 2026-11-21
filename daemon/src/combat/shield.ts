@@ -174,7 +174,7 @@ function facingCos (bot, point) {
 // закрытие — функции ниже; guard — объект боя поверх них.
 interface ShieldState {
   session: any; ctl: any; bot: any; policy: string; on: boolean; st: any; census: Map<string, number> | null; blocking: () => boolean
-  why: string | null; want: boolean; up: boolean; disabledUntil: number; lastAsk: number; askEpoch: number; askRelease: number; target: any; reach: number
+  why: string | null; raiseFail: string | null; want: boolean; up: boolean; disabledUntil: number; lastAsk: number; askEpoch: number; askRelease: number; unconfirmedTries: number; target: any; reach: number
   lastHp: number; lastTick: number; closed: boolean; charge: any
   tick?: () => void; onRawSound?: (p: any) => void; onHealth?: () => void; onCooldown?: (pkt: any) => void; timer?: any
 }
@@ -229,7 +229,7 @@ function makeShield (session, ctl, { shield: policy = 'ranged' }: any = {}) {
       target: sh.target ? { id: sh.target.id ?? null, name: sh.target.name ?? null,
         p: sh.target.position ? [sh.target.position.x, sh.target.position.y, sh.target.position.z] : null,
         valid: sh.target.isValid, facingCos: sh.target.position ? facingCos(bot, sh.target.position) : null } : null } },
-    failure () { return sh.charge?.why() || (gameClock.now() < Math.max(sh.disabledUntil, bot._ndShieldDisabledUntil || 0) ? 'shield_cooldown' : null) },
+    failure () { return sh.charge?.why() || sh.raiseFail || (gameClock.now() < Math.max(sh.disabledUntil, bot._ndShieldDisabledUntil || 0) ? 'shield_cooldown' : null) },
     get cancelled () { return sh.charge?.cancelled },
 
     // Put it on the arm and make the server say so. Returns false with a reason
@@ -257,7 +257,9 @@ function shieldState (session, ctl, policy): ShieldState {
   const st = {
     policy,
     have: false,
-    worn: false,
+    // Always derive worn dynamically from off-hand slot so totem<->shield swaps never leave stale cached state.
+    get worn () { return offHandItem(bot)?.name === 'shield' },
+    set worn (_v: boolean) {},
     raises: 0,
     confirmed: 0,
     blocked: 0,
@@ -288,7 +290,7 @@ function shieldState (session, ctl, policy): ShieldState {
   }
   const sh: ShieldState = {
     session, ctl, bot, policy, on, st, census: null, blocking: null,
-    why: null, want: false, up: false, disabledUntil: 0, lastAsk: 0, askEpoch: 0, askRelease: 0, target: null, reach: 3.2,
+    why: null, raiseFail: null, want: false, up: false, disabledUntil: 0, lastAsk: 0, askEpoch: 0, askRelease: 0, unconfirmedTries: 0, target: null, reach: 3.2,
     lastHp: bot && typeof bot.health === 'number' ? bot.health : 20, lastTick: 0, closed: false, charge: null
   }
   const blocking = () => !sh.closed && !ctl.aborted && offHandItem(bot)?.name === 'shield' &&
@@ -362,6 +364,7 @@ function shieldListen (sh: ShieldState) {
     // слушать», and only one of the two means the shield is not working.
     if (nowUp && !sh.up) {
       st.confirmed++
+      sh.unconfirmedTries = 0
       if (sh.lastAsk) {
         const lag = now - sh.lastAsk
         // Гасим заказ: следующий фронт — это уже другое событие, и мерить
@@ -451,16 +454,20 @@ async function shieldWear (sh: ShieldState) {
   return st.worn
 }
 
+const MAX_UNCONFIRMED_RETRIES = 3
+
 async function shieldRaise (sh: ShieldState, raised) {
   const { ctl, bot, on, st, tick } = sh
-  if (!on || !st.worn) return false
+  if (!on) return false
   if (!raised) {
     if (!sh.want) return false
     sh.want = false
+    sh.raiseFail = null
+    sh.unconfirmedTries = 0
     if (process.env.ND_BLAZE_SHIELD_TRACE === '1') bot.emit('nd_blazeShieldUse', { action: 'lower', t: gameClock.now() })
     shieldRememberNativeUse(sh)
     sh.charge?.close(); sh.charge = null
-    try { bot.deactivateItem() } catch {}
+    if (st.worn || shieldUp(bot)) { try { bot.deactivateItem() } catch {} }
     // Close the edge here rather than waiting for the sampler to notice.
     // Lower and raise sit 60ms apart in a melee cycle, the sampler runs
     // every 100ms, and a cycle that fits between two samples looked like no
@@ -470,24 +477,33 @@ async function shieldRaise (sh: ShieldState, raised) {
     sh.up = false
     return false
   }
+  if (!st.worn) {
+    if (sh.want) { sh.want = false; sh.unconfirmedTries = 0; sh.charge?.close(); sh.charge = null; sh.up = false }
+    return false
+  }
+  st.have = true
   if (!allowed(sh.session)) return false
   const epoch = sh.session._reflexState?.epoch || 0, released = bot._ndUse?.stats?.ended?.['отпустил'] || 0
   // Rescue and ordinary skill cleanup can release use before its first ACK, even in the same game tick.
-  if (sh.want && (sh.askEpoch !== epoch || sh.askRelease !== released)) { sh.want = false; sh.charge?.close(); sh.charge = null }
+  if (sh.want && (sh.askEpoch !== epoch || sh.askRelease !== released)) { sh.want = false; sh.unconfirmedTries = 0; sh.charge?.close(); sh.charge = null }
   if (sh.want) {
     if (shieldUp(bot)) return true
-    // Re-asking is only safe once the server has been seen to answer at
-    // least once. Every activateItem() writes a fresh use_item
-    // (inventory.js:115-138) and a fresh use restarts the block from zero,
-    // so a bot that re-sent every tick because it could not see its own
-    // metadata would hold a shield that never finishes raising. If nothing
-    // has ever been confirmed, ask once and leave it: the packet did go out.
-    if (!st.confirmed || gameClock.now() - sh.lastAsk < 1000) return false
+    // Re-asking is safe after 1s once the server has confirmed at least once,
+    // or within a bounded retry window if the initial unconfirmed packet was
+    // dropped or cancelled — preventing a permanent lockout for the whole duel.
+    const elapsed = gameClock.now() - sh.lastAsk
+    if (st.confirmed) {
+      if (elapsed < 1000) return false
+    } else {
+      const waitMs = sh.charge?.why() ? SHIELD_CONFIRM_MS : 1000
+      if (sh.unconfirmedTries >= MAX_UNCONFIRMED_RETRIES || elapsed < waitMs) return false
+    }
   }
   // Do not spam the packet at a shield the server is holding on cooldown;
   // the disable is timed and re-asking cannot shorten it.
   if (gameClock.now() < Math.max(sh.disabledUntil, bot._ndShieldDisabledUntil || 0)) return false
   sh.want = true
+  sh.raiseFail = null
   sh.askEpoch = epoch
   sh.askRelease = released
   sh.lastAsk = gameClock.now()
@@ -497,11 +513,23 @@ async function shieldRaise (sh: ShieldState, raised) {
     shieldRememberNativeUse(sh)
     sh.charge?.close()
     sh.charge = (require('../bow') as typeof import('../bow')).observeCharge(bot, { item: 'shield', hand: 'off-hand' })
-    if (!sh.charge.start()) { sh.why = sh.charge.why() || 'shield_native_use_not_started'; return false }
+    if (!sh.charge.start()) {
+      const fail = sh.charge.why() || 'shield_native_use_not_started'
+      sh.why = fail
+      sh.raiseFail = fail
+      sh.want = false
+      sh.charge?.close(); sh.charge = null
+      return false
+    }
   } catch (err) {
-    sh.why = String((err && err.message) || err)
+    const fail = String((err && err.message) || err)
+    sh.why = fail
+    sh.raiseFail = fail
+    sh.want = false
+    sh.charge?.close(); sh.charge = null
     return false
   }
+  if (!st.confirmed) sh.unconfirmedTries++
   const deadline = gameClock.now() + SHIELD_CONFIRM_MS
   let aborted
   const abort = new Promise(resolve => { aborted = () => resolve(null); if (ctl.aborted) aborted(); else ctl.onAbort?.push(aborted) })

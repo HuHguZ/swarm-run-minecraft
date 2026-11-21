@@ -145,7 +145,7 @@ export function pvpDiggers(S: PvpPlan): void {
   // ставит бьющих так, чтобы отбросило в дыру.
   // Кто уже на деле (прошлый план): тот и остаётся, пока дело живо — иначе каждые полсекунды копатель становился кемпером,
   // потом бойцом, потом снова копателем («смена фазы — обрываю дело», арена 36: пользователь «рой тупее прошлого»).
-  const held = (key: string) => new Map(board.tasks().filter(t => t.assignedTo && t.data?.[key] !== undefined && t.position).map(t => [t.assignedTo!, t.position!]))
+  const held = (key: string) => new Map(board.tasksView().filter(t => t.assignedTo && t.data?.[key] !== undefined && t.position).map(t => [t.assignedTo!, t.position!]))
   // Цели — свежие, быстрые первыми; по 1–2 копателя на цель (несколько целей), ямы впереди его хода, разнос 3 бл. (Codex 15.10:
   // все копатели доставались первой цели — 4/0/0 вместо 1/1/2).
   const diggers = new Map<string, { site: DigSite; foe: SharedEnemy }>()
@@ -166,7 +166,7 @@ export function pvpDiggers(S: PvpPlan): void {
     const pickTier = (m: SwarmMember) => Math.max(0, ...Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0).map(n => n === 'netherite_pickaxe' ? 3 : n === 'diamond_pickaxe' ? 2 : /_pickaxe$/.test(n) ? 1 : 0))
     // Смертельный пол разбирают все свободные кирки, которым это выгодно; обычные ловушки — 4–6 копателей.
     // Кто уже копает — остаётся у своей ямы и цели (иначе «смена фазы — обрываю дело» каждые полсекунды).
-    const was = new Map(board.tasks().filter(t => t.assignedTo && t.data?.dig && t.position).map(t => [t.assignedTo!, t]))
+    const was = new Map(board.tasksView().filter(t => t.assignedTo && t.data?.dig && t.position).map(t => [t.assignedTo!, t]))
     const stands: SwarmPosition[] = []
     const jobs = goals.map(foe => {
       const v = foe.velocity
@@ -309,7 +309,7 @@ export function pvpLadders(S: PvpPlan): void {
   // — 4 доски, если его нет).
   // Статическая зона лута сама по себе не повод стройки: нужен уже выбранный путь участника.
   const loot = [...plan.values()].filter(t => t.kind === 'loot' && t.data?.lootTier > 0 && t.position)
-  const was = new Map(board.tasks().filter(t => t.assignedTo && t.data?.ladder).map(t => [t.assignedTo!, t.data!.ladder]))
+  const was = new Map(board.tasksView().filter(t => t.assignedTo && t.data?.ladder).map(t => [t.assignedTo!, t.data!.ladder]))
   if (aggressive || loot.length) {
     const goals = [...(aggressive ? enemies.filter(e => board.now() - e.seenAt < 15000).map(e => e.position) : []), ...loot.map(t => t.position!)]
     const useful = (s, goal: SwarmPosition) => s.top + 1 <= goal.y + 1 && goal.y - s.y >= 3 && Math.hypot(goal.x - s.x, goal.z - s.z) < 12

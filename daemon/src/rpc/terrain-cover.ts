@@ -116,11 +116,11 @@ function terrainCoverMethods ({ session, gameClock }: RpcContext) {
     // Закрыть проход за собой (10.10: «стенку застраивать в узких местах, воду, лаву, паутину — система блокирования прохода
     // врагу»): клетка между мной и тем, кто гонится (по ходу к нему), — паутина (держит), иначе 2 блока стены; в проходе
     // (по бокам клетки опора) — ставить; на открытом — лава под ноги на его пути (ведро) или вода (сбивает бег).
-    block_behind: async (p) => session.immediate(async () => {
+    block_behind: async (p) => session.runIntent('block_behind', async ctl => {
       const bot = session.require()
       const foe = (p?.from && bot.players?.[p.from]?.entity) || (p?.fromId != null ? bot.entities[p.fromId] : null)
-      return (require('../combat/rear-barrier') as typeof import('../combat/rear-barrier')).blockBehind(bot, foe)
-    })
+      return (require('../combat/rear-barrier') as typeof import('../combat/rear-barrier')).blockBehind(bot, foe, { ctl, arena: p?.arena || null })
+    }, { timeoutMs: 3000, interruptOn: ['death', 'kicked', 'disconnected'], params: p || {} })
   }
 }
 

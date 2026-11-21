@@ -7,8 +7,8 @@ import * as reflex from '../reflex-lock'
 import * as pick from '../pick'
 import edges = require('../edges')
 import { createLastSeen, seesPlayer } from '../pvp/last-seen'
-import { WIND, WIND_REPORT_AGE_TICKS, worldTick, windInside, windMovement, useWindAtAngle, type WindReport } from './team-wind'
-import { planEnemyWind, enemyWindFrames, enemyWindShot, windTeamSafe, windReportAt, pendingWindHit, observeOwnWindBurst, installWindTracking, windMotionFresh, observeEnemyWindMotion, WIND_FORECAST_TICKS, windCollisionWorld, windFinishOpportunity } from './enemy-wind'
+import { WIND, WIND_REPORT_AGE_TICKS, worldTick, windInside, windMovement, windOutward, useWindAtAngle, type WindReport } from './team-wind'
+import { planEnemyWind, enemyWindFrames, enemyWindShot, windTeamSafe, windAllyTailSafe, windReportAt, pendingWindHit, observeOwnWindBurst, installWindTracking, windMotionFresh, observeEnemyWindMotion, WIND_FORECAST_TICKS, windCollisionWorld, windFinishOpportunity } from './enemy-wind'
 import { cancelWindOrder, reserveWindOrder, windOrder } from './wind-coordination'
 
 const finite = p => !!p && [p.x, p.y, p.z].every(Number.isFinite)
@@ -93,7 +93,8 @@ function waitReportTick(session, target: number) {
       const tick = worldTick(bot), nextBodyTick = nativeClock?.ticks
       if (session.bot !== bot || bot.entity !== entity || session.current !== owner || owner?.ctl?.aborted || !(bot.health > 0) || bot.ndClock !== nativeClock || nativeClock?.disposed) return cancelled()
       if (nativeClock?.frozen) return finish('clock_sync_paused')
-      if (tick === null || last === null || tick < last || tick > last + 1 || Number.isFinite(bodyTick) && nextBodyTick > bodyTick + 1) return finish('clock_sync_changed')
+      if (tick === null || last === null || tick < last || tick > last + 2 || tick > target + 2 ||
+          Number.isFinite(bodyTick) && nextBodyTick > bodyTick + 2) return finish('clock_sync_changed')
       last = tick; bodyTick = nextBodyTick
       if (tick >= target) finish(null)
     }
@@ -118,7 +119,7 @@ export async function enemyWindPlan(session, p: any = {}) {
     const why = await waitReportTick(session, reportTick)
     tick = worldTick(bot)
     if (why) return { ok: false, why, gameTick: tick }
-    if (!current() || tick !== reportTick) return { ok: false, why: 'clock_sync_changed', gameTick: tick }
+    if (!current() || tick === null || tick < reportTick || tick > reportTick + 2) return { ok: false, why: 'clock_sync_changed', gameTick: tick }
     if (!reportsValid(p.throwers, tick) || !reportsValid(p.allies || [], tick)) return { ok: false, why: 'invalid_or_stale_reports', gameTick: tick }
   }
   const deadline = clock.wall.monotonic() + lead * 1000 / (nativeClock?.observationRate?.() || 20)
@@ -131,7 +132,7 @@ export async function enemyWindPlan(session, p: any = {}) {
   if (clock.wall.monotonic() > deadline) return { ok: false, why: 'planning_deadline', gameTick: worldTick(bot) }
   if ([...throwers, ...allies].some(r => !r)) return { ok: false, why: 'stale_reports', gameTick: tick }
   const plan = throwers.length ? planEnemyWind(bot, foe, throwers, { arena: p.arena, startTick: tick + lead, maxShots: p.maxShots ?? 2,
-    allies, deadline, reactAfterHit: true, waitForHit: true }) : null
+    allies, deadline, reactAfterHit: true, waitForHit: true, juggle: !foe.onGround || (p.maxShots ?? 2) > 1 }) : null
   if (!plan && throwers.length && p.finish === true && clock.wall.monotonic() <= deadline) {
     // A rejected synchronous search can leave target packets queued. Forecast the fallback only after one IO turn.
     await new Promise<void>(resolve => setImmediate(resolve))
@@ -165,7 +166,7 @@ export async function enemyWindExecute(session, ctl, p: any = {}) {
   const order = windOrder(session, tick)
   if (p.coordination !== undefined && (order?.id !== p.coordination || order?.target !== target)) return fail('wind_order_lost')
   const fireTick = shot?.fireTick ?? tick
-  const canReplan = p.coordination !== undefined && (replan || plan.shots.length === 1)
+  const canReplan = p.coordination !== undefined
   if (tick > fireTick && !canReplan) return fail('shared_world_tick_missed')
   if (ctl.aborted || busy(session, !!bot.entity.elytraFlying) || !hands.windReady(bot)) return fail('hands_or_defence_busy')
   const entity = bot.entity, nativeClock = bot.ndClock, owner = session.current
@@ -217,21 +218,29 @@ export async function enemyWindExecute(session, ctl, p: any = {}) {
     const pending = pendingWindHit(bot, foe, frames, preceding, collision)
     const intercept = pending ? frames.slice(0, pending.ticks) : frames
     const tracks = new Map()
-    let candidate = shot && now === fireTick && !plan?.fallThreat
+    let candidate = shot && (now === fireTick || canReplan && now > fireTick && now <= fireTick + 2) && !plan?.fallThreat
       ? enemyWindShot(bot, foe, team[0], intercept, { height: shot.aimHeight ?? shot.aim.y - shot.feet.y, allies: team, tracks }, undefined, undefined, collision)
       : null
     if (pending && candidate && candidate.ticks >= pending.ticks) candidate = null
-    if (!candidate || vec(candidate.feet).distanceTo(vec(shot.feet)) > WIND.reach) {
+    // On a coordinated follow-up shot (`preceding.length > 0`), a sprinting/strafing target can shift > WIND.reach
+    // from the old `shot.feet` while the live re-aimed `candidate` still cleanly hits the `preceding`-boosted arc
+    // with outward push. Keep that live re-aim instead of discarding `preceding`.
+    const outwardReaimOk = !!candidate && canReplan && preceding.length > 0 && !!p.arena &&
+      candidate.feet.minus(candidate.burst).dot(windOutward(p.arena, candidate.feet, foe.width || .6)) > 0
+    if (!candidate || !outwardReaimOk && vec(candidate.feet).distanceTo(vec(shot.feet)) > WIND.reach) {
       if (!canReplan) return refuse(pending ? 'pending_wind_impulse' : 'changed_interception')
       const deadline = clock.wall.monotonic() + 1000 / (nativeClock?.observationRate?.() || 20)
-      const fresh = planEnemyWind(bot, foe, [team[0]!], { arena: p.arena, startTick: now, delays: [0], maxShots: 1, allies: team, reactAfterHit: true, waitForHit: true, collision, deadline })
+      const visiblePrefix = !replan && plan.shots.length > 1 && !!bot._ndThrown?.size
+      const fresh = planEnemyWind(bot, foe, [team[0]!], { arena: p.arena, startTick: now, delays: [0], maxShots: 1, allies: team, reactAfterHit: true, waitForHit: true, juggle: !foe.onGround, collision, deadline, visiblePrefix })
       candidate = fresh?.shots[0] ?? null
-      if (pending && (!candidate || candidate.ticks >= pending.ticks)) return refuse('pending_wind_impulse')
+      if (pending && fresh?.relayPrefix === undefined && (!candidate || candidate.ticks >= pending.ticks)) return refuse('pending_wind_impulse')
       if (plan?.fallThreat && !fresh?.fallThreat && !fresh?.nominal.out) return refuse('no_useful_release_replan')
       if (!candidate || clock.wall.monotonic() > deadline) return refuse('no_useful_release_replan')
     }
     const world = edges.worldOf(collision), observed = { ...bot, blockAt: p => world.getBlock(p) }
-    return windTeamSafe(observed, team, [...preceding, candidate], p.arena, tracks) ? candidate : refuse('unsafe_allies_at_release')
+    if (!windTeamSafe(observed, team, [...preceding, candidate], p.arena, tracks)) return refuse('unsafe_allies_at_release')
+    if (team.length > 1 && !windAllyTailSafe(bot, foe, candidate, team.slice(1), collision, clock.wall.monotonic() + 20, tracks)) return refuse('unsafe_allies_at_release')
+    return candidate
   }
   const release = () => new Promise<void>(resolve => edges.afterPacket(bot, () => {
       try {

@@ -97,11 +97,12 @@ function sightingApproach(bot, observed, last) {
 // Search viewpoints from our own pose and visible supports, never the hidden target's packets.
 export async function acquireTarget (bot, ctl, vision, raw, { deadline, arena = null, interrupted }: any) {
   const start = clock.now()
+  const search = { legs: 0, seconds: 0 }
+  if (ctl?.aborted) return { entity: null, search }
   const target = () => raw.username ? bot.players?.[raw.username]?.entity || raw : bot.entities?.[raw.id] || raw
   const observedTarget = vision.observe(target())
   const sighted = view => view && view._ndVisible !== false && view.isValid !== false ? view : null
   let entity = sighted(observedTarget)
-  const search = { legs: 0, seconds: 0 }
   if (entity) return { entity, search }
   // A retired player handle can outlive its tab-list entity. Only the observer holds its public trail.
   const last = observedTarget || (raw._ndVisible === false ? vision.observe(raw) : null)

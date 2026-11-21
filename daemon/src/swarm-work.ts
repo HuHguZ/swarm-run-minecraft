@@ -4,6 +4,7 @@ import * as clock from './game-clock'
 import * as build from './build'
 import * as pick from './pick'
 import * as tools from './tools'
+import { bestWeapon } from './items'
 import * as safety from './combat-safety'
 import { seesPlayer, createLastSeen } from './pvp/last-seen'
 import { watchDigReceipt } from './environments/dig-receipt'
@@ -276,9 +277,14 @@ async function swarmWork(session, ctl, params: any = {}) {
   const budget = timeoutSeconds * 1000, deadline = clock.now() + budget
   let why = '', foe = null, confirmedState = null, receipt = null
   let clicked = false
-  const onClick = () => { confirmedState = null; clicked = true }
-  const confirmedBlock = after => clicked && confirmedState != null && after?.stateId === confirmedState &&
+  const matchesConfirmed = (after = bot.blockAt(pos)) => confirmedState != null && after?.stateId === confirmedState &&
     after.boundingBox === 'block' && (!item || after.name === item)
+  const onClick = () => {
+    if (local.aborted) throw new Error(why || 'aborted')
+    if (!matchesConfirmed()) confirmedState = null
+    clicked = true
+  }
+  const confirmedBlock = after => clicked && matchesConfirmed(after)
   const sight = createLastSeen(bot)
   let expectedEnd = Math.min(deadline, clock.now() + (plan?.ms ?? 500)), tickWake: (() => void) | null = null
   let wake!: (value: any) => void
@@ -287,6 +293,7 @@ async function swarmWork(session, ctl, params: any = {}) {
   const stop = (reason) => {
     if (why) return
     why = reason
+    for (const cb of local.onAbort.splice(0)) { try { cb() } catch {} }
     try { bot.stopDigging() } catch {}
     try { bot.pathfinder?.setGoal(null) } catch {}
     try { bot.clearControlStates() } catch {}
@@ -350,30 +357,58 @@ async function swarmWork(session, ctl, params: any = {}) {
   if (gravity) bot.on('blockUpdate', footingChanged)
   for (const event of ['death', 'end', 'kicked']) bot.on(event, dead)
   const timer = clock.setTimeout(() => stop('timeout'), budget)
+  const ASYNC_MUTATORS = new Set(['equip', 'unequip', 'look', 'lookAt', 'dig', '_placeBlockWithOptions', '_genericPlace', 'placeBlock', 'activateBlock'])
+  const SYNC_MUTATORS = new Set(['setControlState', 'clearControlStates', 'stopDigging', 'swingArm', 'activateItem', 'deactivateItem'])
+  // Gate late body mutations from a detached work() coroutine after stop() so it never races safety.disengage().
+  const workBot = new Proxy(bot, {
+    get(target, prop) {
+      const name = String(prop)
+      if (ASYNC_MUTATORS.has(name)) return (...args) => {
+        if (local.aborted) return Promise.reject(new Error(why || 'aborted'))
+        return target[prop](...args)
+      }
+      if (SYNC_MUTATORS.has(name)) return (...args) => {
+        if (local.aborted) return
+        return target[prop](...args)
+      }
+      const value = target[prop]
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+    set(target, prop, value) {
+      if (local.aborted) return true
+      target[prop] = value
+      return true
+    }
+  })
   try {
     check()
     const work = async () => {
       if (local.aborted) return result(why || 'cancelled', { aborted: true })
       if (kind === 'place') {
+        // Pass raw `bot` into placeChestLid/placeBlockAt so WeakMap-keyed body state (e.g. chest-lid `open`,
+        // ally-safety `observedBots`) resolves on the real bot; both helpers check `local.aborted` after every await
+        // and `onClick` throws if `local.aborted` before any placement packet.
         let r = chestLid ? await placeChestLid(bot, local, pos, item, params.rival, allies, params.arena,
           onClick, params.chestPartner) :
           await build.placeBlockAt(bot, pos, { item, honest: true, exactAim: true, visibleOccupantsOnly: true, steady: true, timeoutMs: budget, ctl: local, onClick })
-        if (!r.ok && !r.occupiedByEntity && !r.selfOccupied && !r.exitBlocked && !chestLid && !local.aborted && bot.entity.onGround && typeof bot.setControlState === 'function' && at.y > bot.entity.position.y + 1) {
+        if (!r.ok && !confirmedBlock(bot.blockAt(pos)) && !r.occupiedByEntity && !r.selfOccupied && !r.exitBlocked && !chestLid && !local.aborted && bot.entity.onGround && typeof bot.setControlState === 'function' && at.y > bot.entity.position.y + 1) {
           const jumpEnd = Math.min(clock.now() + 600, expectedEnd + budget)
           try {
-            bot.setControlState('jump', true)
-            while (!local.aborted && clock.now() < jumpEnd) {
+            workBot.setControlState('jump', true)
+            while (!local.aborted && clock.now() < jumpEnd && !confirmedBlock(bot.blockAt(pos))) {
               await clock.sleep(25)
+              if (local.aborted || confirmedBlock(bot.blockAt(pos))) break
               r = await build.placeBlockAt(bot, pos, { item, honest: true, exactAim: true, visibleOccupantsOnly: true, steady: true, timeoutMs: Math.min(600, budget), ctl: local, onClick })
-              if (r.ok || r.occupiedByEntity || r.selfOccupied || r.exitBlocked) break
+              if (r.ok || r.occupiedByEntity || r.selfOccupied || r.exitBlocked || confirmedBlock(bot.blockAt(pos))) break
             }
-          } finally { bot.setControlState('jump', false) }
+          } finally { if (!local.aborted) workBot.setControlState('jump', false) }
         }
         if (local.aborted) return result(why || 'cancelled', { aborted: true })
         const after = bot.blockAt(pos)
         // The new block can hide its previously witnessed support. Only a visible loss invalidates that proof.
         if (gravity && r.ok && supportedColumn(bot, pos) === false) return result('needs_stable_block')
         const confirmed = confirmedBlock(after)
+        if (confirmed && !r.ok) r = { ...r, ok: true }
         if (confirmed && r.ok && !chestLid) keepBlocks(bot, [{ ...xyz(at), repair: params.repair }])
         return result(confirmed && r.ok ? 'placed' : r.reason || 'server_unconfirmed', { ok: !!(confirmed && r.ok), done: !!(confirmed && r.ok),
           ...(r.occupiedByEntity && { occupiedByEntity: true }),
@@ -386,7 +421,7 @@ async function swarmWork(session, ctl, params: any = {}) {
       let face = build.FACES.find(f => pick.faceAim(bot, pos, f))
       if (!face || !bot.canDigBlock(before)) return result('occluded_or_out_of_reach')
       if (item && before.name !== item) return result('block_changed')
-      if (plan.item) await bot.equip(plan.item, 'hand')
+      if (plan.item) await workBot.equip(plan.item, 'hand')
       if (local.aborted) return result(why || 'cancelled', { aborted: true })
       plan = tools.bestFor(bot, before)
       // A falling body can retain the native airborne dig penalty until the next collision frame.
@@ -398,7 +433,7 @@ async function swarmWork(session, ctl, params: any = {}) {
       if (local.aborted) return result(why || 'cancelled', { aborted: true })
       face = build.FACES.find(f => pick.faceAim(bot, pos, f))
       if (!face) return result('occluded_or_out_of_reach')
-      await bot.lookAt(pick.faceAim(bot, pos, face), true)
+      await workBot.lookAt(pick.faceAim(bot, pos, face), true)
       if (exit) check()
       if (local.aborted) return result(why || 'cancelled', { aborted: true })
       if (item && (bot.blockAt(pos)?.name !== item || !pick.faceAim(bot, pos, face))) return result('block_changed')
@@ -406,17 +441,26 @@ async function swarmWork(session, ctl, params: any = {}) {
       if (!Number.isFinite(plan.ms) || plan.ms > deadline - clock.now()) return result('work_exceeds_budget', { ms: plan.ms, before: before.name, tool: plan.item?.name || 'hand' })
       receipt = watchDigReceipt(bot, pos, () => local.aborted)
       // Native dig('ignore') preserves the aimed point but also skips its own face assignment.
-      bot.targetDigFace = face.x ? (face.x > 0 ? BlockFaces.EAST : BlockFaces.WEST) :
+      workBot.targetDigFace = face.x ? (face.x > 0 ? BlockFaces.EAST : BlockFaces.WEST) :
         face.y ? (face.y > 0 ? BlockFaces.TOP : BlockFaces.BOTTOM) : face.z > 0 ? BlockFaces.SOUTH : BlockFaces.NORTH
       expectedEnd = clock.now() + plan.ms
-      await bot.dig(before, 'ignore')
+      await workBot.dig(before, 'ignore')
       if (local.aborted) return result(why || 'cancelled', { aborted: true })
       const accepted = await receipt.settle(Math.min(3000, budget))
       const after = bot.blockAt(pos)
       return result(accepted === 'confirmed' ? 'dug' : 'server_' + accepted, { ok: accepted === 'confirmed', done: accepted === 'confirmed', before: before.name, after: after?.name })
     }
-    const out: any = await Promise.race([work(), interrupted])
+    const workPromise = work()
+    workPromise.catch(() => {})
+    const out: any = await Promise.race([workPromise, interrupted])
     if (out.why === 'direct_threat' && !ctl?.aborted && (bot.health ?? 0) > 0) {
+      const equipWeapon = async () => {
+        const weapon = bestWeapon(bot)
+        if (weapon && bot.heldItem !== weapon && bot.heldItem?.name !== weapon.name && typeof bot.equip === 'function') {
+          await bot.equip(weapon, 'hand').catch(() => {})
+        }
+      }
+      await equipWeapon()
       const state = safety.inspect(bot, { entities: [foe], target: foe })
       if (state.action !== 'fight') {
         const raw = sight.source(foe)
@@ -425,6 +469,7 @@ async function swarmWork(session, ctl, params: any = {}) {
         const { aims }: typeof import('./threats') = require('./threats')
         const exposed = () => present() && aims(bot, null, null, { candidates: [raw] }).length > 0
         out.retreat = await safety.disengage(session, ctl || { aborted: false }, foes, { ms: 1000, exposed })
+        if (!ctl?.aborted && (bot.health ?? 0) > 0) await equipWeapon()
       }
       out.safety = state.action
     }

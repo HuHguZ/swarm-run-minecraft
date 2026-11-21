@@ -49,25 +49,60 @@ function stepSafe (bot, dir, { water = true, reach = 0.9 }: any = {}) {
       }
     }
   }
-  const feet = p.floored()
-  for (const dy of [0, 1]) {
-    const n = blockName(bot, feet.offset(0, dy, 0))
-    if (n && (HURTS.has(n) || SLOWS.has(n))) return false
-    if (!water && dy === 0 && n === 'water') return false
+  const dist = Math.hypot(motion.x, motion.z)
+  const steps = Math.max(1, Math.ceil(dist / 0.4))
+  const pad = Math.max(0, half - 1e-4)
+  const footprint = (q: Vec3) => {
+    const out: Array<[number, number]> = []
+    const x0 = Math.floor(q.x - pad), x1 = Math.floor(q.x + pad)
+    const z0 = Math.floor(q.z - pad), z1 = Math.floor(q.z + pad)
+    for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) out.push([x, z])
+    return out
   }
-  if (solid(bot, feet)) {
-    return !solid(bot, feet.offset(0, 1, 0)) && !solid(bot, feet.offset(0, 2, 0)) &&
-      !solid(bot, me.floored().offset(0, 2, 0))
+  const meCells = new Set(footprint(me).map(([x, z]) => `${x},${z}`))
+  const meCell = me.floored()
+  const meY = meCell.y
+  for (let i = 1; i <= steps; i++) {
+    const end = i === steps
+    const q = end ? p : me.offset(motion.x * (i / steps), 0, motion.z * (i / steps))
+    const feet = q.floored()
+    for (const [cx, cz] of footprint(q)) {
+      // Allow leaving a hazard/water cell the body already occupies, unless the step ends inside it.
+      if (!end && meCells.has(`${cx},${cz}`)) continue
+      const cell = new Vec3(cx, meY, cz)
+      for (const dy of [0, 1]) {
+        const n = blockName(bot, cell.offset(0, dy, 0))
+        if (n && (HURTS.has(n) || (end && SLOWS.has(n)))) return false
+        if (!water && dy === 0 && n === 'water') return false
+      }
+    }
+    // Intermediate samples still inside the starting cell must not block stepping off magma/lips or out from under a slab.
+    if (!end && feet.x === meCell.x && feet.z === meCell.z) continue
+    if (solid(bot, feet)) {
+      if (solid(bot, feet.offset(0, 1, 0)) || solid(bot, feet.offset(0, 2, 0)) ||
+          solid(bot, me.floored().offset(0, 2, 0))) return false
+      continue
+    }
+    if (solid(bot, feet.offset(0, 1, 0))) return false
+    let landed = false
+    for (let dy = 1; dy <= 4; dy++) {
+      const below = feet.offset(0, -dy, 0)
+      const n = blockName(bot, below)
+      if (n && HURTS.has(n)) return false
+      if (n === 'water') {
+        if (!water) return false
+        landed = true
+        break
+      }
+      if (solid(bot, below)) {
+        if (dy > 3) return false
+        landed = true
+        break
+      }
+    }
+    if (!landed) return false
   }
-  if (solid(bot, feet.offset(0, 1, 0))) return false
-  for (let dy = 1; dy <= 4; dy++) {
-    const below = feet.offset(0, -dy, 0)
-    const n = blockName(bot, below)
-    if (n && HURTS.has(n)) return false
-    if (n === 'water') return water
-    if (solid(bot, below)) return dy <= 3
-  }
-  return false
+  return true
 }
 
 // Ступенька по ходу на уровне ног при свободной голове — перепрыгнуть.

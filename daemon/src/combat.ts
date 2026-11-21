@@ -249,6 +249,7 @@ interface FightCtx {
 }
 
 async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null, strategicYield = null, targets = [], maceOpponents = [], relocateTo = null, potionFirst = false }: any = {}, guard) {
+  if (ctl.aborted) return { aborted: true }
   const bot = session.bot
   // Зачистка большой площадки: искать первого по всему её радиусу.
   const entity = findTarget(bot, target, session, { allowPlayer, radius: Math.max(24, clearArea || 0) })
@@ -279,31 +280,38 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
   try {
     const early = await fightPrepare(fb, currentTarget)
     if (early) return early
+    if (ctl.aborted) return { aborted: true }
     if (sight) return await fightPlayer(fb)
   } finally { sight?.close() }
+  if (ctl.aborted) return { aborted: true }
   if (fightsInOpen({ lastStand, repelLava, ranged }, () => corridorShape(bot, threatPoint(entity)).corridor)) return fightOpen(fb)
   const sealed = await fightSealFirst(fb)
   if (sealed) return sealed
+  if (ctl.aborted) return { aborted: true }
   return fightCorridor(fb)
 }
 
 // Вода, оружие, броня и щит, затем проверка начала боя: не годится — отход (результат), годится — ничего.
 async function fightPrepare (fb: FightCtx, currentTarget) {
   const { session, ctl, guard, bot, entity, retreatAtHealth, reach, arena, lastStand, repelLava, engaged } = fb
+  if (ctl.aborted) return { aborted: true }
   // Fighting from the water is not fighting: pathfinder will not swim to the
   // target and the body just floats there being shot.
   if (inWater(bot) && !lastStand) {
     fb.wasWet = true
     await escapeWater(bot, ctl, { timeoutMs: 8000 })
+    if (ctl.aborted) return { aborted: true }
   }
 
   fb.weapon = bestWeapon(bot)
   if (fb.weapon) await bot.equip(fb.weapon, 'hand')
+  if (ctl.aborted) return { aborted: true }
 
   // Порядок не случаен: armor.js кладёт щит в свободную левую руку последним
   // шагом своего плана, так что после него guard.wear() чаще всего находит
   // щит уже надетым и не кликает второй раз.
   guard.pre = await dressForFight(session, ctl, currentTarget, isPlayerEntity(entity))
+  if (ctl.aborted) return { aborted: true }
 
   // A shield in the off-hand is the difference between trading with a skeleton
   // and being pincushioned on the approach. It goes on for every fight and not
@@ -312,6 +320,7 @@ async function fightPrepare (fb: FightCtx, currentTarget) {
   guard.watch(currentTarget(), reach)
   guard.sawMobs(countHostiles(bot, 8))
   await guard.wear()
+  if (ctl.aborted) return { aborted: true }
 
   // Модуль PvP распознаёт также лечебные зелья; общий вход проверяет еду и
   // оружие, а его цикл — безопасное окно для конкретного лечебного предмета.

@@ -253,9 +253,33 @@ export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Om
   // максимуму. Свои точные чары против «блеск = максимум» у врага давали обеим командам «проигрываем» (арена 14.10:
   // синие 4.0 : 3.1, красные 3.8 : 2.5 в одном и том же бою). Хп: свои — известные, чужие — верх оценки по нашим
   // попаданиям (e.hpEstimate), без оценки — 20: раненые свои против «свежих» чужих снова давали обеим сторонам «проигрываем».
-  const seenOf = (m: SwarmMember): SharedEnemy => ({ id: m.id, position: m.position, velocity: { x: 0, y: 0, z: 0 }, sources: [], seenAt: 0,
-    threat: /^(bow|crossbow)$/.test(m.weapon || '') ? 'bow' : 'melee',
-    equipment: { weapon: m.weapon ?? null, armor: (Array.isArray(m.armor) ? m.armor : Object.values(m.armor || {})).filter(Boolean) as string[], ...(Object.values(m.ench || {}).some(v => Number(v) > 0) ? { enchanted: true } : {}) } } as any)
+  const seenOf = (m: SwarmMember): SharedEnemy => {
+    const inv = m.inventory || {}
+    const arrows = m.attackArrows ?? (inv.arrow || 0) + (inv.spectral_arrow || 0)
+    const bestMelee = [m.weapon, m.offHand, ...Object.keys(inv).filter(n => count(inv, n) > 0 && damage.isMeleeWeapon(n))]
+      .filter((n): n is string => !!n && damage.isMeleeWeapon(n))
+      .sort((a, b) => damage.attackDamage(b) - damage.attackDamage(a))[0]
+    const ranged = (inv.bow && arrows > 0) ? 'bow' : (inv.crossbow && (arrows > 0 || m.loadedCrossbow)) ? 'crossbow' : undefined
+    const weapon = bestMelee || (m.weapon && /^(bow|crossbow)$/.test(m.weapon) ? m.weapon : ranged) || null
+    const armor = (Array.isArray(m.armor) ? m.armor : Object.values(m.armor || {})).filter(Boolean) as string[]
+    const armorEnch = Number(m.ench?.protection || 0) > 0
+    const weaponEnch = /^(bow|crossbow)$/.test(weapon || '')
+      ? Number(m.ench?.power || 0) > 0
+      : Number(m.ench?.sharpness || 0) > 0
+    const hasEnch = armorEnch || weaponEnch
+    return {
+      id: m.id, position: m.position, velocity: { x: 0, y: 0, z: 0 }, sources: [], seenAt: 0,
+      threat: /^(bow|crossbow)$/.test(weapon || '') ? 'bow' : 'melee',
+      equipment: {
+        weapon: weapon ?? null,
+        armor,
+        ...(hasEnch ? {
+          weaponEnchanted: weaponEnch,
+          armorEnchanted: ['boots', 'leggings', 'chestplate', 'helmet'].map(s => armorEnch && armor.some(a => a.endsWith('_' + s)))
+        } : {})
+      }
+    } as any
+  }
   const units: Unit[] = [
     ...team.filter(m => m.health > 0).map(m => { const seen = seenOf(m); return { side: 0 as const, position: m.position, hp: m.health, start: m.health, defense: enemyDefense(seen), last: null, target: -1, next: 0, strike: null, seen } }),
     ...enemies.map(e => ({ side: 1 as const, position: e.position, hp: e.hpEstimate ?? 20, start: e.hpEstimate ?? 20, defense: enemyDefense(e), last: null, target: -1, next: 0, strike: null, seen: e }))
@@ -266,14 +290,20 @@ export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Om
     const a = enemyAttack(u.seen, { position: v.position } as SwarmMember)
     return { raw: a.kind === 'projectile' ? a.raw * ARROW_HIT : a.raw, kind: a.kind, interval: a.interval, ranged: a.kind !== 'melee', breach: a.breach }
   }
-  const load = (i: number) => units.filter(w => w.hp > 0 && w.target === i).length
+  const loads = new Int32Array(units.length)
   const aim = (u: Unit, tick: number) => {
-    const foes = units.map((v, i) => i).filter(i => units[i].side !== u.side && units[i].hp > 0)
-    if (!foes.length) return false
-    const i = foes.sort((a, b) => Number(load(a) >= 2) - Number(load(b) >= 2) || distance(u.position, units[a].position) - distance(u.position, units[b].position))[0]
-    const d = distance(u.position, units[i].position)
-    u.target = i; u.strike = strike(u, units[i])
-    u.next = Math.max(u.next, tick + Math.ceil(u.strike.ranged ? d / 3 : Math.max(0, d - 3) / 5.6 * 20))
+    if (u.target >= 0) { loads[u.target]--; u.target = -1 }
+    let best = -1, bestCrowded = 2, bestDist = Infinity
+    for (let i = 0; i < units.length; i++) {
+      const v = units[i]
+      if (v.side === u.side || v.hp <= 0) continue
+      const crowded = loads[i] >= 2 ? 1 : 0
+      const d = distance(u.position, v.position)
+      if (crowded < bestCrowded || crowded === bestCrowded && d < bestDist) { best = i; bestCrowded = crowded; bestDist = d }
+    }
+    if (best < 0) return false
+    u.target = best; loads[best]++; u.strike = strike(u, units[best])
+    u.next = Math.max(u.next, tick + Math.ceil(u.strike.ranged ? bestDist / 3 : Math.max(0, bestDist - 3) / 5.6 * 20))
     return true
   }
   const alive = (side: 0 | 1) => units.some(u => u.side === side && u.hp > 0)
@@ -289,9 +319,11 @@ export function assessTeamFight(team: SwarmMember[], enemies: SharedEnemy[]): Om
     for (const [u, v] of hits) {
       const victims = u.strike!.kind === 'explosion' ? units.filter(w => w.side !== u.side && w.hp > 0 && distance(w.position, v.position) <= 5) : [v]
       for (const w of victims) {
+        const wasAlive = w.hp > 0
         const hit = damage.throughIframes(u.strike!.kind === 'explosion' ? enemyAttack(u.seen, { position: w.position } as SwarmMember).raw : u.strike!.raw, w.last)
         w.last = hit.last
         w.hp -= damage.afterDefense(hit.raw, u.strike!.kind, w.defense, { breach: u.strike!.breach })
+        if (wasAlive && w.hp <= 0 && w.target >= 0) { loads[w.target]--; w.target = -1 }
       }
     }
   }

@@ -68,21 +68,43 @@ function terrainMethods ({ session }: RpcContext) {
         // Лучший инструмент в руку (копал тем, что держал, — мечом стену укрытия по 10 с).
         const tool = bot.pathfinder?.bestHarvestTool?.(b)
         if (tool && bot.heldItem?.type !== tool.type) await bot.equip(tool, 'hand').catch(() => {})
-        const face = FACES.find(f => faceAim(bot, v, f))
+        let face = FACES.find(f => faceAim(bot, v, f))
         if (!face || ctl.aborted) return false
-        const aim = faceAim(bot, v, face), from = bot.entity.position.clone()
+        let aim = faceAim(bot, v, face), from = bot.entity.position.clone()
         await bot.lookAt(aim, true)
+        if (ctl.aborted) return false
+        // Recompute live faceAim after lookAt so tiny residual slide doesn't abort with stale `from`,
+        // while knockback out of reach / behind cover still returns false.
+        let freshAim = faceAim(bot, v, face)
+        if (!freshAim) {
+          const altFace = FACES.find(f => faceAim(bot, v, f))
+          if (!altFace) return false
+          face = altFace
+          freshAim = faceAim(bot, v, face)
+        }
+        if (!freshAim) return false
+        const afterLook = bot.entity.position.clone()
+        if (!freshAim.equals(aim) || afterLook.distanceTo(from) > 0.01) {
+          aim = freshAim
+          from = afterLook
+          await bot.lookAt(aim, true)
+          if (ctl.aborted || !faceAim(bot, v, face)?.equals?.(aim)) return false
+          from = bot.entity.position.clone()
+        } else {
+          from = afterLook
+        }
         const { yaw, pitch } = bot.entity
         const footprint = bodyBox(bot, from)
         const underfoot = shapeBoxes(b).some(box => Math.abs(box.maxY - from.y) < .04 &&
           box.minX < footprint.maxX && box.maxX > footprint.minX && box.minZ < footprint.maxZ && box.maxZ > footprint.minZ)
         const pickedFace = () => {
-          if (ctl.aborted || !from.equals(bot.entity.position) || bot.entity.yaw !== yaw || bot.entity.pitch !== pitch || !faceAim(bot, v, face)?.equals?.(aim) ||
+          const livePos = bot.entity.position
+          if (ctl.aborted || livePos.distanceTo(from) > 0.4 || bot.entity.yaw !== yaw || bot.entity.pitch !== pitch || !faceAim(bot, v, face)?.equals?.(aim) ||
               bot.blockAt(v)?.stateId !== b.stateId) return null
           if (underfoot) {
-            const below = new V(from.x, v.y, from.z)
+            const below = new V(livePos.x, v.y, livePos.z)
             const stand = supportAt(observedCollision(bot), below, .5)
-            if (!bot.entity.onGround || !stand || !withinArena(bot, new V(from.x, stand.top, from.z), p.arena, from)) {
+            if (!bot.entity.onGround || !stand || !withinArena(bot, new V(livePos.x, stand.top, livePos.z), p.arena, livePos)) {
               why = 'не вижу опоры под собой'; return null
             }
           }

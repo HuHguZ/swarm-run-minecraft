@@ -45,8 +45,9 @@ function kit (bot) {
 }
 
 // Предмет в хотбар (оттуда — «использовать» сменой слота). Не на выбранный
-// слот и не поверх оружия/тотема/ведра.
+// слот и не поверх оружия/тотема/ведра; при забитом KEEP-хотбаре — дубликат или наименее критичный слот.
 const KEEP = /_sword$|_axe$|^mace$|^bow$|^crossbow$|^totem_of_undying$|golden_apple$|^water_bucket$|^ender_pearl$|^shield$/
+const FALLBACK_EVICT = [/^bow$/, /^crossbow$/, /^shield$/, /^water_bucket$/, /_axe$/, /^ender_pearl$/, /golden_apple$/]
 async function toHotbar (bot, pred) {
   for (let i = 0; i < 9; i++) if (pred(bot.inventory.slots[36 + i])) return i
   const it = bot.inventory.items().find(pred)
@@ -54,6 +55,23 @@ async function toHotbar (bot, pred) {
   let dest = -1
   for (let i = 0; i < 9; i++) if (i !== bot.quickBarSlot && !bot.inventory.slots[36 + i]) { dest = i; break }
   if (dest < 0) for (let i = 8; i >= 0; i--) { const s = bot.inventory.slots[36 + i]; if (i !== bot.quickBarSlot && s && !KEEP.test(s.name)) { dest = i; break } }
+  // Pass 3: duplicate item in hotbar (non-selected) when all 9 slots hold KEEP items.
+  if (dest < 0) {
+    const counts = new Map<string, number>()
+    for (let i = 0; i < 9; i++) { const s = bot.inventory.slots[36 + i]; if (s) counts.set(s.name, (counts.get(s.name) || 0) + 1) }
+    for (let i = 8; i >= 0; i--) { const s = bot.inventory.slots[36 + i]; if (i !== bot.quickBarSlot && s && (counts.get(s.name) || 0) > 1) { dest = i; break } }
+  }
+  // Pass 4: evict lowest-priority non-selected KEEP item so takeoff rockets / elytra / chestplate never hard-fail.
+  if (dest < 0) {
+    for (const pat of FALLBACK_EVICT) {
+      for (let i = 8; i >= 0; i--) {
+        const s = bot.inventory.slots[36 + i]
+        if (i !== bot.quickBarSlot && s && pat.test(s.name)) { dest = i; break }
+      }
+      if (dest >= 0) break
+    }
+  }
+  if (dest < 0) for (let i = 8; i >= 0; i--) { const s = bot.inventory.slots[36 + i]; if (i !== bot.quickBarSlot && s && s.name !== 'totem_of_undying' && s.name !== 'mace') { dest = i; break } }
   if (dest < 0) return -1
   try { await bot.moveSlotItem(it.slot, 36 + dest) } catch { return -1 }
   return pred(bot.inventory.slots[36 + dest]) ? dest : -1

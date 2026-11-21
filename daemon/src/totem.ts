@@ -23,13 +23,15 @@ const gameClock: typeof import('./game-clock') = require('./game-clock')
 
 const assess: typeof import('./assess') = require('./assess')
 const read: typeof import('./read') = require('./read')
+const dm: typeof import('./pvp/damage-model') = require('./pvp/damage-model')
 const { seesPlayer }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
 
 const OFF = 45
-// Урон оружия (атрибут руки, с базовой 1 игрока) — PVP-RESEARCH б.1.
+// Урон оружия (атрибут руки, с базовой 1 игрока) — 1.21.11, включая все копья.
 const WEAPON = {
   wooden_sword: 4, golden_sword: 4, stone_sword: 5, copper_sword: 5, iron_sword: 6, diamond_sword: 7, netherite_sword: 8,
   wooden_axe: 7, golden_axe: 7, stone_axe: 9, copper_axe: 9, iron_axe: 9, diamond_axe: 9, netherite_axe: 10,
+  wooden_spear: 1, golden_spear: 1, stone_spear: 2, copper_spear: 2, iron_spear: 3, diamond_spear: 4, netherite_spear: 5,
   trident: 9, mace: 6
 }
 
@@ -64,14 +66,16 @@ function burstOf (bot, e) {
   if (!e) return 0
   const weapon = e.equipment && e.equipment[0]
   const held = weapon ? weapon.name : null
-  let dmg = WEAPON[held] || 1
-  try {
-    // Частицы эффектов не читаем (цвет); силу видно только своим — берём худшее
-    // для оружия в руке, если он пил (этого не знаем) — без силы.
-  } catch {}
-  dmg *= 1.5
   const sharp = weapon ? read.enchLevel(bot, weapon, 'sharpness') : 0
-  if (sharp > 0) dmg += 1 + 0.5 * (sharp - 1)
+  let dmg: number
+  if (held && dm.isSpear(held)) {
+    // Spear jab does not crit, but kinetic charge at sprint speed (~6 b/s) or elytra (~25 b/s) is lethal burst.
+    const chargeRel = e.elytraFlying ? 25 : 6
+    dmg = Math.max(dm.attackDamage(held), dm.spearChargeRaw({ weapon: held, sharpness: 0, rel: chargeRel })) + dm.sharpBonus(sharp)
+  } else {
+    const base = held ? dm.attackDamage(held) : 1
+    dmg = base * 1.5 + dm.sharpBonus(sharp)
+  }
   const worn = [5, 6, 7, 8].map(s => bot.inventory.slots[s])
   const g = assess.gearOf(worn)
   const epf = Math.min(20, worn.reduce((s, it) => s + (it ? read.enchLevel(bot, it, 'protection') : 0), 0))

@@ -39,6 +39,36 @@ function reachedShore(bot: Body, target: Body): boolean {
     Math.abs(point.x - target.x) < .25 && Math.abs(point.z - target.z) < .25
 }
 
+function staleClimbGoal(bot: Body, pending: Body): boolean {
+  const point = bot?.entity?.position
+  if (!point || (bot.health ?? 20) <= 0) return true
+  const dim = String(bot.game?.dimension || '')
+  if (pending.dimension !== undefined && pending.dimension !== dim) return true
+  const target = pending.at
+  if (!target || reachedShore(bot, target)) return true
+  const dry = !inLava(bot) && !!bot.entity.onGround
+  const horiz = Math.hypot(point.x - target.x, point.z - target.z)
+  // Escaped via pearl/boat/flee/swim to dry footing well away from the old climb target.
+  if (dry && horiz > 4) return true
+  const expired = !!pending.failed || clock.now() >= pending.deadline
+  if (expired) {
+    if (pending.failedPos && point.distanceTo(pending.failedPos) > 2) return true
+    if (inLava(bot) && (horiz > 6 || clock.now() >= pending.deadline + 5000)) return true
+    if (dry && clock.now() >= pending.deadline + 5000) return true
+  }
+  return false
+}
+
+export function syncLavaClimbGoal(session: Body): Body | null {
+  const pending = session._tacticalLavaClimbGoal
+  if (!pending) return null
+  if (staleClimbGoal(session.bot, pending)) {
+    delete session._tacticalLavaClimbGoal
+    return null
+  }
+  return pending
+}
+
 export function wallExit(bot: Body): Body | null {
   const feet = bot.entity.position.floored()
   let best: Body | null = null
@@ -61,13 +91,9 @@ export function lavaCapabilities(session: Body): { potion: boolean; climb: boole
   const bot = session.bot
   const potion = !!kit.findPotion(bot, 'fire_resistance', { splash: false }) ||
     !!kit.findPotion(bot, 'fire_resistance', { splash: true }) && !!splashImpact(bot)
-  const pending = session._tacticalLavaClimbGoal
+  const pending = syncLavaClimbGoal(session)
   if (pending) {
     const target = pending.at
-    if (reachedShore(bot, target)) {
-      delete session._tacticalLavaClimbGoal
-      return { potion, climb: false, exit: '' }
-    }
     return { potion, climb: !pending.failed && clock.now() < pending.deadline,
       exit: `${Math.floor(target.x)},${Math.floor(target.y)},${Math.floor(target.z)}` }
   }
@@ -141,13 +167,15 @@ export async function drinkFireResistance(session: Body, ctl: Controller): Promi
 
 export async function climbFromLava(session: Body, ctl: Controller): Promise<Result> {
   const bot = session.bot
-  const existing = session._tacticalLavaClimbGoal
-  if (existing && reachedShore(bot, existing.at)) {
+  const rawExisting = session._tacticalLavaClimbGoal
+  if (rawExisting && reachedShore(bot, rawExisting.at)) {
     delete session._tacticalLavaClimbGoal
-    return { ok: true, method: 'original shore reached', target: existing.at, at: bot.entity.position.clone() }
+    return { ok: true, method: 'original shore reached', target: rawExisting.at, at: bot.entity.position.clone() }
   }
+  const existing = syncLavaClimbGoal(session)
   if (existing && (existing.failed || clock.now() >= existing.deadline)) {
     existing.failed = true
+    existing.failedPos ||= bot.entity?.position?.clone?.()
     return { ok: false, why: existing.why || 'original shore rescue budget exhausted', target: existing.at }
   }
   const activeGoal = existing || null
@@ -160,14 +188,14 @@ export async function climbFromLava(session: Body, ctl: Controller): Promise<Res
   if (!target && farOn()) return farOut(session, ctl)
   if (!target) return { ok: false, why: 'no loaded shore or usable wall with building blocks' }
   const startY = activeGoal?.startY ?? bot.entity.position.y
-  const goal = activeGoal || { at: target, deadline: clock.now() + 12000, startY, placed: 0 }
+  const goal = activeGoal || { at: target, deadline: clock.now() + 12000, startY, placed: 0, dimension: String(bot.game?.dimension || '') }
   session._tacticalLavaClimbGoal = goal
   let lastProgress = goal.lastProgress ?? clock.now()
   let bestY = goal.bestY ?? bot.entity.position.y
   let placed = goal.placed
   const reached = () => reachedShore(bot, target)
   const fail = (why: string): Result => {
-    if (!ctl.aborted) { goal.failed = true; goal.why = why }
+    if (!ctl.aborted) { goal.failed = true; goal.why = why; goal.failedPos = bot.entity?.position?.clone?.() }
     return { ok: false, placed, why, target, at: bot.entity.position.clone() }
   }
   const complete = (method: string): Result => ({ ok: true, placed, climbed: bot.entity.position.y - startY, method, target, at: bot.entity.position.clone() })
@@ -224,8 +252,8 @@ export async function climbFromLava(session: Body, ctl: Controller): Promise<Res
     }
   } finally {
     if (session._tacticalLavaClimbGoal === goal) {
-      if (reached() || bot.health <= 0) delete session._tacticalLavaClimbGoal
-      else if (!ctl.aborted) { goal.failed = true; goal.why ||= 'original shore rescue stopped before reaching its goal' }
+      if (reached() || bot.health <= 0 || staleClimbGoal(bot, goal)) delete session._tacticalLavaClimbGoal
+      else if (!ctl.aborted) { goal.failed = true; goal.why ||= 'original shore rescue stopped before reaching its goal'; goal.failedPos = bot.entity?.position?.clone?.() }
     }
     try { bot.clearControlStates() } catch {}
   }

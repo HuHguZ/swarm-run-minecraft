@@ -58,10 +58,11 @@ function traceFrame (ctx: DuelCtx, turn: TurnFrame, by: string) {
 }
 
 async function duel (session, ctl, entity, opts: any = {}) {
+  const totem0 = totemMod.snapshot(session.bot)
+  if (ctl?.aborted) return { aborted: true, totem: totemMod.delta(totem0, totem0) }
   const maceIntent = session.current
   const safety = opts.guard?.safety || require('./combat-safety').watch(session.bot)
   const vision = createLastSeen(session.bot)
-  const totem0 = totemMod.snapshot(session.bot)
   try { return await duelBody(session, ctl, entity, { ...opts, safety, vision, totem0, maceIntent }) } finally {
     if (session.bot?._ndMaceDefense?.ctl === ctl) delete session.bot._ndMaceDefense
     vision.close()
@@ -75,62 +76,122 @@ async function duelBody (session, ctl, entity, opts: any = {}) {
   ctx.rangedAllowed = () => canUseRanged(session, ctx.entity, opts)
   const bot = ctx.bot = session.bot
   const vision = ctx.vision = opts.vision
+  if (ctl?.aborted) return { aborted: true, totem: totemMod.delta(opts.totem0, totemMod.snapshot(bot)) }
   const deadline = ctx.deadline = gameClock.now() + Math.min(300, opts.timeoutSeconds ?? 60) * 1000
   const acquired = ctx.acquired = await require('./pvp/search').acquireTarget(bot, ctl, vision, ctx.entity, { deadline, arena: opts.arena })
+  if (ctl?.aborted) return { aborted: true, totem: totemMod.delta(opts.totem0, totemMod.snapshot(bot)) }
   if (!acquired.entity) return { lost: `${ctx.entity.username || ctx.entity.name} не найден`, search: acquired.search, totem: totemMod.delta(opts.totem0, totemMod.snapshot(bot)) }
   ctx.entity = acquired.entity
   ctx.strategicTargetId = ctx.entity.id
-  ctl.onAbort.push(() => vision.close())
-  initDuelState(ctx)
-  installCore(ctx)
-  installProbes(ctx)
-  installTrace(ctx)
-  installSight(ctx)
-  installDamageLog(ctx)
-  installTempo(ctx)
-  installStrafe(ctx)
-  installMelee(ctx)
-  installShotGate(ctx)
-  installEvents(ctx)
-  installFloorWatch(ctx)
-  installFallAndAim(ctx)
-  installServices(ctx)
-  installSkillDelegates(ctx)
-  installPerchDrop(ctx)
-  installFortDelegates(ctx)
-  installFort(ctx)
-  installInputs(ctx)
-  installHazardSkills(ctx)
-  installReport(ctx)
-  installTarget(ctx)
-  installMaceChain(ctx)
-  installSkills(ctx)
-  await openDuel(ctx)
-  installLateSkills(ctx)
-
-  let loopYielded = true
-  let loopSpins = 0
-  const markLoopYield = () => { loopYielded = true }
-  while (!ctl.aborted) {
-    ctx.miningProgress()
-    if (loopYielded) loopSpins = 0
-    else if (++loopSpins >= 50) { loopSpins = 0; await new Promise<any>(resolve => setImmediate(resolve)) }
-    loopYielded = false
-    setImmediate(markLoopYield)
-    const turn = {} as TurnFrame
-    let out
-    let by = 'конец'
-    for (const stage of TURN) {
-      out = stage(ctx, turn)
-      if (out && typeof out.then === 'function') out = await out
-      if (out) { by = stage.name; break }
+  ctx._duelTicks = []
+  ctx.addDuelTick = (fn) => { ctx._duelTicks!.push(fn) }
+  const cleanup = ctx.cleanup = () => {
+    const first = !ctx._cleaned
+    ctx._cleaned = true
+    if (ctx.aimTimer) gameClock.clearInterval(ctx.aimTimer)
+    if (first) {
+      try { ctx.clear?.() } catch {}
+      try { ctx.pathTo?.(false) } catch {}
+      try { ctx.restoreMoves?.() } catch {}
+      try { bot.deactivateItem?.() } catch {}
     }
-    if (ctx.TRACE) traceFrame(ctx, turn, by)
-    if (out === NEXT) continue
-    if (out) return out.end
-    await sleep(TICK_MS)
+    if (ctx.onDuelTick) bot.removeListener('physicsTick', ctx.onDuelTick)
+    if (ctx.onHurt) bot.removeListener('entityHurt', ctx.onHurt)
+    if (ctx.onTickSwat) bot.removeListener('physicsTick', ctx.onTickSwat)
+    if (ctx.onTickArcher) bot.removeListener('physicsTick', ctx.onTickArcher)
+    if (ctx.onMobHurt) bot.removeListener('entityHurt', ctx.onMobHurt)
+    if (ctx.onSelfDeath) bot.removeListener('death', ctx.onSelfDeath)
+    if (ctx.onTickFall) bot.removeListener('physicsTick', ctx.onTickFall)
+    if (ctx.onTickDmg) bot.removeListener('physicsTick', ctx.onTickDmg)
+    try { ctx.edgeGuard?.stop?.() } catch {}
+    if (ctx.onMlg) bot.removeListener('nd_mlg', ctx.onMlg)
+    if (ctx.onCrack) bot.removeListener('blockBreakProgressObserved', ctx.onCrack)
+    if (ctx.onCrackEnd) bot.removeListener('blockBreakProgressEnd', ctx.onCrackEnd)
+    if (ctx.onRoutePath) bot.removeListener('path_update', ctx.onRoutePath)
+    if (ctx.onDead) bot.removeListener('entityDead', ctx.onDead)
+    if (ctx.onDeathNotice) bot.removeListener('message', ctx.onDeathNotice)
+    try { ctx.tt?.close?.() } catch {}
+    if (ctx.tt && session.tempo === ctx.tt) session.tempo = null
+    try { ctx.mc?.close?.() } catch {}
+    try { ctx.pvpSkills?.closeEquipment?.() } catch {}
+    try { ctx.sky?.close?.() } catch {}
+    try { ctx.calc?.stop?.() } catch {}
+    try { ctx.blk?.close?.() } catch {}
+    try { ctx.pearlResponse?.close?.() } catch {}
+    try { ctx.bm?.close?.() } catch {}
+    try { ctx.cx?.close?.() } catch {}
+    try { ctx.mf?.close?.() } catch {}
+    try { ctx.duo?.close?.() } catch {}
+    try { ctx.util?.close?.() } catch {}
+    try { ctx.hm?.close?.() } catch {}
+    try { vision.close() } catch {}
   }
-  return ctx.finish({ aborted: true })
+  ctl.onAbort.push(cleanup)
+  try {
+    initDuelState(ctx)
+    installCore(ctx)
+    installProbes(ctx)
+    installTrace(ctx)
+    installSight(ctx)
+    installDamageLog(ctx)
+    installTempo(ctx)
+    installStrafe(ctx)
+    installMelee(ctx)
+    installShotGate(ctx)
+    installEvents(ctx)
+    installFloorWatch(ctx)
+    installFallAndAim(ctx)
+    if (ctx._duelTicks.length) {
+      const duelTicks = ctx._duelTicks
+      ctx.onDuelTick = () => { for (let i = 0; i < duelTicks.length; i++) duelTicks[i]() }
+      bot.on('physicsTick', ctx.onDuelTick)
+    }
+    installServices(ctx)
+    installSkillDelegates(ctx)
+    installPerchDrop(ctx)
+    installFortDelegates(ctx)
+    installFort(ctx)
+    installInputs(ctx)
+    installHazardSkills(ctx)
+    installReport(ctx)
+    installTarget(ctx)
+    installMaceChain(ctx)
+    installSkills(ctx)
+    if (ctl.aborted) return ctx.finish({ aborted: true })
+    await openDuel(ctx)
+    if (ctl.aborted) return ctx.finish({ aborted: true })
+    installLateSkills(ctx)
+
+    let loopYielded = true
+    let loopSpins = 0
+    const markLoopYield = () => { loopYielded = true }
+    while (!ctl.aborted) {
+      ctx.miningProgress()
+      if (loopYielded) loopSpins = 0
+      else if (++loopSpins >= 50) { loopSpins = 0; await new Promise<any>(resolve => setImmediate(resolve)) }
+      loopYielded = false
+      setImmediate(markLoopYield)
+      const turn = ctx._turnFrame = {} as TurnFrame
+      let out
+      let by = 'конец'
+      for (const stage of TURN) {
+        out = stage(ctx, turn)
+        if (out && typeof out.then === 'function') out = await out
+        if (out) { by = stage.name; break }
+      }
+      ctx._turnFrame = null
+      if (ctx.TRACE) traceFrame(ctx, turn, by)
+      if (out === NEXT) continue
+      if (out) return out.end
+      await sleep(TICK_MS)
+    }
+    return ctx.finish({ aborted: true })
+  } finally {
+    ctx._turnFrame = null
+    cleanup()
+    const idx = ctl.onAbort.indexOf(cleanup)
+    if (idx >= 0) ctl.onAbort.splice(idx, 1)
+  }
 }
 
 export { duel }

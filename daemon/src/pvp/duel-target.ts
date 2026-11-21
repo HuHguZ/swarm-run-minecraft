@@ -10,6 +10,7 @@ import { seesPlayer } from './last-seen'
 export function installTarget (ctx: DuelCtx) {
   const { blockedShotTargets, bot, co, guard, opts, pathTo, pickWeaponFor, st, vision } = ctx
   ctx.retarget = (e) => {
+    if (ctx.ctl?.aborted || ctx._cleaned) return
     if (!e || e === bot.entity || (bot.entity && e.id === bot.entity.id)) return
     const observed = vision.observe(e)
     if (!observed) return

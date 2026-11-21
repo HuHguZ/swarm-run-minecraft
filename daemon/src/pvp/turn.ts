@@ -58,6 +58,8 @@ export interface DuelCtx {
   retarget: any; maceChain: any; seesNow: any; buffUp: any; splashFirst: any; spearChargeFar: any; sleep: any;
   glideChase: any; arenaExitCheck?: { inputs: string; at: number } | null;
   hiddenVentTried?: { target: object; cells: Set<string> };
+  cleanup?: () => void; _cleaned?: boolean; _turnFrame?: any; _spearWallCache?: any;
+  _duelTicks?: Array<() => void>; addDuelTick?: (fn: () => void) => void; onDuelTick?: () => void;
 }
 
 export interface TurnFrame {

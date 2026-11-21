@@ -16,8 +16,109 @@ export function sampleItems(samples: string[][], rocket3: string): Item[][] {
 const simpleStack = (i: StorageItem): boolean => i.plain !== false && !Object.keys(i.ench || {}).length &&
   i.stars == null && !i.crossbow && !/potion|tipped_arrow|firework_rocket|enchanted_book/.test(i.name)
 
-export function fittingLoot(reward: Item[], storage: Array<StorageItem | null> | null): Item[] {
+export const DROP_TICKS_PER_SLOT = 4
+const EVICT_MIN_GAIN = 0.2
+const CORE_UTILITY = /^(water_bucket|ender_pearl|wind_charge|cobweb|cooked_|bread|baked_potato|golden_carrot)|_pickaxe$/
+
+function removeOneFromOwned (owned: Item[], target: StorageItem): Item[] {
+  const out: Item[] = []
+  let removed = false
+  for (const it of owned) {
+    if (!removed && it.name === target.name && (it.count ?? 1) === (target.count ?? 1) &&
+        JSON.stringify(it.ench || {}) === JSON.stringify(target.ench || {}) &&
+        it.stars === target.stars) {
+      removed = true
+      continue
+    }
+    out.push(it)
+  }
+  if (!removed) {
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].name === target.name) {
+        const left = (out[i].count ?? 1) - (target.count ?? 1)
+        if (left > 0) out[i] = { ...out[i], count: left }
+        else out.splice(i, 1)
+        break
+      }
+    }
+  }
+  return out
+}
+
+export function planLootEviction (owned: Item[], reward: Item[], storage: Array<StorageItem | null> | null): {
+  accepted: Item[]; evicted: StorageItem[]; dropTicks: number; netGain: number
+} {
+  if (!storage) return { accepted: [], evicted: [], dropTicks: 0, netGain: 0 }
+  const slots = storage.map(i => i && { ...i })
+  const evictable = slots.map(i => !!i)
+  const accepted: Item[] = []
+  const overflow: Item[] = []
+  const ordered = [...new Set(reward.map(i => i.name))].flatMap(name => reward.filter(i => i.name === name))
+  for (const item of ordered) {
+    const limit = itemsByName[item.name]?.stackSize || 1
+    let left = Math.max(0, Math.floor(item.count ?? 1)), got = 0
+    if (limit > 1 && simpleStack(item)) for (const slot of slots) {
+      if (!slot || slot.name !== item.name || !simpleStack(slot)) continue
+      const n = Math.min(left, Math.max(0, limit - (slot.count ?? 1)))
+      slot.count = (slot.count ?? 1) + n; left -= n; got += n
+    }
+    for (let index = 0; index < slots.length && left > 0; index++) if (!slots[index]) {
+      const count = Math.min(left, limit)
+      slots[index] = { ...item, count }; evictable[index] = false; left -= count; got += count
+    }
+    if (got > 0) accepted.push({ ...item, count: got })
+    while (left > 0) {
+      const count = Math.min(left, limit)
+      overflow.push({ ...item, count })
+      left -= count
+    }
+  }
+  const baseOwnedPower = powerOf(owned).total
+  let currentOwned = [...owned, ...accepted]
+  const evicted: StorageItem[] = []
+  if (overflow.length) {
+    const ranked = overflow
+      .map(item => ({ item, rawGain: powerOf([...currentOwned, item]).total - powerOf(currentOwned).total }))
+      .sort((a, b) => b.rawGain - a.rawGain)
+    for (const { item } of ranked) {
+      const curPower = powerOf(currentOwned).total
+      if (powerOf([...currentOwned, item]).total <= curPower + EVICT_MIN_GAIN) continue
+      let bestIdx = -1, bestCost = Infinity, bestWithout: Item[] | null = null
+      for (let idx = 0; idx < slots.length; idx++) {
+        const s = slots[idx]
+        if (!evictable[idx] || !s) continue
+        const without = removeOneFromOwned(currentOwned, s)
+        const loss = Math.max(0, curPower - powerOf(without).total)
+        const sameNameCount = slots.filter(x => x && x.name === s.name).length
+        const utilityTie = sameNameCount === 1 && CORE_UTILITY.test(s.name) ? 0.05 : 0
+        const cost = loss + utilityTie
+        if (cost < bestCost) { bestCost = cost; bestIdx = idx; bestWithout = without }
+      }
+      if (bestIdx < 0 || !bestWithout) break
+      const afterPower = powerOf([...bestWithout, item]).total
+      if (afterPower - curPower > EVICT_MIN_GAIN) {
+        evicted.push(slots[bestIdx]!)
+        slots[bestIdx] = { ...item }
+        evictable[bestIdx] = false
+        currentOwned = [...bestWithout, item]
+        accepted.push(item)
+      }
+    }
+  }
+  return {
+    accepted,
+    evicted,
+    dropTicks: evicted.length * DROP_TICKS_PER_SLOT,
+    netGain: Math.max(0, powerOf(currentOwned).total - baseOwnedPower)
+  }
+}
+
+export function fittingLoot(reward: Item[], storage: Array<StorageItem | null> | null, opts?: { evict?: boolean; owned?: Item[] }): Item[] {
   if (!storage) return []
+  if (opts?.evict) {
+    const owned = opts.owned ?? storage.filter((i): i is StorageItem => !!i)
+    return planLootEviction(owned, reward, storage).accepted
+  }
   const slots = storage.map(i => i && { ...i })
   const accepted: Item[] = []
   // chest_take(all) withdraws each first-seen name completely before moving to the next name.
@@ -38,15 +139,23 @@ export function fittingLoot(reward: Item[], storage: Array<StorageItem | null> |
   }
   return accepted
 }
-export function marginalGain(owned: Item[], reward: Item[], storage: Array<StorageItem | null> | null): number {
+export function marginalGain(owned: Item[], reward: Item[], storage: Array<StorageItem | null> | null, opts?: { evict?: boolean }): number {
+  if (opts?.evict) return planLootEviction(owned, reward, storage).netGain
   return Math.max(0, powerOf([...owned, ...fittingLoot(reward, storage)]).total - powerOf(owned).total)
 }
-export function gainRange(owned: Item[], outcomes: Item[][], storage: Array<StorageItem | null> | null) {
+export function gainRange(owned: Item[], outcomes: Item[][], storage: Array<StorageItem | null> | null, opts?: { evict?: boolean }) {
+  if (opts?.evict) {
+    const plans = outcomes.map(reward => planLootEviction(owned, reward, storage))
+    const gains = plans.map(p => p.netGain)
+    const dropTicks = plans.length ? plans.reduce((a, p) => a + p.dropTicks, 0) / plans.length : 0
+    return { gain: gains.length ? gains.reduce((a, b) => a + b, 0) / gains.length : 0,
+      lo: gains.length ? Math.min(...gains) : 0, hi: gains.length ? Math.max(...gains) : 0, dropTicks }
+  }
   const gains = outcomes.map(reward => marginalGain(owned, reward, storage))
   return { gain: gains.length ? gains.reduce((a, b) => a + b, 0) / gains.length : 0,
-    lo: gains.length ? Math.min(...gains) : 0, hi: gains.length ? Math.max(...gains) : 0 }
+    lo: gains.length ? Math.min(...gains) : 0, hi: gains.length ? Math.max(...gains) : 0, dropTicks: 0 }
 }
-export const expectedGain = (owned: Item[], outcomes: Item[][], storage: Array<StorageItem | null> | null): number => gainRange(owned, outcomes, storage).gain
+export const expectedGain = (owned: Item[], outcomes: Item[][], storage: Array<StorageItem | null> | null, opts?: { evict?: boolean }): number => gainRange(owned, outcomes, storage, opts).gain
 
 export interface LootInteraction { ticks: number; movedNames: number; interrupted: boolean }
 export function interactionCost(receipts: LootInteraction[], outcomes: Item[][], storage: Array<StorageItem | null> | null): number {
@@ -91,16 +200,22 @@ export function routeEstimate(from: Position, chest: ChestMemory, traversals: Ow
 }
 export function quoteLoot(input: {
   state: WorldState; owned: Item[]; storage: Array<StorageItem | null> | null; chest: ChestMemory
-  prior: Item[][]; priorGain?: { gain: number; lo: number; hi: number }; traversals: OwnTraversal[]
+  prior: Item[][]; priorGain?: { gain: number; lo: number; hi: number; dropTicks?: number }; traversals: OwnTraversal[]
   foe: null | { at: number; pos: Position; previous?: { at: number; pos: Position } }
-  roundScope: string; now: number; interactionTicks?: number
+  roundScope: string; now: number; interactionTicks?: number; allowEvict?: boolean
   engage: { estimateCost(s: WorldState): number; estimateRisk(s: WorldState): number }
 }): LootQuote {
   const { state, chest, foe, engage } = input
-  const gain = Array.isArray(chest.contents) ? gainRange(input.owned, [chest.contents], input.storage) :
-    input.priorGain || gainRange(input.owned, input.prior, input.storage)
+  const fullBag = Array.isArray(input.storage) && input.storage.length > 0 && !input.storage.some(s => !s)
+  const useEvict = input.allowEvict !== false && fullBag
+  const gain = Array.isArray(chest.contents)
+    ? gainRange(input.owned, [chest.contents], input.storage, { evict: useEvict })
+    : (useEvict && (!input.priorGain || input.priorGain.gain === 0)
+        ? gainRange(input.owned, input.prior, input.storage, { evict: true })
+        : (input.priorGain || gainRange(input.owned, input.prior, input.storage)))
   const route = routeEstimate(state.position || chest.seenFrom || chest, chest, input.traversals)
-  const costTicks = route.ticks + (input.interactionTicks ?? 200) + (chest.attempt?.spentTicks || 0)
+  const dropTicks = Math.round(gain.dropTicks || 0)
+  const costTicks = route.ticks + (input.interactionTicks ?? 200) + (chest.attempt?.spentTicks || 0) + dropTicks
   let exposureLo = 0, exposureHi = 1
   if (foe?.pos && route.known) {
     const elapsed = foe.previous && foe.at > foe.previous.at ? (foe.at - foe.previous.at) / 1000 : 0

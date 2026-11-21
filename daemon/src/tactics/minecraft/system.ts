@@ -2,7 +2,7 @@
 import { TacticalArbiter } from '../arbiter'
 import { S4D, piglinNiche, threatLevel, hasObservedTarget, canRepelLavaAttacker, meleeReachable, type TacticalState, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from '../state'
 import { EscapeProgress, type EscapeObservation } from '../escape-progress'
-import { drinkFireResistance, climbFromLava } from '../lava-escape'
+import { drinkFireResistance, climbFromLava, inLava } from '../lava-escape'
 import { createEmergencyEscape } from '../../combat/emergency-escape'
 import { webBoatEscape } from '../web-boat'
 import { runBoatHop } from '../../combat/boat-hop'
@@ -42,11 +42,13 @@ export class TacticalSystem {
   private pending: Promise<unknown> | null = null
   private incident: { at: number; hp: number; threat: ThreatLevel; actions: Set<string>; chain: string[]; state: Record<string, unknown>; intent?: Controller } | null = null
   private readonly onTick = () => { lavaNav.sample(this.session); this.update() }
+  private readonly onHealth = () => { this.update(true) }
   private readonly onDamage = (packet?: MinecraftEntity) => {
+    if (!packet || !this.bot?.entity || packet.entityId !== this.bot.entity.id) return
     lavaNav.hit(this.session, packet)
-    if (packet?.entityId === this.bot?.entity?.id && packet?.sourceTypeId === 22) {
+    if (packet.sourceTypeId === 22) {
       this.session._tacticalInWallAt = clock.now()
-      this.session._tacticalInWallDimension = String(this.bot?.game?.dimension || '')
+      this.session._tacticalInWallDimension = String(this.bot.game?.dimension || '')
     }
     this.update(true)
   }
@@ -62,7 +64,7 @@ export class TacticalSystem {
     locks.install(this.session)
     guard.attach(this.session)
     bot.on('physicsTick', this.onTick)
-    bot.on('health', this.onDamage)
+    bot.on('health', this.onHealth)
     bot.on('forcedMove', this.onForcedMove)
     bot._client?.on('damage_event', this.onDamage)
     bot.once('end', this.onEnd)
@@ -137,6 +139,7 @@ export class TacticalSystem {
       }
     }
     this.state = state
+    const arbiterBefore = this.arbiter.snapshot()
     const decision = this.arbiter.decide(state)
     this.level = decision.level
     // An arena duel (pvp.duel with tempo, fight { arena }) is to the death by design: a retreat at level 3 only interrupted
@@ -162,6 +165,7 @@ export class TacticalSystem {
       // аренду, lookAt навыка ждал её, а ифриты били в упор (s1-post05 06.10: blaze «меч» 0 взмахов, 30 урона, смерть).
       if (this.episode && (this.episode.level < 3 || arena || blazeOwned) && locks.owner(this.session)?.owner !== 'Emergency' &&
           locks.owner(this.session)?.ctl !== this.session._refugeBuild) locks.cancel(this.session)
+      else this.arbiter.restore(arbiterBefore)
       return
     }
     // Падение ведёт рефлекс (клатч/вода, clutch.ts); тактике в нём выбрать нечего (арбитр: dangerousFall не выбирает
@@ -181,19 +185,21 @@ export class TacticalSystem {
     // Уворот/побег по приказу (арена 12.10: рывок от зелья и булавы, джук от лука, ветер, жемчуг, элитры, укрытие) — это уже
     // ответ на угрозу: щит/бой тактики рвали его («reflex: действие прервано», mace-5: булава сверху — угроза 3-го уровня,
     // и рывок обрывался щитом). Пока он идёт — тактика не вмешивается; аварии (падение, лава) — свой рефлекс Emergency.
-    if (commandedEscape(this.session) && !state.waterEmergency) return
+    if (commandedEscape(this.session, state) && !state.waterEmergency) { this.arbiter.restore(arbiterBefore); return }
     if ((decision.level >= 3 || state.waterEscape) && !fallOnly) this.interruptSkill(decision.level)
     // A fireball disappears on impact, before its later hurt sample. The observed shooter remains: cancelling the
     // started guard here dropped offhand use before the native five-tick ACK (sr1011-b ghast scene). Keep its existing
     // bounded executor unless a more valuable defence or an emergency takes over; unseen shooters do not hold it.
     if (this.pending && this.episode?.action.id === 'Shield' && decision.level < 3 && shieldCanContinue(state) &&
         (!decision.selected || decision.selected.score <= this.episode.action.score)) {
+      this.arbiter.restore(arbiterBefore)
       this.arbiter.hold(this.episode.action)
       return
     }
     // The consumed bucket disappears before the water ACK. Keep this bounded action through extinguish + pickup.
     if (this.pending && this.episode?.action.id === 'UseWater' && decision.level < 3 && !hazard &&
         (!decision.selected || decision.selected.score <= this.episode.action.score)) {
+      this.arbiter.restore(arbiterBefore)
       this.arbiter.hold(this.episode.action)
       return
     }
@@ -202,26 +208,27 @@ export class TacticalSystem {
     // A calm sample is not the server receipt of a pending bite or recovery.
     if (this.pending && (decision.level <= 1 && ['Fight', 'LastStand', 'BlockOff', 'PillarUp', 'DigDown', 'Hide', 'Heal', 'Eat'].includes(this.episode?.action.id || '') ||
       decision.level === 0 && ['FreeEmbedded', 'FlightEscape', 'PearlEscape', 'ClimbOut', 'WebBoatEscape', 'BoatLavaHop', 'Flee', 'CreateDistance'].includes(this.episode?.action.id || ''))) {
+      this.arbiter.restore(arbiterBefore)
       if (this.episode) this.arbiter.hold(this.episode.action)
       return
     }
     if (decision.release) {
-      if (locks.owner(this.session)?.source === 'lava-nav') return // a dry central cell is not the lava packet's all-clear
+      if (locks.owner(this.session)?.source === 'lava-nav') { this.arbiter.restore(arbiterBefore); return } // a dry central cell is not the lava packet's all-clear
       if (this.episode && (decision.level === 0 || locks.owner(this.session)?.owner !== 'Emergency')) locks.cancel(this.session)
       if (decision.level === 0) this.release('safe')
       return
     }
     if (!decision.selected || !decision.change && this.episode) return
-    if (decision.selected.id === 'Fight' && /^(fight|retaliate|defend)$/.test(this.session.current?.name || '') && decision.level < 3) return
+    if (decision.selected.id === 'Fight' && /^(fight|retaliate|defend)$/.test(this.session.current?.name || '') && decision.level < 3) { this.arbiter.restore(arbiterBefore); return }
     // The fight skill is already the favourable fight: a run the arbiter picked only because Fight sat out its re-entry
     // (dropped a moment ago) must not take the hands from it — native slot 1 14.10: a lone zombie, Fight 90 > Flee 65, the
     // fight RPC interrupted by Flee four rounds out of four, the zombie left alive to follow.
     const fightBest = decision.candidates.find(candidate => candidate.id === 'Fight')
-    if (fightBest && fightBest.score >= decision.selected.score && /^(fight|retaliate|defend)$/.test(this.session.current?.name || '') && decision.level < 3) return
+    if (fightBest && fightBest.score >= decision.selected.score && /^(fight|retaliate|defend)$/.test(this.session.current?.name || '') && decision.level < 3) { this.arbiter.restore(arbiterBefore); return }
     const active = locks.owner(this.session)
     const repelDuringClimb = active?.source === 'ClimbOut' && decision.selected.id === 'Fight' && canRepelLavaAttacker(state)
     const fluidHandoff = active?.source === 'fall-controller' && state.lava
-    if (active?.owner === 'Emergency' && !state.waterEmergency && decision.selected.id !== 'FreeEmbedded' && !repelDuringClimb && !fluidHandoff) return
+    if (active?.owner === 'Emergency' && !state.waterEmergency && decision.selected.id !== 'FreeEmbedded' && !repelDuringClimb && !fluidHandoff) { this.arbiter.restore(arbiterBefore); return }
     this.begin(decision.selected, decision.candidates, state, decision.level, arenaFight)
   }
 
@@ -237,7 +244,9 @@ export class TacticalSystem {
 
   private interruptSkill(level: ThreatLevel): void {
     const current = this.session.current
-    if (!current?.ctl || current.ctl.aborted || commandedEscape(this.session) && !this.state?.waterEmergency) return
+    if (!current?.ctl || current.ctl.aborted) return
+    const wingActed = current.name === 'wing_orbit' && (this.incident?.actions.size ?? 0) > 0
+    if (!wingActed && commandedEscape(this.session, this.state) && !this.state?.waterEmergency) return
     current.ctl.interruptedBy = { type: 'tactical', threatLevel: level, requireObservation: true }
     current.ctl.abort()
   }
@@ -409,7 +418,7 @@ export class TacticalSystem {
         // behind the body: the explosion knockback still applies to a blocking player (ServerExplosion.hurtEntities pushes
         // every entity whose damage was not cancelled).
         if (S4D() && state.shield && state.blast !== 'falling_block') {
-          const source = shieldableBlast(bot)
+          const source = shieldableBlast(bot, session._ndFoes)
           if (source && !dropBehind(bot, source.entity.position)) return shieldBlast(session, ctl)
         }
         return state.blast ? dodgeBlast(session, ctl) : survival.dodgeCreeper(session, ctl, {})
@@ -593,6 +602,10 @@ export class TacticalSystem {
       this.level = 0
       this.arbiter.finished()
     }
+    if (reason === 'safe' && this.session._tacticalLavaClimbGoal) {
+      const g = this.session._tacticalLavaClimbGoal
+      if (g.failed || clock.now() >= g.deadline || (this.bot?.entity?.onGround && !inLava(this.bot))) delete this.session._tacticalLavaClimbGoal
+    }
     if (this.episode) { this.finish(this.episode, reason); this.episode = null; this.arbiter.finished() }
     if (this.substantive) {
       // A worker accepted after waitForRelease belongs to the next plan.
@@ -626,7 +639,7 @@ export class TacticalSystem {
     this.release('disconnected')
     lavaNav.reset(this.session)
     bot.removeListener('physicsTick', this.onTick)
-    bot.removeListener('health', this.onDamage)
+    bot.removeListener('health', this.onHealth)
     bot.removeListener('forcedMove', this.onForcedMove)
     bot.removeListener('end', this.onEnd)
     bot._client?.removeListener('damage_event', this.onDamage)

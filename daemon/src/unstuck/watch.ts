@@ -30,7 +30,14 @@ export function createDetector (bot, { goal = null, stillMs = 3000, minMove = 0.
   reset()
   return {
     reset,
-    feed (r) { if (r) { lastPath = { status: r.status, len: Array.isArray(r.path) ? r.path.length : 0 }; lastPathT = now(); if (r.status === 'partial') lastPartialT = lastPathT } },
+    feed (r) {
+      if (r) {
+        const stripped = !!r.ndStripped
+        lastPath = { status: r.status, len: Array.isArray(r.path) ? r.path.length : 0, stripped }
+        lastPathT = now()
+        if (r.status === 'partial' && !stripped) lastPartialT = lastPathT
+      }
+    },
     check () {
       const t = now()
       const e = bot.entity
@@ -44,8 +51,8 @@ export function createDetector (bot, { goal = null, stillMs = 3000, minMove = 0.
       const wet = !!e.isInWater || waterB(at(bot, p.floored()))
       const moved = wet ? Math.hypot(p.x - anchor.x, p.z - anchor.z) : p.distanceTo(anchor)
       if (moved > minMove) { anchor = p.clone(); anchorT = t; digKey = null; buildT = 0 }
-      // Поиск идёт — стоять можно.
-      const searching = !lastPath || (lastPath.status === 'partial' && lastPath.len === 0 && t - lastPathT < 1500)
+      // Поиск идёт — стоять можно (но путь, обнулённый gotoGoal, не считается молчанием A*).
+      const searching = !lastPath || (lastPath.status === 'partial' && lastPath.len === 0 && !lastPath.stripped && t - lastPathT < 1500)
       let mining = false; let building = false
       try { mining = !!(bot.pathfinder && bot.pathfinder.isMining && bot.pathfinder.isMining()) } catch {}
       try { building = !!(bot.pathfinder && bot.pathfinder.isBuilding && bot.pathfinder.isBuilding()) } catch {}
@@ -56,15 +63,24 @@ export function createDetector (bot, { goal = null, stillMs = 3000, minMove = 0.
         const k = tb && tb.position ? `${tb.position.x},${tb.position.y},${tb.position.z}` : 'none'
         if (k !== digKey) { digKey = k; digT = t }
         anchorT = t
-        if (t - digT > digMs) return { kind: 'dig', ms: t - digT }
+        let limit = digMs
+        if (tb && typeof bot.digTime === 'function') {
+          try {
+            const dt = bot.digTime(tb)
+            if (Number.isFinite(dt) && dt > 0) limit = Math.max(digMs, Math.min(60000, dt * 1.5 + 2000))
+          } catch {}
+        }
+        if (t - digT > limit) return { kind: 'dig', ms: t - digT }
         return null
       }
+      digKey = null
       if (building || blockWork) {
         if (!buildT) buildT = t
         anchorT = t
         if (t - buildT > buildMs) return { kind: 'still', ms: t - buildT, why: 'стройка без сдвига' }
         return null
       }
+      buildT = 0
       if (searching) { anchorT = t; return null }
       if (t - anchorT >= stillMs) return { kind: 'still', ms: t - anchorT }
       // Поиск A* идёт (свежий 'partial', с путём или без) — топтание у старта не застревание: тело ходит по частичным

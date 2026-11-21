@@ -92,26 +92,44 @@ export function installSight (ctx: DuelCtx) {
   ctx.routeInputs = () => {
     const feet = bot.entity.position.floored()
     const target = ctx.entity.position.floored()
+    const mv = bot.pathfinder?.movements
+    const fast = bot._ndFastBlocks
+    const terrainVer = fast?.live ? fast.ver : null
+    const frame = (ctx as any)._turnFrame
+    const memoKey = frame ? `${ctx.entity.id}|${feet.x},${feet.y},${feet.z}|${target.x},${target.y},${target.z}|${mv?.canDig}|${mv?.maxDropDown}|${terrainVer ?? ''}|${bot.heldItem?.slot ?? -1}:${bot.heldItem?.type ?? -1}:${bot.heldItem?.durabilityUsed ?? 0}` : null
+    if (frame && frame._routeMemoKey === memoKey && typeof frame._routeMemoVal === 'string') {
+      return frame._routeMemoVal
+    }
     const observed = require('./search').observedCollision(bot)
-    const inputs = [ctx.entity.id, feet.toString(), target.toString(), bot.pathfinder?.movements?.canDig, bot.pathfinder?.movements?.maxDropDown]
+    const inputs = [ctx.entity.id, feet.toString(), target.toString(), mv?.canDig, mv?.maxDropDown]
+    const digCache = new Map<any, number | null>()
+    const bestDigMs = (b: any) => {
+      const k = b.stateId ?? b.name
+      if (digCache.has(k)) return digCache.get(k)
+      let digMs = null
+      try { digMs = tools.bestFor(bot, b).ms } catch {}
+      digCache.set(k, digMs)
+      return digMs
+    }
     for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const dy of [-1, 0, 1, 2]) {
       const cell = feet.offset(dx, dy, dz)
       const b = observed.blockAt(cell)
       inputs.push(b ? b.stateId ?? b.name : '?')
       if (dy >= 0 && b?.boundingBox === 'block') {
-        let digMs = null
-        try { digMs = tools.bestFor(bot, b).ms } catch {}
-        inputs.push(digMs)
+        inputs.push(bestDigMs(b))
       }
     }
     const eye = pick.eyeOf(bot); const delta = ctx.entity.position.offset(0, EYE, 0).minus(eye); const dist = delta.norm()
     const hit = dist > 0 ? pick.blockOnRay(bot, eye, delta.scaled(1 / dist), dist) : null
     if (hit) {
-      let digMs = null
-      try { digMs = tools.bestFor(bot, hit.block).ms } catch {}
-      inputs.push(hit.pos.toString(), hit.block.stateId ?? hit.block.name, digMs)
+      inputs.push(hit.pos.toString(), hit.block.stateId ?? hit.block.name, bestDigMs(hit.block))
     }
-    return inputs.join('|')
+    const result = inputs.join('|')
+    if (frame && memoKey) {
+      frame._routeMemoKey = memoKey
+      frame._routeMemoVal = result
+    }
+    return result
   }
 }
 
@@ -122,8 +140,19 @@ export function installInputs (ctx: DuelCtx) {
   ctx.shotInputs = () => [routeInputs(), itemInputs(/^(bow|crossbow|firework_rocket)$|arrow$/),
     !!bot._ndUse?.cur, livingFlags(bot, bot.entity), typeof bot.ndClock?.age === 'bigint',
     !!maceNow(), tt.safe(BOW_DRAW_MS, { fortSealed: fortSealed() }).ok].join('|')
+  const compSig = (i: any) => {
+    const comps = i.components
+    if (!Array.isArray(comps) || !comps.length) return '[]'
+    const frame = (ctx as any)._turnFrame
+    let cache: Map<any, string> | undefined = frame?._compSigCache
+    if (frame && !cache) cache = frame._compSigCache = new Map()
+    if (cache?.has(comps)) return cache.get(comps)!
+    const s = JSON.stringify(comps)
+    cache?.set(comps, s)
+    return s
+  }
   const itemInputs = ctx.itemInputs = names => bot.inventory.items().filter(i => names.test(i.name)).map(i =>
-    [i.name, i.slot, i.count, i.durabilityUsed, JSON.stringify(i.components || [])].join(':')).join('|')
+    [i.name, i.slot, i.count, i.durabilityUsed, compSig(i)].join(':')).join('|')
   ctx.columnInputs = height => {
     const feet = bot.entity.position.floored()
     const blocks = []

@@ -230,7 +230,7 @@ function onDanger (dz: DangerCtx, b, m) {
   const shooter = wb && d.aims?.find(a => a.name && a.at && /^(bow|crossbow|trident)$/.test(a.weapon))
   if (wbE) {
     const inputs = `${JSON.stringify(wb)}|${webTools}|${webThreat}|${shooter?.name || ''}|${webFoes.map(e => `${e.n}:${Math.floor(e.p.x)},${Math.floor(e.p.y)},${Math.floor(e.p.z)}`).sort().join(';')}`
-    if (wbE.inputs !== inputs) { wbE.inputs = inputs; wbE.handled = false }
+    if (wbE.inputs !== inputs) { wbE.inputs = inputs; wbE.handled = false; wbE.retryAt = 0 }
   }
   // Враг рядом, а резку вне боя он сорвал (direct_threat) или контакт уже идёт — в бой: выход из паутины под мечом считает
   // webTurn (резка/вода/жемчуг/щит по цене). Игра пользователя 24.10: «застревают в паутине» — clear_web отказывал
@@ -319,7 +319,7 @@ function onDanger (dz: DangerCtx, b, m) {
     return
   }
   const rangedOnly = shooter && !webFoe && !sm && !lv && !cl && !fl && !webFoes.some(e => e.d <= 3)
-  if (wb && !wbE.handled && !webFight && (!webThreat || rangedOnly) && !(lv && lv.d < 0.5) && !(b.shieldHold && reactions.get(b) === b.shieldHold) && !(b.webRun && reactions.get(b) === b.webRun)) {
+  if (wb && !wbE.handled && !((wbE.retryAt || 0) > Date.now()) && !webFight && (!webThreat || rangedOnly) && !(lv && lv.d < 0.5) && !(b.shieldHold && reactions.get(b) === b.shieldHold) && !(b.webRun && reactions.get(b) === b.webRun)) {
     wbE.handled = true; wbE.from = { ...m.pos }
     log(`🕸 ${b.name}: в паутине (${wb.cells} кл.) — срезаю`)
     const token = dz.beginReaction(b); b.webRun = token
@@ -329,11 +329,21 @@ function onDanger (dz: DangerCtx, b, m) {
     b.c.call('clear_web', { allies: dz.bots.filter(o => o.team === b.team).map(o => o.name), force }).then(r => {
       const x = r?.detail || r
       if (!dz.ownsReaction(b, token)) return
-      if (r?.status && r.status !== 'done') wbE.handled = false
-      if (x?.why === 'direct_threat') { wbE.threatened = true; wbE.handled = force; wbE.refused = (wbE.refused || 0) + 1 }
-      if (x && !x.ok) log(`🕸 ${b.name}: паутину не срезал — ${x.why || `${x.cut} из ${wb.cells}`}${r?.status && r.status !== 'done' ? ' ' + r.status : ''}`)
+      if (x?.why === 'direct_threat') {
+        wbE.threatened = true; wbE.handled = force; wbE.refused = (wbE.refused || 0) + 1
+      } else if (r?.status === 'interrupted') {
+        wbE.handled = false
+      } else if (r?.status && r.status !== 'done') {
+        // Короткий откат при отказе clear_web (failed/timeout), чтобы не спамить 6–10 RPC в секунду.
+        wbE.handled = false
+        wbE.retryAt = Date.now() + 1800
+      }
+      if (x && !x.ok) {
+        const why = x.why || r?.error || r?.code || `${x.cut ?? x.broken ?? 0} из ${wb.cells}`
+        log(`🕸 ${b.name}: паутину не срезал — ${why}${r?.status && r.status !== 'done' ? ' ' + r.status : ''}`)
+      }
     })
-      .catch(() => { if (dz.ownsReaction(b, token)) wbE.handled = false }).finally(() => { dz.endReaction(b, token); if (b.webRun === token) b.webRun = null })
+      .catch(() => { if (dz.ownsReaction(b, token)) { wbE.handled = false; wbE.retryAt = Date.now() + 1800 } }).finally(() => { dz.endReaction(b, token); if (b.webRun === token) b.webRun = null })
     return
   }
   if (b.webRun && reactions.get(b) === b.webRun && !(lv && lv.d < 0.5)) return
@@ -380,11 +390,19 @@ function onDanger (dz: DangerCtx, b, m) {
   // уйти на 4 бл. от точки. Некуда или не вышло — щит, если удар ещё летит. Поздно (< 10 т) или щит уже поднят — щит, как было.
   const away0 = sm?.at ? Math.hypot(m.pos.x - sm.at.x, m.pos.z - sm.at.z) : 0
   if (sm && sm.ticks >= 10 && sm.at && away0 + sm.ticks * .25 >= 4 && !(b.shieldHold && reactions.get(b) === b.shieldHold)) {
-    // Рывок не вышел — щит, пока удар ещё не сел (стенд 25.10: «некуда отскочить на 3 бл.», а щит ждал maceDefense, которую ставит
-    // сам щит, — удар в открытого, −9…13 хп).
+    // Рывок не вышел (или заблокирован кэшем отказа) — щит/паутина или бой, пока удар ещё не сел; успешный рывок не вешает щит.
     const lands = Date.now() + sm.ticks * 50
-    const late = () => { if (Date.now() < lands && ctx.alive?.(b.name) !== false && (shieldNow || inv.cobweb > 0)) dangerShieldSmash(dz, b, sm, shieldNow) }
-    ctx.dodgeAway(b, m.pos, sm.at, 5, late, null, false, false, 0, 3)
+    Promise.resolve(ctx.dodgeAway(b, m.pos, sm.at, 5, null, null, false, false, 0, 3)).then(ok => {
+      if (ok !== false) return
+      if (Date.now() >= lands || ctx.between || ctx.alive?.(b.name) === false || out.has(b.name) || deadNow.has(b.name)) return
+      if (reactions.has(b) || b.shieldHold && reactions.get(b) === b.shieldHold || b.smashWeb && reactions.get(b) === b.smashWeb) return
+      const curInv = pos[b.name]?.inv || inv
+      const curHand2 = pos[b.name]?.offHand
+      const curOff = String(typeof curHand2 === 'string' ? curHand2 : curHand2?.item ?? curHand2?.name ?? '')
+      const curShield = /shield/.test(curOff) || (curInv.shield || 0) > 0 && !(/totem_of_undying/.test(curOff) && (pos[b.name]?.hp ?? 20) <= 16)
+      if (curShield || curInv.cobweb > 0) dangerShieldSmash(dz, b, sm, curShield)
+      else dangerFightSmash(dz, b, sm)
+    })
     return
   }
   if (sm && (shieldNow || inv.cobweb > 0)) {

@@ -185,6 +185,8 @@ export async function flightTurn (ctx: DuelCtx, turn: TurnFrame) {
     const sp = sp0 && /^(lance|dive)$/.test(sp0.kind) && !bot.entity.elytraFlying && !gate(sp0.kind) ? null : sp0
     // Поддержка — после защит; уход лечиться сохраняет приоритет.
     if (sp && /^(lance|dive)$/.test(sp.kind) && lanceWebRequest(ctx, turn)) return
+    const skyInputs = sp && !bot.entity.elytraFlying ? windInputs() : null
+    if (sp && skyInputs && ctx.failedSky?.kind === sp.kind && ctx.failedSky.inputs === skyInputs) return
     if (sp) {
       const crash0 = (bot._ndElytra?.crashes || []).length
       pathTo(false); ctx.pathing = false
@@ -198,7 +200,7 @@ export async function flightTurn (ctx: DuelCtx, turn: TurnFrame) {
       if (res && res.note) used(res.note)
       if (res && res.hit) { st.swings++; ctx.lastSwing = gameClock.now() }
       if (res && res.ate) for (const a of res.ate) st.healed.push(a + ' (в воздухе)')
-      ctx.failedSky = res?.hit || res?.ate?.length || bot.entity.elytraFlying ? null : { inputs: windInputs(), kind: sp.kind, why: res?.note || 'flight_not_confirmed' }
+      ctx.failedSky = res?.ok || res?.hit || res?.ate?.length || bot.entity.elytraFlying ? null : { inputs: windInputs(), kind: sp.kind, why: res?.note || 'flight_not_confirmed' }
       // Опыт длинного приёма — в цену графа (касание/удар, удар о стену за этот полёт).
       if (/^(lance|dive)$/.test(sp.kind)) fg.noteExperience(bot._ndFightXp || (bot._ndFightXp = {}), sp.kind, { hit: !!(res && res.hit), crash: (bot._ndElytra?.crashes || []).length > crash0 })
       ctx.nextReady = Math.max(ctx.nextReady, gameClock.now() + cooldownMs(bot.heldItem))

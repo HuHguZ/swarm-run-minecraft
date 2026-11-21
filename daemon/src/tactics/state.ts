@@ -41,7 +41,7 @@ export interface TacticalState {
   fireResistance: boolean
   explosion: boolean
   /** non-mob blast source near (tactics/blast.ts, 2 blocks past the alarm: explosion is the alarm itself) */
-  blast?: 'tnt' | 'falling_block' | 'charged_creeper' | null
+  blast?: 'tnt' | 'falling_block' | 'charged_creeper' | 'respawn_anchor' | 'end_crystal' | 'tnt_minecart' | null
   dangerousFall: boolean
   emergencyController: boolean
   inWater: boolean

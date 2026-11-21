@@ -17,7 +17,7 @@ export function swarmLifecycle (sw: SwarmDriverCtx) {
     for (const b of bots) {
       b.previousRoundWork = b.last?.pending ? b.last : null
       delete b.swarmDoctrine; delete b.swarmSaid
-      delete b.swarmPosition; delete b.swarmPearlPost; delete b.swarmPreparing; delete b.swarmReserved; delete b.swarmWindReservation; delete b.swarmTask; delete b.swarmTaskAt; delete b.swarmFightReply; delete b.swarmLadder; delete b.swarmBusyUntil; delete b.maceDefense; delete b.noReach
+      delete b.swarmPosition; delete b.swarmPearlPost; delete b.swarmPearlSpot; delete b.swarmEatNoop; delete b.swarmCoverNoop; delete b.swarmShoveFlip; delete b.swarmNoPath; delete b.swarmPreparing; delete b.swarmReserved; delete b.swarmWindReservation; delete b.swarmTask; delete b.swarmTaskAt; delete b.swarmFightReply; delete b.swarmLadder; delete b.swarmBusyUntil; delete b.maceDefense; delete b.noReach
     }
     holes.length = 0; walls.clear(); for (const w of ladderSites) walls.set(w.key, { ...w }); ladderRoutes.length = 0; boxed.clear(); boxTries.clear()
     for (const b of bots) { b.boxedCamp = null; b.boxOutTries = 0; delete b.campReacting; delete b.arrowThreat; delete b.swarmAscent; delete b.swarmSearch; delete b.bowShieldHold; delete b.grabbing; b.climbing = false }

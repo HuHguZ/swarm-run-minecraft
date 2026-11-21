@@ -127,7 +127,10 @@ export async function crowdTurn (ctx: DuelCtx, turn: TurnFrame) {
     if (now - cr.offAt > 2000) cr.on = false
   }
   ctx.bot._ndCrowd.at = now; ctx.bot._ndCrowd.on = cr.on
-  if (!cr.on) return
+  if (!cr.on) {
+    if (cr.freeAim) { cr.freeAim = false; if (ctx.aim === 'free') ctx.aim = 'target' }
+    return
+  }
   const st = cr.st
   st.ticks++
   st.foesMax = Math.max(st.foesMax, foes.length)
@@ -233,12 +236,23 @@ async function breakOut (ctx: DuelCtx, cr: CrowdState, turn: TurnFrame, d: ct.Cr
   if (ctx.guard) await ctx.guard.raise(false)
   st.breaks++
   note(ctx, cr, 'break', d.why + ' — ищу выход')
-  const out = await flee.smartFlee(ctx.session, ctx.ctl, { timeoutMs: Math.max(0, Math.min(3000, ctx.deadline - now)),
-    foes: cr.frame.foes.map(f => f.id), arena: ctx.AR,
-    goals: home && Number.isFinite(home.x) && Number.isFinite(home.z) ? [home] : [] })
+  let out: any = { cornered: false }
+  let threw = false
+  try {
+    out = await flee.smartFlee(ctx.session, ctx.ctl, { timeoutMs: Math.max(0, Math.min(3000, ctx.deadline - now)),
+      foes: cr.frame.foes.map(f => f.id), arena: ctx.AR,
+      goals: home && Number.isFinite(home.x) && Number.isFinite(home.z) ? [home] : [] })
+  } catch (err) {
+    threw = true
+    throw err
+  } finally {
+    if (threw || ctx.ctl.aborted || out?.cornered) {
+      ctx.aim = 'target'
+      cr.freeAim = false
+    }
+  }
+  if (!ctx.ctl.aborted) await ctx.holdWeapon()
   if (out.cornered && !ctx.ctl.aborted) {
-    ctx.aim = 'target'; cr.freeAim = false
-    await ctx.holdWeapon()
     st.trapped++
     if (now >= cr.boxAt && ctx.fortPossible()) {
       cr.boxAt = now + 3000

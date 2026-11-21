@@ -96,7 +96,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
     st,
     gliding: () => fl.flying(),
     threat: () => fl.threat(),
-    planDive (ctx) { const e = enemy(); return e && gameClock.now() >= nextDive ? divePlan(bot, e, ctx) : null },
+    planDive (ctx) { const e = enemy(); return e && gameClock.now() >= nextDive ? divePlan(bot, e, { ...ctx, arena }) : null },
     // Что делать сейчас: 'escape' — уход лечиться, 'dive' — пике с булавой.
     decide (ctx) {
       // Без элитр в рюкзаке (весь нынешний «арсенал») — сразу мимо: ни
@@ -117,7 +117,7 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
         // Таран копьём (s7b): в полёте — тоже, если копьё и ракеты есть, а его щит не в деле.
         // Показ 09.10: 4 с паузы в воздухе отдавали полёт перехвату (AerialIntercept) — оба бота кружили друг вокруг друга;
         // таран сам разводит (разбег прочь) и бросает в пике.
-        if (gameClock.now() >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = gameClock.now() + 500; return { kind: 'lance' } }
+        if (gameClock.now() >= nextLance && lanceMod.lancePlan(bot, e, { ...ctx, arena })) { nextLance = gameClock.now() + 400; return { kind: 'lance' } }
         return decision.selected ? { kind: 'aerial', decision } : null
       }
       if (!bot.entity.onGround) return null
@@ -125,14 +125,13 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
       const k = kit(bot)
       if (!k.elytra) return null
       if (leave && !(ctx.safeMedical ?? (ctx.heal && ctx.eatSafe)) && now >= nextEscape && k.rockets >= 2) {
-        const W = worldOf(bot)
+        const W = worldOf(bot, { observed: !!arena })
         if (headroom(W, bot.entity.position, 8) >= 6) { nextEscape = now + 8000; return { kind: 'escape' } }
       }
-      // Показ 09.10: 6 с / 15 с паузы — бот подолгу бился пешком, хотя таран выгоднее (ракеты стережёт lancePlan ≥ 3).
-      const dv = now >= nextDive ? divePlan(bot, e, ctx) : null
+      const dv = now >= nextDive ? divePlan(bot, e, { ...ctx, arena }) : null
       // Выбранное графом пике не терять за более ранней веткой тарана.
-      if (!(dv && ctx.prefer === 'dive') && now >= nextLance && lanceMod.lancePlan(bot, e, ctx)) { nextLance = now + 2000; return { kind: 'lance' } }
-      if (dv) { nextDive = now + 9000; return dv }
+      if (!(dv && ctx.prefer === 'dive') && now >= nextLance && lanceMod.lancePlan(bot, e, { ...ctx, arena })) { nextLance = now + 800; return { kind: 'lance' } }
+      if (dv) { nextDive = now + 5000; return dv }
       return null
     },
     async run (ctl, plan, ctx: any = {}) {
@@ -143,13 +142,13 @@ function create (bot, { enemy, used = () => {}, edgeGuard = null, arena = null, 
         const res: any = await lanceMod.lance(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, arena, telemetryHp, deadline: ctx.deadline,
           afterPass: flightCtl => aerial.afterLance(flightCtl, ctx) })
         // Ни одного попадания — не сразу снова (ракеты и время).
-        if (!res.hit) nextLance = gameClock.now() + 1000
+        if (!res.hit) nextLance = gameClock.now() + 800
         return res
       }
       if (plan.kind === 'dive') {
         const res: any = await diveSmash(bot, ctl, e, { vel: ctx.vel, stats: st, used, allow, telemetryHp, arena, chain: ctx.chain })
         // Без подтверждённого попадания пике расходует ракеты и грозит падением.
-        if (!res.hit) nextDive = gameClock.now() + 30000
+        if (!res.hit) nextDive = gameClock.now() + 10000
         return res
       }
       return { ok: false, note: 'нечего' }
@@ -214,3 +213,4 @@ export { rocketChoice, fly, launchLook, takeoff, lavaLaunchClear, landingSpot, l
 export { gliding, predictGlider, track } from './elytra/track'
 export { consumeAir, escape } from './elytra/escape'
 export { smashBonus, divePlan, diveSmash } from './elytra/dive'
+export { rocketForecast } from './elytra/rocket-forecast'

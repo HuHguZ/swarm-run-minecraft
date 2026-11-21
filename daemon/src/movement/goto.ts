@@ -117,6 +117,12 @@ export function gotoGoal (bot, goal, opts: any = {}) {
     // Идём до конца этого пути и отдаём «дошёл, но не до цели» — session.goto повторит из нового места (ближе — не в счёт).
   let walkingTimeout = false
   let pathContext = null, prefix = null, prefixEnd = null, prefixStarted = false, continuePrefix = false, terminalPrefix = false
+  let stripSince: number | null = null, stripCount = 0
+  let searchStartPos: any = null, bestNodeRef: any = null, bestH = Infinity, bestImprovedAt = 0, stagnantTicks = 0
+    const resetSearchTrack = () => {
+      searchStartPos = bot.entity?.position?.clone?.() ?? null
+      bestNodeRef = null; bestH = Infinity; bestImprovedAt = 0; stagnantTicks = 0
+    }
     const onTick = () => {
       if (done) return
       // Custom bridge consumption need not emit another terminal path update.
@@ -124,20 +130,25 @@ export function gotoGoal (bot, goal, opts: any = {}) {
         bot.pathfinder.goal === goal && !goal.isEnd(bot.entity.position) &&
         !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.()
       if ((continuePrefix || exhausted) && !bot.pathfinder.isMoving() && !(un && un.busy())) {
-        continuePrefix = false; terminalPrefix = false
+        continuePrefix = false; terminalPrefix = false; stripSince = null; stripCount = 0
         bot.pathfinder.setGoal(goal)
       } else if (walkingTimeout && !bot.pathfinder.isMoving()) cleanup()
     }
     const onReset = () => {
       walkingTimeout = false
       pathContext = null; prefix = null; prefixEnd = null; prefixStarted = false; continuePrefix = false; terminalPrefix = false
+      stripSince = null; stripCount = 0
+      resetSearchTrack()
     }
     const onPath = (r) => {
       if (done || !r || (un && un.busy())) return
       if (r.context) {
         if (pathContext !== r.context) {
           pathContext = r.context; prefix = null; prefixEnd = null; prefixStarted = false; continuePrefix = false; terminalPrefix = false
+          stripSince = null; stripCount = 0
+          resetSearchTrack()
         }
+        const incomingKeep = r.path?.[0]?.ndKeep ? r.path[0] : null
         const timedTail = r.status === 'timeout' && r.path?.length > 0 && timeoutWalkOn()
         if (prefixStarted && !prefix.length && (r.status === 'partial' || r.status === 'success' || timedTail)) {
           // Keep the continuing search. Its next child is ready only when the
@@ -159,23 +170,47 @@ export function gotoGoal (bot, goal, opts: any = {}) {
                 !first || reached(first) || first.toBreak?.length || first.toPlace?.length || first.ndBridge || first.ndDescend ||
                 // canMove bypasses its simulator in water; it cannot prove a different branch there.
                 (!n && bot.entity.isInWater) || bot.pathfinder.canMove?.(step) !== true) {
+              if (r.path.length) r.ndStripped = true
               r.path.length = 0
               // The expired search cannot publish another edge. Replan from the body once it is free.
               terminalPrefix = timedTail
+              // When grounded and idle at prefixEnd while consecutive partials keep getting stripped
+              // (e.g. next edge requires placement/dig/bridge/descend or ladder climb where canMove !== true),
+              // rebase promptly from the actual body instead of burning the full 5s A* thinkTimeout.
+              if (r.status === 'partial' && bot.entity?.onGround && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() && !bot.pathfinder.isMoving()) {
+                const now = gameClock.now()
+                if (stripSince === null) stripSince = now
+                stripCount++
+                const specialFirst = !!first && (!!first.toBreak?.length || !!first.toPlace?.length || !!first.ndBridge || !!first.ndDescend)
+                const rebaseAfterMs = (n && (specialFirst || !first || bot.pathfinder.canMove?.(step) === false)) || specialFirst ? 300 : 1200
+                if (stripCount >= 2 && now - stripSince >= rebaseAfterMs) continuePrefix = true
+              }
               return
             }
+            stripSince = null; stripCount = 0
             r.path.splice(0, r.path.length, ...ready)
           } else {
             const first = r.path[0]
             if (!bot.entity?.onGround || bot.pathfinder.isMining?.() || bot.pathfinder.isBuilding?.() ||
                 !first || first.toBreak?.length || first.toPlace?.length || first.ndBridge || first.ndDescend ||
                 bot.pathfinder.canMove?.(r.path) !== true) {
+              if (r.path.length) r.ndStripped = true
               continuePrefix = true; r.path.length = 0
               return
             }
+            stripSince = null; stripCount = 0
           }
         }
         if (prefix && prefix.length) {
+          // If knockback/pearl threw the grounded body far off every node of the active walk prefix,
+          // rebase from the actual body instead of walking backward or sitting until stuck/timeout.
+          const p = bot.entity?.position
+          if (r.status === 'partial' && p && bot.entity.onGround && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() &&
+              walkOnly(prefix[0]) && prefix.every(q => Math.hypot(p.x - q.x, p.z - q.z) > 6)) {
+            if (r.path.length) r.ndStripped = true
+            continuePrefix = true; r.path.length = 0
+            return
+          }
           const tail = r.path.indexOf(prefix[prefix.length - 1])
           if (tail >= 0) prefix.push(...r.path.slice(tail + 1))
           else if (r.status === 'success') {
@@ -184,6 +219,7 @@ export function gotoGoal (bot, goal, opts: any = {}) {
             if (r.path[0]?.toPlace?.length && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() &&
                 walkOnly(first)) {
               // Rebase a different complete construction route; native owns its landing and placement from the actual body.
+              if (r.path.length) r.ndStripped = true
               continuePrefix = true; r.path.length = 0
               return
             }
@@ -204,7 +240,13 @@ export function gotoGoal (bot, goal, opts: any = {}) {
           }
           // Session/custom executors already hold this publication's array.
           // Change its contents, so every consumer walks the selected prefix.
-          if (r.path !== prefix) r.path.splice(0, r.path.length, ...prefix)
+          // Preserve pathKeepAlive's ndKeep marker when body is near the prefix head so active walking does not hit false 'stuck'.
+          const keepMarker = incomingKeep && r.status === 'partial' && p && walkOnly(prefix[0]) && !prefix[0].ndKeep &&
+            Math.hypot(p.x - prefix[0].x, p.z - prefix[0].z) <= 5
+          if (r.path !== prefix) {
+            if (keepMarker) r.path.splice(0, r.path.length, incomingKeep, ...prefix)
+            else r.path.splice(0, r.path.length, ...prefix)
+          }
         } else if (!prefixStarted && r.status === 'partial' && r.path.length) {
           // Native nearest-node trimming can cut the detour before a wall.
           // Its already postprocessed A* chain still contains that ready prefix.
@@ -213,9 +255,36 @@ export function gotoGoal (bot, goal, opts: any = {}) {
           r.path.splice(0, r.path.length, ...ready.reverse())
         }
         prefix = r.path
-        if (prefix.length) prefixEnd = prefix.at(-1)
+        if (prefix.length) { prefixEnd = prefix.at(-1); stripSince = null; stripCount = 0 }
         prefixStarted ||= prefix.length > 0
         terminalPrefix = r.status === 'success'
+        // Stagnant-frontier early commit: when A* already produced a real walkable prefix and bestNode has not
+        // improved after substantial exploration, cap this context's timeout so we smoothly finish the prefix
+        // (timeoutWalkOn) and replan from the closer body instead of burning 4+ seconds rooted at the old start.
+        if (r.status === 'partial' && timeoutWalkOn() && prefix.length > 0 &&
+            typeof r.context.timeout === 'number' && Number.isFinite(r.time)) {
+          const bn = r.context.bestNode
+          const h = typeof bn?.h === 'number' && Number.isFinite(bn.h) ? bn.h : null
+          const improved = !!bn && bn !== bestNodeRef && (h === null || h < bestH - 0.25)
+          if (improved) {
+            bestNodeRef = bn
+            if (h !== null) bestH = h
+            bestImprovedAt = r.time
+            stagnantTicks = 0
+          } else {
+            stagnantTicks++
+          }
+          const visited = r.visitedNodes ?? r.context.closedDataSet?.size ?? 0
+          const stagMs = r.time - bestImprovedAt
+          const movedFromRoot = searchStartPos && bot.entity?.position ? bot.entity.position.distanceTo(searchStartPos) : 0
+          const arena = !!opts.boundedArena
+          const commit = !!bn?.parent && (
+            arena
+              ? visited >= 1200 && ((movedFromRoot >= 4 && stagnantTicks >= 16 && stagMs >= 800) || (stagnantTicks >= 24 && stagMs >= 1200))
+              : visited >= 2000 && movedFromRoot >= 8 && stagnantTicks >= 25 && stagMs >= 1500
+          )
+          if (commit) r.context.timeout = Math.min(r.context.timeout, r.time)
+        }
       }
       walkingTimeout = false
       const empty = !r.path || r.path.length === 0

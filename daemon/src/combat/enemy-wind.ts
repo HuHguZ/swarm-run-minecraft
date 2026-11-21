@@ -137,36 +137,98 @@ function windStaticContact(from: Vec3, velocity: Vec3, direction: Vec3, length: 
   return null
 }
 
-// shortcut: eight miss directions against visible ally poses, expand when continuous moving bodies can be bounded.
-export function windAllyTailSafe(bot: any, foe: any, shot: EnemyWindShot, allies: WindReport[], collision: WindCollision, deadline: number) {
-  const { from, velocity, burst } = shot
+// shortcut: centre, per-ally clamped witness, and eight dispersion corners against static & moving visible ally poses.
+export function windAllyTailSafe(bot: any, foe: any, shot: EnemyWindShot, allies: WindReport[], collision: WindCollision, deadline: number, tracks?: Map<WindReport, Frame[]>) {
+  const { from, velocity } = shot
   if (!allies.length || windAboveWorld(bot, from)) return true
-  const intended = burst.minus(from).dot(velocity) / velocity.dot(velocity), margin = Math.fround(.3), side = Math.fround(.6) / 2 + margin
-  const bodies = allies.flatMap(ally => {
+  const speed2 = velocity.dot(velocity)
+  if (!Number.isFinite(speed2) || speed2 < 1e-12) return true
+  const margin = Math.fround(.3), baseHalf = Math.fround(.6) / 2, baseSide = baseHalf + margin
+  const observedWorld = tracks ? edges.worldOf(collision) : undefined
+  const observedBot = tracks ? { ...bot, blockAt: (p: Vec3) => observedWorld!.getBlock(p) } : bot
+  const bodies: Array<{ body: ReturnType<typeof windStaticBody>; minT: number; maxT: number }> = []
+  const maxSampleTick = Math.min(WIND_FORECAST_TICKS, Math.max(1, Math.ceil(shot.ticks || 0)) + 8)
+  for (const ally of allies) {
+    if (expired(deadline)) return false
     const height = ally.gliding || ally.eyeHeight === .4 ? .6 : ally.eyeHeight === 1.27 ? 1.5 : 1.8
     const { x, y, z } = ally.position, top = Math.fround(height) + margin
-    return windSpreadTouches(from, velocity, [x, y, z], [-side, -margin, -side, side, top, side], Infinity, intended)
-      ? [windStaticBody(vec(ally.position), .6, height)] : []
-  })
+    if (windSpreadTouches(from, velocity, [x, y, z], [-baseSide, -margin, -baseSide, baseSide, top, baseSide], Infinity, 0)) {
+      bodies.push({ body: windStaticBody(vec(ally.position), .6, height), minT: 0, maxT: Infinity })
+    }
+    const v = ally.velocity
+    const hSpeed = v ? Math.hypot(v.x || 0, v.z || 0) : 0
+    const vy = v && !ally.onGround ? (v.y || 0) : 0
+    if (hSpeed > .03 || Math.abs(vy) > .03 || ally.control?.forward) {
+      const vx = v?.x || 0, vz = v?.z || 0
+      const rx = x - from.x, ry = y + height / 2 - from.y, rz = z - from.z
+      const along = (rx * velocity.x + ry * velocity.y + rz * velocity.z) / speed2
+      const dvx = vx - velocity.x, dvy = vy - velocity.y, dvz = vz - velocity.z
+      const dv2 = dvx * dvx + dvy * dvy + dvz * dvz
+      const tStar = dv2 > 1e-9 ? -(rx * dvx + ry * dvy + rz * dvz) / dv2 : along
+      const sampleTicks = new Set<number>()
+      for (const raw of [tStar - 2, tStar, tStar + 2, along]) {
+        const tk = Math.round(raw)
+        if (tk >= 1 && tk <= maxSampleTick) sampleTicks.add(tk)
+      }
+      if (shot.ticks >= 1 && shot.ticks <= WIND_FORECAST_TICKS && Math.abs(tStar - shot.ticks) <= 6) {
+        sampleTicks.add(Math.min(WIND_FORECAST_TICKS, Math.round(shot.ticks)))
+      }
+      const maxTk = sampleTicks.size ? Math.max(...sampleTicks) : 0
+      const frames = tracks && maxTk > 0 ? teamFrames(observedBot, ally, tracks, deadline, maxTk, observedWorld) : null
+      if (expired(deadline)) return false
+      for (const tk of sampleTicks) {
+        const future: Point | null = frames ? (frames[tk]?.pos ?? null)
+          : { x: x + vx * tk, y: y + vy * tk, z: z + vz * tk }
+        if (!future) continue
+        if (Math.abs(future.x - x) <= .05 && Math.abs(future.y - y) <= .05 && Math.abs(future.z - z) <= .05) continue
+        // Account for modest lateral heading/speed drift of a moving ally on long-flight shots (`goto` turns).
+        const pad = hSpeed > .04 && tk >= 2 ? Math.min(.75, hSpeed * tk * .18) : 0
+        const side = baseSide + pad
+        const minT = Math.max(0, tk - 3), maxT = tk + 3
+        if (windSpreadTouches(from, velocity, [future.x, future.y, future.z], [-side, -margin, -side, side, top, side], maxT, minT)) {
+          bodies.push({ body: windStaticBody(vec(future), .6 + pad * 2, height), minT, maxT })
+        }
+      }
+    }
+  }
   if (!bodies.length) return true
 
   const box = pick.hitboxOf(bot, foe), target = windStaticBody(shot.feet, box.w, box.h)
   const spread = WIND.speed * WIND.dispersion
   const known = { blockAt(p: Vec3) { return expired(deadline) ? null : collision.blockAt(p) } }
-  for (const x of [-spread, spread]) for (const y of [-spread, spread]) for (const z of [-spread, spread]) {
-    const ray = velocity.offset(x, y, z), length = ray.norm()
-    if (!length) continue
+  const clamp = (v: number, lo: number, hi: number) => v < lo ? lo : v > hi ? hi : v
+  const testRay = (ray: Vec3) => {
+    const length = ray.norm()
+    if (!length) return true
     const direction = ray.scaled(1 / length)
     let first = Infinity
-    for (const body of bodies) {
-      const contact = windStaticContact(from, ray, direction, length, body)
-      if (contact !== null && contact > intended) first = Math.min(first, contact)
+    for (const item of bodies) {
+      const contact = windStaticContact(from, ray, direction, length, item.body)
+      if (contact !== null && contact > 0 && contact >= item.minT && contact <= item.maxT) first = Math.min(first, contact)
     }
-    if (!Number.isFinite(first) || windAboveWorld(bot, from.plus(ray.scaled(Math.floor(first))))) continue
+    if (!Number.isFinite(first) || windAboveWorld(bot, from.plus(ray.scaled(Math.floor(first))))) return true
     // This witness must be able to miss even the selected forecast hull, which a close centred shot can cover.
     const targetContact = windStaticContact(from, ray, direction, length, target)
-    if (targetContact !== null && targetContact < first) continue
-    if (!windBlockImpact(known, from, direction, first * length, length)) return false
+    if (targetContact !== null && targetContact < first) return true
+    return !!windBlockImpact(known, from, direction, first * length, length)
+  }
+  // Always test the centre ray first so long-range dispersion gaps between the 8 corners cannot hide an ally dead-ahead.
+  if (!testRay(velocity)) return false
+  // For each candidate body, also test the direct witness ray clamped inside [-spread, +spread]^3.
+  for (const item of bodies) {
+    const cx = item.body.feet.x - from.x, cy = item.body.feet.y + item.body.height / 2 - from.y, cz = item.body.feet.z - from.z
+    const along = (cx * velocity.x + cy * velocity.y + cz * velocity.z) / speed2
+    if (along > .25) {
+      const witness = velocity.offset(
+        clamp(cx / along - velocity.x, -spread, spread),
+        clamp(cy / along - velocity.y, -spread, spread),
+        clamp(cz / along - velocity.z, -spread, spread)
+      )
+      if (!testRay(witness)) return false
+    }
+  }
+  for (const x of [-spread, spread]) for (const y of [-spread, spread]) for (const z of [-spread, spread]) {
+    if (!testRay(velocity.offset(x, y, z))) return false
   }
   return true
 }
@@ -605,6 +667,7 @@ const windOutcome = (r: WindRun) => ({ out: r.out, exited: r.exited, progress: r
 interface EnemyWindPlan {
   target: string; targetAt: Vec3; gameTick: number; resistance: ReturnType<typeof windResistance>; tried: number
   fallThreat: boolean; repriceRim: boolean; earlyLift: boolean; lateLift: boolean; relayPrefix?: number; releaseSafeKey?: string
+  matchedProgress?: number
   shots: EnemyWindShot[]; baseline: ReturnType<typeof windOutcome>; nominal: ReturnType<typeof windOutcome>; worst: ReturnType<typeof windOutcome>
 }
 
@@ -1048,7 +1111,7 @@ function enemyView(bot: any, raw: any, collision?: WindCollision, deadline?: num
   const velocity = vec(observedV || raw.velocity || { x: 0, y: 0, z: 0 }), h = Math.hypot(velocity.x, velocity.z)
   const sprint = !!(metadata[0] & 8)
   // Airborne sprint follows visible look: gust momentum can point opposite to the existing forward-input model.
-  let run = (raw.onGround ? h > .12 : sprint) ? {
+  let run = (raw.onGround ? h > .05 : sprint) ? {
     yaw: !raw.onGround && Number.isFinite(raw.yaw) ? raw.yaw : Math.atan2(-velocity.x, -velocity.z),
     control: { ...edges.IDLE, forward: true, sprint: sprint || raw._ndVisible === undefined && metadata[0] == null && h > .12 }
   } : null
@@ -1372,10 +1435,16 @@ export function pendingWindHit(bot: any, foe: any, frames: Frame[], scheduled: E
     if (!finite(motion)) continue
     const velocity = vec(motion), length = velocity.norm()
     if (length === 0) continue
-    // Match the known cast's owner, epoch and native launch envelope, not a different local throw during the same schedule.
-    if (owner?.username && scheduled.some(s => s.thrower === owner.username && Number.isSafeInteger(s.fireTick) &&
-      Math.abs(s.fireTick! - (tick - age)) <= 1 && finite(s.from) && vec(s.from).distanceTo(vec(record.p)) <= WIND.reach &&
-      finite(s.velocity) && vec(s.velocity).distanceTo(velocity) <= 2 * WIND.speed * WIND.dispersion * Math.sqrt(3))) continue
+    // Match the known cast's owner, epoch and native launch envelope, including modest sprint/glider displacement
+    // and release re-aim on a moving target, without masking an unrelated throw in another direction.
+    if (owner?.username && scheduled.some(s => {
+      if (s.thrower !== owner.username || !Number.isSafeInteger(s.fireTick) || Math.abs(s.fireTick! - (tick - age)) > 1) return false
+      if (!finite(s.from) || vec(s.from).distanceTo(vec(record.p)) > WIND.reach + 2.5) return false
+      if (!finite(s.velocity)) return false
+      const sv = vec(s.velocity), sLen = sv.norm()
+      return sv.distanceTo(velocity) <= 2 * WIND.speed * WIND.dispersion * Math.sqrt(3) ||
+        (sLen > 1e-6 && sv.dot(velocity) / (sLen * length) >= .94)
+    })) continue
     const at = native ? view._ndWindMotion.t : receipt.t, stale = Math.max(0, (view._ndObservationNow() - at) / 50)
     if (stale > 20) continue
     const witnessed = vec(native ? view._ndWindMotion.position : view.position), direction = velocity.scaled(1 / length)
@@ -1509,9 +1578,17 @@ function followVisibleWind(bot: any, snapshot: any, raw: any, foe: any, report: 
   const watch = { skip: pending.id, deadline }, contact = (hit: WindRun['impacts'][number]) => hit.fireDelay + hit.ticks
   const competing = (frames: Frame[], through: number) => bot._ndThrown.size > 1 &&
     pendingWindHit(bot, raw, frames.slice(0, through + 1), [], collision, watch) !== null
+  const safeRelayCache = new Map<string, boolean>()
   const safeAllies = (impacts: WindRun['impacts']) => [0, 1, 2, 3].every(phase => {
     const adjacent = impacts.map((hit, i) => phase & (1 << i) ? { ...hit, ticks: hit.ticks - 1 } : hit)
-    return adjacent.every(hit => contact(hit) > 0) && windTeamSafe(snapshot, team, adjacent, arena, tracks, false, deadline)
+    if (!adjacent.every(hit => contact(hit) > 0)) return false
+    const key = adjacent.map(windImpactKey).join(';')
+    let safe = safeRelayCache.get(key)
+    if (safe === undefined) {
+      safe = windTeamSafe(snapshot, team, adjacent, arena, tracks, false, deadline)
+      if (!expired(deadline)) safeRelayCache.set(key, safe)
+    }
+    return safe
   })
   let tried = 0
   // A proven same-tick follow can use the grant before the lead's narrow birth window expires.
@@ -1540,8 +1617,13 @@ function followVisibleWind(bot: any, snapshot: any, raw: any, foe: any, report: 
     })))
     if (!certified || !nominal || !worst || competing(baseline.frames, latest) ||
         variants.some(v => v.bases.some(base => competing(base.frames, latest))) || expired(deadline)) continue
+    const endTick = Math.min(nominal.run.endpointTick, nominal.base.frames.length - 1)
+    const matchedProgress = foe.outward
+      ? (nominal.run.frames[endTick].pos.x - nominal.base.frames[endTick].pos.x) * foe.outward.x +
+        (nominal.run.frames[endTick].pos.z - nominal.base.frames[endTick].pos.z) * foe.outward.z
+      : nominal.run.progress - nominal.base.progress
     return { target: foe.username || String(foe.id), targetAt: foe.position, gameTick: now, resistance, tried,
-      relayPrefix: pending.id, fallThreat: false, repriceRim: true, earlyLift: false, lateLift: false,
+      relayPrefix: pending.id, fallThreat: false, repriceRim: true, earlyLift: false, lateLift: false, matchedProgress,
       shots: [{ ...shot, fireTick: now + shot.fireDelay, arrivalTick: now + contact(shot) }],
       baseline: windOutcome(nominal.base), nominal: windOutcome(nominal.run), worst: windOutcome(worst.run) }
   }
@@ -1601,7 +1683,7 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
   // Admission and the nominal trajectory keep the signed immediate certificate.
   const compare = (a: NonNullable<ReturnType<typeof rollout>>, b: NonNullable<ReturnType<typeof rollout>>) =>
     !options.protect?.length ? outcomeRank(a) - outcomeRank(b) || a.outwardEffect! - b.outwardEffect! || value(a) - value(b) : value(a) - value(b)
-  type Choice = { shot: EnemyWindShot; run: WindRun; ranked: WindRun }
+  type Choice = { shot: EnemyWindShot; run: WindRun; ranked: WindRun; reactive?: WindRun | null }
   // At the rim or a visible obstruction, keep room for a full next gust.
   const { gravity, airdrag, airborneInertia } = bot.physics
   const decayTicks = 1 / (1 - airborneInertia)
@@ -1644,9 +1726,10 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
     return liftCache.get(key)!
   }
   const openLift = (r: WindRun) => Number(priceTerrain && headroom(r) === gustRise)
-  const matchedOutward = (run: WindRun) => {
+  const matchedOutward = (run: WindRun, maxTick?: number) => {
     // Compare the same input at landing, or the last available common tick if either forecast ends first.
-    const tick = Math.min(run.endpointTick, baseline.frames.length - 1)
+    const cap = maxTick === undefined ? run.endpointTick : Math.min(run.endpointTick, maxTick)
+    const tick = Math.min(cap, baseline.frames.length - 1)
     const actual = run.frames[tick].pos, without = baseline.frames[tick].pos
     return (actual.x - without.x) * outward.x + (actual.z - without.z) * outward.z
   }
@@ -1671,10 +1754,15 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
     if (priority) return priority
     if (arena.ellipse && !outcomeRank(run)) {
       // Another gust or a change of input can invalidate a long flight before the relay arrives.
-      const previous = matchedOutward(before)
+      // For airborne targets and multi-shot follow-ups, cap comparison to the horizontal carry window (~2*decayTicks)
+      // so sky-high vertical stalls do not inflate outward credit over fast horizontal carry shots (h=1.2/1.6).
       const arrival = shot.fireDelay + shot.ticks, bestArrival = best.shot.fireDelay + best.shot.ticks
-      const advance = Math.max(0, matchedOutward(run) - previous) / (arrival + decayTicks)
-      const incumbent = Math.max(0, matchedOutward(best.ranked) - previous) / (bestArrival + decayTicks)
+      const boundHorizon = shots.length > 0 || !foe.onGround
+      const carryCap = boundHorizon ? Math.ceil(2 * decayTicks) : undefined
+      const previous = matchedOutward(before, carryCap !== undefined ? arrival + carryCap : undefined)
+      const prevBest = matchedOutward(before, carryCap !== undefined ? bestArrival + carryCap : undefined)
+      const advance = Math.max(0, matchedOutward(run, carryCap !== undefined ? arrival + carryCap : undefined) - previous) / (arrival + decayTicks)
+      const incumbent = Math.max(0, matchedOutward(best.ranked, carryCap !== undefined ? bestArrival + carryCap : undefined) - prevBest) / (bestArrival + decayTicks)
       if (canRecoverFlight && shot.fireDelay === best.shot.fireDelay && advance > 0 && incumbent > 0) {
         const recovering = recoversFlight(run, before, arrival), kept = recoversFlight(best.ranked, before, bestArrival)
         if (recovering !== kept) {
@@ -1711,50 +1799,109 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
   // Бюджет стены (wall.monotonic): план, досчитанный позже, всё равно уйдёт в stale_release — бросаю расчёт, а не досчитываю
   // до 0.5 с в physicsTick (Kimi AUDIT 27.10: 369 из 736 расчётов — stale_release, p90 251 мс, максимум 494).
   // shortcut: exact ordinary-KB certification keeps its eight-case CPU budget; larger chains need a non-exponential certifier.
-  for (let step = 0; step < Math.min(3, options.maxShots ?? 2, throwers.length); step++) {
+  const chainCap = Math.min(3, options.maxShots ?? 2, throwers.length)
+  let sealFrames: Frame[] | null = null
+  for (let step = 0; step < chainCap; step++) {
     let best: Choice | null = null
     let lift: Choice | null = null
     // Only the first expected impulse can invalidate this ray's target forecast.
-    const intercept = pending ? nominal.frames.slice(0, pending.ticks) : nominal.frames
-    const canLift = !options.protect?.length && compare(nominal, baseline) === 0 && step + 1 < Math.min(3, options.maxShots ?? 2, throwers.length)
-    for (const report of throwers.filter(r => !shots.some(s => s.thrower === r.id))) for (const delay of options.delays ?? [0, 2]) {
-      let needsLift = gustRise > 0 && nominal.blockedBeforeLanding
-      for (const height of [.4, 1.6, .05]) {
-        if (height === .05 && !needsLift) continue
-        if (late()) { planTrace('late:budget'); return null }
-        const shot = enemyWindShot(snapshot, foe, report, intercept, { fireDelay: start - now + delay, height, tracks: allyTracks }, sight, options.deadline, observed)
-        tried++
-        if (!shot) { planTrace('shot:none'); continue }
-        if (tryLower && height === .4) lowArrival = shot.ticks
-        if (shots.some(s => s.fireDelay + s.ticks === shot.fireDelay + shot.ticks)) continue
-        const trial = [...shots, shot]
-        let dominated = false
-        let worstRank: WindRun | null = null
-        // Both admission and ranking are bounded by the weakest KB branch seen so far.
-        const worthCertifying = options.protect?.length ? undefined : run => {
-          const terrain = gustRise > 0 && (priceTerrain || nominal.blockedBeforeLanding || run.blockedBeforeLanding)
-          repriceRim ||= terrain
-          const room = terrain ? headroom(run) : null
-          needsLift ||= terrain && (run.blockedBeforeLanding || room !== null && room < gustRise)
-          const gain = compare(run, nominal)
-          const { worthRoof, dropsOffLanding } = landingPrice(run, nominal, room)
-          const useful = gain > 0 && worthRoof && !dropsOffLanding && (!best || compareChoice(run, shot, best) > 0)
-          const neutral = !best && !lift && canLift && gain === 0 && worthRoof
-          dominated = !(useful || neutral)
-          if (!dominated && (!worstRank || compareLanding(run, worstRank) < 0)) worstRank = run
-          return !dominated
+    // On a reactive-seal follow-up (nominal already exits, but an inward-sprinting enemy can still recover),
+    // aim at the reacting survivor's trajectory (`sealFrames`) so the seal shot actually connects.
+    const activeFrames = sealFrames ?? nominal.frames
+    const intercept = pending ? activeFrames.slice(0, pending.ticks) : activeFrames
+    const canLift = !options.protect?.length && !sealFrames && compare(nominal, baseline) === 0 && step + 1 < chainCap
+    const prevShot = step > 0 ? shots[shots.length - 1] : null
+    const prevArrival = prevShot ? prevShot.fireDelay + prevShot.ticks : 0
+    const prevCatchPos = prevShot ? activeFrames[Math.min(prevArrival, activeFrames.length - 1)]?.pos : null
+    const maxStageDelay = Math.max(2, 24 - (start - now))
+    const candidates = throwers.filter(r => !shots.some(s => s.thrower === r.id))
+    for (let rankIdx = 0; rankIdx < candidates.length; rankIdx++) {
+      const report = candidates[rankIdx]
+      let stepDelays = options.delays
+      if (!stepDelays) {
+        if (prevShot && prevCatchPos && rankIdx < 4 && throwers.length <= 8) {
+          const estFlight = Math.max(1, Math.round(vec(report.position).distanceTo(prevCatchPos) / WIND.speed))
+          const staged = new Set<number>([0, 2])
+          const horizonCap = (start - now) + 12
+          for (const offset of [3, 6]) {
+            if (prevArrival + offset > horizonCap) continue
+            const d = prevArrival + offset - estFlight - (start - now)
+            if (d >= 1 && d <= maxStageDelay) staged.add(d)
+          }
+          stepDelays = [...staged]
+        } else {
+          stepDelays = [0, 2]
         }
-        const run = bounds(snapshot, nominalFoe, trial, arena, resistance.lo, team, allyTracks, sight, options.deadline,
-          options.protect?.length ? undefined : compare, worthCertifying, safeImpacts)
-        if (!run) { planTrace(dominated ? 'shot:dominated' : 'shot:ally_unsafe'); continue }
-        if (pinnedLastCharge(run)) continue
-        // With equal outward effect, extra air can set up the next ally's throw.
-        // Отвод (options.protect): чем дальше его тело проходит от своих, тем лучше; до 6 бл. — дальше копьё не достаёт с запасом.
-        if (!(compare(run, nominal) > 0)) planTrace('shot:no_gain')
-        const ranked = worstRank ?? run
-        if (compare(run, nominal) > 0 && (!best || compareChoice(ranked, shot, best) > 0)) best = { shot, run, ranked }
-        else if (!best && !lift && canLift && compare(run, nominal) === 0 && run.frames.some((frame, tick) =>
-          !frame.onGround && nominal.frames[tick] && frame.pos.y > nominal.frames[tick].pos.y)) lift = { shot, run, ranked }
+      }
+      // `foe.height * 2 / 3` (1.2 for standing player, ~0.42 below 1.62 eyeHeight) is the 1.21.11 ServerExplosion sweet spot
+      // combining strong horizontal knockback with vertical lift into 0.91 air drag (~5x carry + 14-16t juggle window).
+      const heights = !options.protect?.length && chainCap > 1 && arena.ellipse && rankIdx < 4 && throwers.length <= 8 ? [.4, foe.height * 2 / 3, 1.6, .05] : [.4, 1.6, .05]
+      for (const delay of stepDelays) {
+        let needsLift = gustRise > 0 && nominal.blockedBeforeLanding
+        for (const height of heights) {
+          if (height === .05 && !needsLift) continue
+          if (late()) { planTrace('late:budget'); return null }
+          const shot = enemyWindShot(snapshot, foe, report, intercept, { fireDelay: start - now + delay, height, tracks: allyTracks }, sight, options.deadline, observed)
+          tried++
+          if (!shot) { planTrace('shot:none'); continue }
+          if (tryLower && height === .4) lowArrival = shot.ticks
+          if (shots.some(s => s.fireDelay + s.ticks === shot.fireDelay + shot.ticks)) continue
+          const trial = [...shots, shot]
+          let dominated = false
+          let worstRank: WindRun | null = null
+          // Both admission and ranking are bounded by the weakest KB branch seen so far.
+          const worthCertifying = options.protect?.length ? undefined : run => {
+            const terrain = gustRise > 0 && (priceTerrain || nominal.blockedBeforeLanding || run.blockedBeforeLanding)
+            repriceRim ||= terrain
+            const room = terrain ? headroom(run) : null
+            needsLift ||= terrain && (run.blockedBeforeLanding || room !== null && room < gustRise)
+            const gain = compare(run, nominal)
+            const { worthRoof, dropsOffLanding } = landingPrice(run, nominal, room)
+            const inwardLanding = outcomeRank(run) <= outcomeRank(nominal) && matchedOutward(run) < matchedOutward(nominal)
+            const useful = gain > 0 && !inwardLanding && worthRoof && !dropsOffLanding &&
+              (!best || (options.reactAfterHit && arena.ellipse && shots.length > 0 && run.out && best.ranked.out) || compareChoice(run, shot, best) > 0)
+            const neutral = !best && !lift && canLift && gain === 0 && !inwardLanding && worthRoof
+            dominated = !(useful || neutral)
+            if (!dominated && (!worstRank || compareLanding(run, worstRank) < 0)) worstRank = run
+            return !dominated
+          }
+          if (sealFrames) {
+            // Seal step: keep nominal exiting AND maximize reactive (inward-sprinting) outcome so the follow-up actually seals void exit.
+            const run = bounds(snapshot, nominalFoe, trial, arena, resistance.lo, team, allyTracks, sight, options.deadline, compare, undefined, safeImpacts)
+            if (!run || !run.out) { planTrace('shot:seal_nominal'); continue }
+            const reactiveRun = bounds(snapshot, foe, trial, arena, resistance.lo, team, allyTracks, sight, options.deadline, undefined, undefined, safeImpacts)
+            if (!reactiveRun) { planTrace('shot:ally_unsafe'); continue }
+            if (!best || (Number(reactiveRun.out) - Number(best.ranked.out) || reactiveRun.progress - best.ranked.progress) > 0) {
+              best = { shot, run, ranked: reactiveRun }
+            }
+            continue
+          }
+          const run = bounds(snapshot, nominalFoe, trial, arena, resistance.lo, team, allyTracks, sight, options.deadline,
+            options.protect?.length ? undefined : compare, worthCertifying, safeImpacts)
+          if (!run) { planTrace(dominated ? 'shot:dominated' : 'shot:ally_unsafe'); continue }
+          if (pinnedLastCharge(run)) continue
+          // With equal outward effect, extra air can set up the next ally's throw.
+          // Отвод (options.protect): чем дальше его тело проходит от своих, тем лучше; до 6 бл. — дальше копьё не достаёт с запасом.
+          if (!(compare(run, nominal) > 0)) planTrace('shot:no_gain')
+          const ranked = worstRank ?? run
+          let better = !best || compareChoice(ranked, shot, best) > 0
+          let reactiveRun: WindRun | null | undefined
+          if (best && options.reactAfterHit && arena.ellipse && !options.protect?.length && shots.length > 0 && ranked.out && best.ranked.out) {
+            // Between two multi-shot chains that both exit nominally, prefer the one that actually connects and exits
+            // when the target reacts by sprinting inward after Shot #1.
+            if (best.reactive === undefined) {
+              best.reactive = bounds(snapshot, foe, [...shots, best.shot], arena, resistance.lo, team, allyTracks, sight, options.deadline, undefined, undefined, safeImpacts)
+            }
+            reactiveRun = bounds(snapshot, foe, trial, arena, resistance.lo, team, allyTracks, sight, options.deadline, undefined, undefined, safeImpacts)
+            const rNew = reactiveRun, rOld = best.reactive
+            const rDiff = (Number(!!rNew?.out) - Number(!!rOld?.out)) || (Number(!!rNew?.exited) - Number(!!rOld?.exited)) ||
+              ((rNew?.progress ?? -Infinity) - (rOld?.progress ?? -Infinity))
+            if (rDiff !== 0) better = rDiff > 0
+          }
+          if (compare(run, nominal) > 0 && better) best = { shot, run, ranked, ...(reactiveRun !== undefined && { reactive: reactiveRun }) }
+          else if (!best && !lift && canLift && compare(run, nominal) === 0 && run.frames.some((frame, tick) =>
+            !frame.onGround && nominal.frames[tick] && frame.pos.y > nominal.frames[tick].pos.y)) lift = { shot, run, ranked }
+        }
       }
     }
     // Only initial safe lifts may wait for a later thrower's strict benefit.
@@ -1762,7 +1909,15 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
     if (!best) break
     if (tryLower) selected = best
     shots.push(best.shot); nominal = best.run
-    if (nominal.out || newFallThreat(nominal)) break
+    if (newFallThreat(nominal)) break
+    if (nominal.out) {
+      // With reactAfterHit on a multi-shot Colosseum chain, only stop early when an inward-sprinting opponent
+      // cannot air-strafe back onto the deck; otherwise allow a follow-up shot aimed at the reacting survivor.
+      if (!options.reactAfterHit || !arena.ellipse || options.protect?.length || step + 1 >= chainCap) break
+      const reactive = sealFrames ? best.ranked : bounds(snapshot, foe, shots, arena, resistance.lo, team, allyTracks, sight, options.deadline, undefined, undefined, safeImpacts)
+      if (!reactive || reactive.out) break
+      sealFrames = reactive.frames
+    }
   }
   if (!shots.length || late() || compare(nominal, baseline) <= 0) return null
   let worst = bounds(snapshot, foe, shots, arena, resistance.hi, team, allyTracks, sight, options.deadline, undefined, undefined, safeImpacts)
@@ -1785,7 +1940,8 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
           const terrain = gustRise > 0 && (priceTerrain || baseline.blockedBeforeLanding || run.blockedBeforeLanding)
           terrainUsed ||= terrain
           const { worthRoof, dropsOffLanding } = landingPrice(run, baseline, terrain ? headroom(run) : null)
-          return compare(run, baseline) > 0 && worthRoof && !dropsOffLanding &&
+          const inwardLanding = outcomeRank(run) <= outcomeRank(baseline) && matchedOutward(run) < 0
+          return compare(run, baseline) > 0 && !inwardLanding && worthRoof && !dropsOffLanding &&
             compareChoice(run, shot, selected!, baseline) > 0
         }, safeImpacts)
         const safe = improved && bounds(snapshot, foe, [shot], arena, resistance.hi, team, allyTracks, sight, deadline, undefined, undefined, safeImpacts)
@@ -1815,6 +1971,7 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
   }
   return { target: foe.username || String(foe.id), targetAt: foe.position, gameTick: now, resistance, tried,
     fallThreat: newFallThreat(nominal), repriceRim, earlyLift, lateLift: crest > 0 && arrival > crest,
+    ...(options.protect?.length ? {} : { matchedProgress: matchedOutward(nominal) }),
     shots: shots.map(s => ({ ...s, fireTick: now + s.fireDelay, arrivalTick: now + s.fireDelay + s.ticks })),
     baseline: windOutcome(baseline), nominal: windOutcome(nominal), worst: windOutcome(worst),
     // Current reports normalize without simulation. Only the same ordered, deduplicated team and observed world can reuse this exact burst.

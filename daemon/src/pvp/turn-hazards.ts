@@ -12,6 +12,7 @@ import { hasEffect, onFire, stepSafe } from './body'
 import { findItem } from './potions'
 import { HIT_REACH, TICK_MS, cooldownMs } from './rules'
 import { burnContact, burningFeet, escapeBurn, lavaExit } from './lava-exit'
+import { OFF_HAND_SLOT, offHandItem } from '../combat/shield'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 import { webExitPlan } from '../navigation/web-exit'
 import { executePlan } from '../navigation/parkour/execute'
@@ -99,10 +100,17 @@ export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
     opts.push({ how: 'water', item: water, cell, busyMs: 2 * TICK_MS, freeMs: (2 + 5 * (cell.y - Math.min(...webCells.map(c => c.y)))) * TICK_MS })
   }
   const alternativeMs = Math.min(...opts.map(o => o.freeMs)), wasBlocking = guard?.blocking?.()
+  const shieldWorn = () => {
+    if (!guard || (bot._ndShieldDisabledUntil || 0) > gameClock.now()) return false
+    const slots = bot.inventory?.slots
+    return Array.isArray(slots) && slots.length > OFF_HAND_SLOT
+      ? offHandItem(bot)?.name === 'shield'
+      : !!guard.stats?.worn
+  }
   let walkBusyMs = 0, walkAt = 0
   const walkCtl = { onAbort: ctx.ctl.onAbort, get aborted() {
     return ctx.ctl.aborted || (bot.health ?? hp) < hp || !!(ctx.prof.player && mc.threat()) ||
-      !!(guard?.stats?.worn && walkBusyMs && loss(Math.max(0, walkBusyMs - (gameClock.now() - walkAt))) >= (bot.health ?? hp))
+      !!(shieldWorn() && walkBusyMs && loss(Math.max(0, walkBusyMs - (gameClock.now() - walkAt))) >= (bot.health ?? hp))
   } }
   const forecastWalk = async () => {
     const previousAim = ctx.aim
@@ -121,15 +129,15 @@ export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
   turn.webSafe = !!plan && loss(plan.busyMs) < hp
   const urgent = foes.some(e => eta(e) <= (plan?.busyMs || 0) + 5 * TICK_MS) || !!(ctx.prof.player && mc.threat())
   // Щит прикрывает ожидание окна; при резке и броске его придётся опустить.
-  if (urgent && guard?.stats?.worn) { ctx.aim = 'target'; await guard.raise(true) }
+  if (urgent && shieldWorn()) { ctx.aim = 'target'; await guard.raise(true) }
   const pearl = findItem(bot, i => i.name === 'ender_pearl')
   if (pearl && canSurvivePearl(bot) && (!plan || loss(plan.freeMs) > pearlDamage(bot))) {
     if (guard) await guard.raise(false)
     const out = await escapePearl({ jump: false })
     if (out?.thrown) { await holdWeapon(); return NEXT }
-    if (urgent && guard?.stats?.worn) await guard.raise(true)
+    if (urgent && shieldWorn()) await guard.raise(true)
   }
-  if (urgent && guard?.stats?.worn && guard.failure?.() !== 'shield_cooldown' && (!turn.webSafe || ctx.prof.player && mc.threat())) {
+  if (urgent && shieldWorn() && guard.failure?.() !== 'shield_cooldown' && (!turn.webSafe || ctx.prof.player && mc.threat())) {
     await ctx.sleep(TICK_MS)
     return NEXT
   }
@@ -162,7 +170,7 @@ export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
         while (!ctx.ctl.aborted && hazards.webCells(bot).length && gameClock.now() < until) {
           // Ведро уже вылито: пока течёт вода, снова прикрыться к противнику.
           ctx.aim = 'target'
-          if (urgent && guard?.stats?.worn) guard.raise(true)
+          if (urgent && shieldWorn()) guard.raise(true)
           await ctx.sleep(TICK_MS)
         }
       }
@@ -170,7 +178,7 @@ export async function webTurn (ctx: DuelCtx, turn: TurnFrame) {
       await bot.lookAt(target.aim, true)
       const started = gameClock.now()
       why = await digWatch(bot.blockAt(target.cell), () => ctx.ctl.aborted ? 'прервано' : ctx.prof.player && mc.threat() ? 'булава летит' :
-        guard?.stats?.worn && loss(Math.max(0, cut.ms - (gameClock.now() - started))) >= (bot.health ?? hp) ? 'нужен щит' : null, false)
+        shieldWorn() && loss(Math.max(0, cut.ms - (gameClock.now() - started))) >= (bot.health ?? hp) ? 'нужен щит' : null, false)
     }
   } catch (error) { why = error.message } finally { ctx.aim = 'target'; await holdWeapon() }
   const left = hazards.webCells(bot)

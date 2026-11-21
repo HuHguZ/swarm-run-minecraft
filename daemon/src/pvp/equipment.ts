@@ -1,5 +1,6 @@
 type CombatContext = Record<string, any>
 import { bodyBox, intersects } from '../navigation/geometry'
+import { weaponScore } from '../items'
 
 export function createEquipment(ctx: CombatContext) {
 const stack = item => item && [item.name, item.type, item.metadata, item.slot, item.count, JSON.stringify(item.components || []), JSON.stringify(item.nbt || null), item.durabilityUsed].join(':')
@@ -72,12 +73,28 @@ const pickWeaponFor = (e) => {
     } catch {}
   }
 
-const holdWeapon = async () => {
-    if (ctx.bot.targetDigBlock) return
+const bestMatchingWeapon = (name: string) => {
+    const carried = ctx.bot.inventory?.items?.() || []
+    const off = ctx.bot.inventory?.slots?.[45]
+    const pool = off ? carried.concat(off) : carried
+    let best = null, bestSc = -1
+    for (const it of pool) {
+      if (!it || it.name !== name) continue
+      const sc = weaponScore(ctx.bot, it)
+      if (!best || sc > bestSc + 1e-6 || (Math.abs(sc - bestSc) <= 1e-6 && ((it.maxDurability || 0) - (it.durabilityUsed || 0)) > ((best.maxDurability || 0) - (best.durabilityUsed || 0)))) {
+        best = it; bestSc = sc
+      }
+    }
+    return best || ctx.findItem?.(ctx.bot, i => i.name === name) || null
+  }
+
+const holdWeapon = async (force = false) => {
+    if (!force && ctx.bot.targetDigBlock) return
     const before = ctx.heldName()
-    ctx.weapon = (ctx.chosenWeapon && ctx.findItem(ctx.bot, i => i.name === ctx.chosenWeapon)) || ctx.bestWeapon(ctx.bot)
+    ctx.weapon = (ctx.chosenWeapon && bestMatchingWeapon(ctx.chosenWeapon)) || ctx.bestWeapon(ctx.bot)
     const held = ctx.bot.heldItem
-    if (ctx.weapon && (!held || held.name !== ctx.weapon.name)) {
+    const sameHeld = !!held && !!ctx.weapon && (held === ctx.weapon || (held.name === ctx.weapon.name && stack(held) === stack(ctx.weapon)))
+    if (ctx.weapon && !sameHeld) {
       try { await ctx.bot.equip(ctx.weapon, 'hand') } catch {}
     } else if (!ctx.weapon && held && !/_sword$|_axe$/.test(held.name)) {
       try { await ctx.bot.unequip('hand') } catch {}

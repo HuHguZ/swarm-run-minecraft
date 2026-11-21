@@ -49,25 +49,41 @@ export function pushPlan (bot, e, { sees = true, theyUp = false, busy = null, cl
 
 // Выстрел зарядом в него: прямая без гравитации, скорость 1.5 + своё
 // смещение (x,z — всегда, y — в воздухе). Цель — его ноги + 0.3 с упреждением
-// по его скорости: всплеск у ног подкидывает выше всего.
-export async function windPush (bot, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, allies = [] }: any = {}) {
+// по его скорости (включая вертикаль в воздухе) и проверкой стен (windBlockImpact).
+export async function windPush (bot, e, { vel = null, swap = SWAP, allies = [] }: any = {}) {
   install(bot)
   if (!offWind(bot) && !(await ensureHotbar(bot, ['wind_charge']))) return { fired: false, why: 'заряда нет в хотбаре' }
-  let lastPos = bot.entity.position.clone()
-  const r = await fireWind(bot, () => {
-    const p = bot.entity.position
-    const u = { x: p.x - lastPos.x, y: bot.entity.onGround ? 0 : p.y - lastPos.y, z: p.z - lastPos.z }
+  const { windLaunch, windBlockImpact } = require('../combat/team-wind') as typeof import('../combat/team-wind')
+  const { observedVelocity } = require('../bow/track') as typeof import('../bow/track')
+  const r = await fireWind(bot, (moved) => {
+    if (!e?.position || e.isValid === false) return null
+    const u = new Vec3(moved?.x || 0, bot.entity.onGround ? 0 : (moved?.y || 0), moved?.z || 0)
     const from = pick.eyeOf(bot)
-    const tv = vel() || { x: 0, y: 0, z: 0 }
-    let t = from.distanceTo(e.position) / WIND_SPEED
-    let P = null
-    for (let i = 0; i < 4; i++) {
-      P = new Vec3(e.position.x + tv.x * t, e.position.y + 0.3, e.position.z + tv.z * t)
-      t = from.distanceTo(P) / WIND_SPEED
+    const tv = (vel ? vel() : observedVelocity(e)) || { x: 0, y: 0, z: 0 }
+    const airborne = e.onGround === false && Number.isFinite(tv.y) && Math.abs(tv.y) > 1e-4
+    const leadY = (ticks: number) => {
+      if (!airborne) return 0
+      const whole = Math.floor(Math.max(0, ticks)), frac = Math.max(0, ticks) - whole
+      let dy = 0, vy = tv.y
+      for (let k = 0; k < whole; k++) { dy += vy; vy = (vy - 0.08) * 0.98 }
+      return dy + vy * frac
     }
-    const w = P.minus(from).scaled(1 / Math.max(1, t))
-    const d = new Vec3(w.x - u.x, w.y - u.y, w.z - u.z)
-    return { yaw: Math.atan2(-d.x, -d.z), pitch: Math.atan2(d.y, Math.hypot(d.x, d.z)) }
-  }, { swap, allies, before: () => { lastPos = bot.entity.position.clone() } })
+    let t = from.distanceTo(e.position) / WIND_SPEED
+    let P = e.position.offset(0, 0.3, 0)
+    let launch: ReturnType<typeof windLaunch> = null
+    for (let i = 0; i < 4; i++) {
+      P = new Vec3(e.position.x + (tv.x || 0) * t, e.position.y + 0.3 + leadY(t), e.position.z + (tv.z || 0) * t)
+      launch = windLaunch(from, P, u)
+      if (!launch) return null
+      t = launch.time
+    }
+    if (!launch) return null
+    const dist = P.distanceTo(from), speed = launch.velocity.norm()
+    if (dist > 0.35 && speed > 1e-6) {
+      const hit = windBlockImpact(bot, from, launch.direction, dist - 0.35, speed)
+      if (hit) return null
+    }
+    return { yaw: launch.yaw, pitch: launch.pitch }
+  }, { swap, allies, packetAim: true })
   return r
 }

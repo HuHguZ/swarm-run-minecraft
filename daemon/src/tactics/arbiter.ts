@@ -22,6 +22,15 @@ const SAME_RUN: Partial<Record<ActionId, string>> = { Flee: 'retreat', CreateDis
 const SHELTERS = new Set<ActionId>(['BlockOff', 'PillarUp', 'DigDown', 'Hide', 'Heal'])
 const BACK_MARGIN = 30
 
+export interface ArbiterSnapshot {
+  current: Candidate | null
+  level: ThreatLevel
+  node: TacticalNodeId
+  left: ActionId[]
+  high: ThreatLevel
+  foes: number[]
+}
+
 export class TacticalArbiter {
   readonly graph = new TacticalGraph()
   private current: Candidate | null = null
@@ -34,6 +43,28 @@ export class TacticalArbiter {
 
   constructor(private readonly margin = 15) {}
 
+  snapshot(): ArbiterSnapshot {
+    return {
+      current: this.current,
+      level: this.level,
+      node: this.node,
+      left: [...this.left],
+      high: this.high,
+      foes: [...this.foes]
+    }
+  }
+
+  restore(snap: ArbiterSnapshot): void {
+    this.current = snap.current
+    this.level = snap.level
+    this.node = snap.node
+    this.left.clear()
+    for (const id of snap.left) this.left.add(id)
+    this.high = snap.high
+    this.foes.clear()
+    for (const id of snap.foes) this.foes.add(id)
+  }
+
   decide(state: TacticalState): TacticalDecision {
     const level = threatLevel(state)
     // Construction exposure prices a new build; the running builder must not pay the whole interval again after a hit.
@@ -43,6 +74,7 @@ export class TacticalArbiter {
     const newFoe = [...foes].some(id => !this.foes.has(id))
     if (level === 0 && !this.current) { this.high = 0; this.left.clear(); this.foes.clear() }
     if (newFoe) { this.high = 0; this.left.clear() }
+    if (level <= 1 && level < this.high) this.high = level
     // Re-crossing the same injury threshold is not a new incident, however long the action has run.
     const escalated = level >= 3 && (level > this.high || level === 4 && level > this.level)
     this.high = Math.max(this.high, level) as ThreatLevel
@@ -55,7 +87,14 @@ export class TacticalArbiter {
       (alternateRun ? { ...alternateRun, id: this.current!.id } : undefined)
     // A sealed refuge hides the attacker: its candidate disappears with the attacker's line of sight, and the 1.5 s hit
     // memory then pulled the body out of a finished box into the archer's fire (stress stand, skeleton at hp 8).
-    const sealed = !!this.current && SHELTERS.has(this.current.id) && level >= 2 && level < 4 && !creeperWalksUp(state)
+    // Gate sealed strictly on physical validity so player/blast/drowning/hotFloor/missing-resources never resurrect it.
+    const playerFoe = state.enemies.some(enemy => enemy.threatening && enemy.player)
+    const shelterValid = !creeperWalksUp(state) && !playerFoe && !state.blast && !state.explosion &&
+      !state.drowning && !state.waterEmergency && !state.hotFloor && !state.lava && !state.lavaAhead && !state.lavaEscapePending &&
+      !state.dangerousFall && !state.emergencyController && !state.embedded &&
+      (!(this.current?.id === 'BlockOff' || this.current?.id === 'PillarUp') || state.blocks > 0 || state.cover) &&
+      (this.current?.id !== 'Heal' || state.edible)
+    const sealed = !!this.current && SHELTERS.has(this.current.id) && level >= 2 && level < 4 && shelterValid
     const currentScore = (found && SHELTERS.has(found.id) ? { ...found, score: Math.max(found.score, this.current!.score) } : found) ??
       (level === 1 && this.current && CONTINUES_AT_LEVEL_1.has(this.current.id) || sealed ? this.current! : undefined)
     const release = !!this.current && level === 0
@@ -87,20 +126,22 @@ export class TacticalArbiter {
     const falling = !state.embedded && (state.dangerousFall || state.emergencyController && !state.waterEmergency)
     if (falling) selected = null
     this.node = falling ? 'EmergencyController' : 'Strategic'
-    // A residual fire tick crossing level 3 must not cancel and restart the same 32-tick bite. Nor the Nether hole half dug: the
-    // hit that escalated to level 3 restarted it from the top, 2.4 s instead of 1.1 (try-lab-ne-piglin c7: "PillarUp preempted by
-    // PillarUp", the piglins in the shaft before the plug).
-    const change = selected?.id !== this.current?.id || escalated && !!selected && !(selected.id === 'Eat' && burnRecovery(state)) &&
-      !(selected.id === 'Surface' && state.waterEscape) &&
-      !((process.env.ND_OW_NIGHT_BLOCKOFF === '1' || state.owRangedApproachHp !== undefined) && level === 3 && !newFoe && SHELTERS.has(selected.id)) &&
-      !(selected.id === 'PillarUp' && (!!state.netherHide || state.polarBear?.action === 'PillarUp'))
+    // Escalation waives hysteresis when switching to a different action, but must never self-restart the identical running action
+    // (e.g. aborting UseFireResistance mid-drink on magma->lava or restarting BlockOff/Flee on HP<=6).
+    const sameNonRestart = !!selected && (
+      selected.id === 'Surface' && !!state.waterEscape ||
+      selected.id === 'Eat' && burnRecovery(state) ||
+      selected.id === 'PillarUp' && (!!state.netherHide || state.polarBear?.action === 'PillarUp')
+    )
+    const legacyShelterRestart = process.env.ND_OW_NIGHT_BLOCKOFF !== '1' && level === 3 && !newFoe && state.owRangedApproachHp === undefined && !!selected && selected.id === 'BlockOff'
+    const change = selected?.id !== this.current?.id || (escalated && !!selected && !sameNonRestart && (newFoe || legacyShelterRestart))
     if (this.current && selected?.id !== this.current.id && level > 0) this.left.add(this.current.id)
     this.current = selected
     this.level = level
     return { level, selected, candidates: choices, change, release: release || !selected && (level === 4 || invalid && level > 0) }
   }
 
-  finished(): void { this.current = null; this.left.clear() }
+  finished(): void { this.current = null; this.left.clear(); this.high = 0; this.foes.clear() }
   // A confirmed kill ends the old contact's commitment (s4d-smoke2 hungry-zombies: kill, then Flee from zombie 2).
   forgive(id: ActionId): void { this.left.delete(id) }
   // The system keeps a bounded action running through a calm sample (a sealed box, a flight past the sight edge); the

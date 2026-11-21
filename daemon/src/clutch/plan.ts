@@ -27,7 +27,7 @@ function create ({ Vec3, faceAim, simulate, makeBlock }: any) {
     const out = []
     for (const c of cells.values()) {
       const b = world.getBlock(c)
-      if (!replaceable(b) || intersects(c, sp) || intersects(c, s.pos) || occupied(c, others)) continue
+      if (!replaceable(b) || (!options.cobweb && (intersects(c, sp) || intersects(c, s.pos) || occupied(c, others)))) continue
       for (const face of faces) {
         const ref = c.minus(face); const rb = world.getBlock(ref)
         if (!blockReference(rb) || options.canReference && !options.canReference(rb)) continue
@@ -42,7 +42,8 @@ function create ({ Vec3, faceAim, simulate, makeBlock }: any) {
     return out.sort((a, b) => b.cell.y - a.cell.y || a.cell.distanceTo(s.pos) - b.cell.distanceTo(s.pos))
   }
   function rollout (s, world, first, options) {
-    const inserted = new Map([[key(first.cell), makeBlock(first.cell)]])
+    const blockOf = options.blockFor || makeBlock
+    const inserted = new Map([[key(first.cell), blockOf(first.cell)]])
     const virtual = { getBlock: p => inserted.get(key(p)) || world.getBlock(p) }
     const control = options.control || IDLE
     const st = copyState(s, control); st.yaw = first.yaw
@@ -51,20 +52,23 @@ function create ({ Vec3, faceAim, simulate, makeBlock }: any) {
     for (let t = 1; t <= (options.maxTicks ?? 24); t++) {
       simulate(st, virtual); peak = Math.max(peak, st.pos.y)
       if (st.isInWater || st.isInLava) return null
+      if (options.cobweb && (st.isInWeb || intersects(first.cell, st.pos))) {
+        return { ...first, landingY: st.pos.y, fall: 0, landTick: t, chain, control: { ...control }, cobweb: true }
+      }
       if (st.onGround) {
         const contact = [...inserted.values()].some(b => Math.abs(st.pos.y - b.position.y - 1) < 1e-6 &&
           st.pos.x + 0.3 > b.position.x && st.pos.x - 0.3 < b.position.x + 1 && st.pos.z + 0.3 > b.position.z && st.pos.z - 0.3 < b.position.z + 1)
         if (!contact) return null
         return { ...first, landingY: st.pos.y, fall: peak - st.pos.y, landTick: t, chain, control: { ...control } }
       }
-      if (chain.length < options.maxBlocks) {
+      if (!options.cobweb && chain.length < options.maxBlocks) {
         // One extension per tick, each using an actually visible face of an
         // earlier virtual block. Real guard revalidates the whole plan next tick.
         const extensions = candidates(st, virtual, { ...options, serverPos: st.pos, control })
           .filter(p => inserted.has(key(p.ref)))
         if (extensions.length) {
           const next = extensions[0]
-          inserted.set(key(next.cell), makeBlock(next.cell)); chain.push({ ...next, tick: t })
+          inserted.set(key(next.cell), blockOf(next.cell)); chain.push({ ...next, tick: t })
           st.yaw = next.yaw
         }
       }

@@ -25,7 +25,8 @@ export async function openDuel (ctx: DuelCtx) {
     pickWeaponFor(ctx.entity)
   }
 
-  await holdWeapon()
+  if (bot.targetDigBlock) { try { bot.stopDigging?.() } catch {} }
+  await holdWeapon(true)
   if (guard) await guard.wear()
   if (process.env.ND_DEBUG_PVP) console.log('[pvp] start', JSON.stringify({ t: ctx.label, held: heldName(), inv: bot.inventory.items().map(i => `${i.name}×${i.count}`) }))
 

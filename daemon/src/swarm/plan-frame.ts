@@ -104,7 +104,7 @@ export function pvpFrame(S: PvpPlan, { center, primary } = doctrineFocus(S.team,
   let forward = { x: (foeCenter.x - center.x) / (d || 1), y: 0, z: (foeCenter.z - center.z) / (d || 1) }
   // Враги вокруг строя (кольцо) или строй вокруг врага (кокон) — направление «на врага» вырождается и прыгает каждые
   // полсекунды, а с ним и все места строя (ревью 13.10). Ближе 2 бл. — прежнее направление, пока оно свежее.
-  const kept = board.facts().find(f => f.id === 'forward')
+  const kept = board.factView('forward')
   if (d < 2 && kept && Math.hypot(kept.position.x, kept.position.z) > .5) forward = { x: kept.position.x, y: 0, z: kept.position.z }
   else if (d >= 2 && enemies.length && team.length) board.recordFact(team[0].id, board.now(), { id: 'forward', kind: 'mark', position: { ...forward } }, 10000)
   const witnesses = new Map(enemies.map(e => [e.id, board.directWitnesses(e.id)]))
@@ -142,10 +142,12 @@ export function pvpFrame(S: PvpPlan, { center, primary } = doctrineFocus(S.team,
   for (const m of team) if (!groups.some(g => g.includes(m))) groups.push(groupOf(team, m, link))
   const groupVictories = new Map<SwarmMember[], Set<string>>()
   const futile = new Set<string>(), outnumbered = new Set<string>()
-  // Натиск: размен не считается — группа не бросает бой и не уходит готовиться (бегут только раненые).
   if (!aggressive) for (const group of groups) {
-    const verdict = groupVerdict(groupOf(team, group[0], REINFORCE_LINK), enemies, link)
-    for (const a of group) if (verdict.futile) futile.add(a.id); else if (verdict.outnumbered) outnumbered.add(a.id)
+    const verdict = groupVerdict(groupOf(team, group[0], REINFORCE_LINK), enemies, TEAM_LINK)
+    for (const a of group) {
+      if (verdict.futile) futile.add(a.id)
+      else if (verdict.outnumbered) outnumbered.add(a.id)
+    }
   }
   const hopeless = new Set([...futile, ...outnumbered])
   // В финале цель — полный вайп: strongFew/натиск не отменяют добивание последних живых (пользователь 25.10).

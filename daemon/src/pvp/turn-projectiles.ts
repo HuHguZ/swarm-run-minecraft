@@ -17,12 +17,16 @@ export async function incomingTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { eye, hp, me, theyBow } = turn
   const inc = turn.inc = threats.incoming(bot).filter(p => p.ticks <= 12)
   // Spawn receipts predict a fast bolt before its second visible position packet.
-  for (const arrow of threats.dangers(bot).arrows) {
-    const entry = [...(bot._ndThrown || [])].find(([, r]) => r.p === arrow.from)
+  const foes = ctx.session?._ndFoes ?? bot._ndFoes
+  const danger = foes !== undefined ? threats.dangers(bot, { foes }) : threats.dangers(bot)
+  for (const arrow of danger.arrows) {
+    const id = arrow.id
+    const observed = id != null ? bot._ndThrown?.get(id) : null
+    const entry = observed ? [id, observed] : [...(bot._ndThrown || [])].find(([, r]) => r.p === arrow.from)
     if (!entry || inc.some(p => p.entity.id === entry[0])) continue
-    const [id, observed] = entry
-    inc.push({ name: arrow.name, ticks: arrow.ticks, at: arrow.at, vel: observed.v,
-      entity: { id, position: new Vec3(observed.p.x, observed.p.y, observed.p.z) } })
+    const [eid, rec] = entry
+    inc.push({ name: arrow.name, ticks: arrow.ticks, at: arrow.at, vel: rec.v,
+      entity: { id: eid, position: new Vec3(rec.p.x, rec.p.y, rec.p.z) } })
   }
   inc.sort((a, b) => a.ticks - b.ticks)
   if (ctx.perch && bot.entity.position.y >= ctx.perch.top - 1.2 && (theyBow || inc.some(x => /arrow|trident/.test(x.name)))) {

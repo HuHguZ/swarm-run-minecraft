@@ -103,11 +103,26 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     // Колонна в двух секундах хода дешевле далёкого насеста; луч и путь проверяет само тело.
     const archer = !enemies.some(e => now() - e.seenAt < 1000 && distance(e.position, m.p) <= 6) && enemies.filter(e => e.threat === 'bow' && now() - e.seenAt < 1000)
       .sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
-    if (archer) {
+    const coverCell = cellKey({ x: Math.floor(m.p.x), y: Math.floor(m.p.y), z: Math.floor(m.p.z) })
+    const coverNoop = b.swarmCoverNoop?.cell === coverCell && now() - b.swarmCoverNoop.at < 4000 ? b.swarmCoverNoop.count : 0
+    const hasDestination = !!task.position && distance(m.p, task.position) > 3 && !!(task.data?.regroup || task.data?.hide || task.data?.perch)
+    if (archer && !(coverNoop >= 2 && hasDestination)) {
+      const beforeCover = { ...m.p }
       const reply = await b.c.call('take_cover', { from: archer.id, localOnly: true, nearerThan: task.data?.perch ? task.position : undefined, arena })
       if (!currentTurn(sw, b, round)) return
       if (reply?.status === 'interrupted') { b.swarmFightReply = reply; cooldown.set(`fight:${b.name}`, now() + 500); return }
-      if (detail(reply)?.ok) return
+      if (detail(reply)?.ok) {
+        const afterCover = reply?.state?.pos || pos[b.name]?.p
+        if (afterCover && distance(afterCover, beforeCover) < .25) {
+          const nextCount = coverNoop + 1
+          b.swarmCoverNoop = { cell: coverCell, count: nextCount, at: now() }
+          // Повторный 0s done take_cover в той же клетке: держать укрытие осознанно, а не крутить 0s RPC до 6с 🧊.
+          if (nextCount >= 2 && !hasDestination) {
+            await b.c.call('swarm_hold', { sneak: true, enemies: enemies.map(e => e.id), allies: (context.members || []).map(a => a.id), timeoutSeconds: 2, arena }).catch(() => {})
+          }
+        } else delete b.swarmCoverNoop
+        return
+      }
       // Прятаться не за что — стенка из блоков на месте, в его сторону.
       if (blockCount(m.inv) >= 2) {
         const wall = detail(await b.c.call('take_cover', { from: archer.id, wall: true, arena }).catch(e => ({ why: e.message })))
@@ -243,7 +258,28 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       if (!positioned && distance(m.p, task.position) > 3) await go(b, task.position)
     }
     if (!currentTurn(sw, b, round)) return
-    await b.c.call('eat', { timeoutSeconds: 4 }).catch(() => {})
+    const atNow = sw.now ? sw.now() : 0
+    const prevNoop = b.swarmEatNoop
+    const sameNoop = !!prevNoop && prevNoop.round === round && m.hp <= prevNoop.hp && m.food === prevNoop.food && atNow - prevNoop.at < 10000
+    if (sameNoop) {
+      if (prevNoop.count === 1 && ((m.food ?? 20) >= 18 || task.data?.antidote)) {
+        prevNoop.count = 2
+        prevNoop.at = atNow
+        await b.c.call('swarm_hold', { sneak: true, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 2, arena }).catch(() => {})
+        return
+      }
+      if (m.p && context.board?.recordFact) context.board.recordFact(b.name, atNow, { id: `recover-noop:${b.name}`, kind: 'mark', position: m.p }, 8000)
+      delete b.swarmEatNoop
+      return
+    }
+    const eatReply = await b.c.call('eat', { timeoutSeconds: 4 }).catch(() => null)
+    if (!currentTurn(sw, b, round)) return
+    const eatDetail = detail(eatReply)
+    const ate = !!(eatDetail?.ate || eatDetail?.ok === true)
+    if (ate) delete b.swarmEatNoop
+    else if (eatReply && eatReply.status !== 'interrupted' && (!eatReply.status || eatReply.status === 'done')) {
+      b.swarmEatNoop = { round, count: 1, hp: m.hp, food: m.food, at: sw.now ? sw.now() : atNow }
+    }
     return
   }
 

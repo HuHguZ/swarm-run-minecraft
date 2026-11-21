@@ -50,15 +50,21 @@ export function evaluateAerial(state: AerialState): AerialDecision {
   if (!target?.alive) return safeLanding && self.flying ? { node: 'SafeLanding', candidates: [{ id: 'SafeLanding', cost: 1, reason: 'target lost', target: safeLanding }], selected: { id: 'SafeLanding', cost: 1, reason: 'target lost', target: safeLanding } } : { node: 'Ground', candidates: [] }
   if (!self.flying && !target.flying) return { node: 'Ground', candidates: [] }
   const candidates: AerialCandidate[] = []
-  if (self.flying && safeLanding) candidates.push({ id: 'SafeLanding', cost: state.health <= 8 ? 1 : 10, reason: 'confirmed landing', target: safeLanding })
-  if (safeLanding && state.corridorClear && state.health > 8) {
+  if (self.flying && safeLanding) {
+    const landCost = state.health <= 8 ? 1 : 10
+    candidates.push({ id: 'SafeLanding', cost: landCost, reason: 'confirmed landing', target: safeLanding })
+  }
+  // Cost/risk EV pricing instead of a hard health > 8 refusal gate (AGENTS.md 06.10):
+  // low HP raises risk cost continuously so SafeLanding wins when critically low, while high-EV ready strikes still compete cleanly.
+  if (safeLanding && state.corridorClear) {
+    const hpRisk = Math.max(0, 9 - state.health) * 1.5
     const at = interceptPoint(self, target)
     const distance = Math.hypot(target.position.x - self.position.x, target.position.y - self.position.y, target.position.z - self.position.z)
-    if (self.flying && equipment.ranged && state.rangedReady && distance >= 8 && distance <= 48) candidates.push({ id: 'RangedVolley', cost: 3 + distance / 50, reason: 'clear airborne firing corridor', target: at })
-    if (equipment.elytra && equipment.rockets > 0) candidates.push({ id: 'AerialIntercept', cost: 5 + distance / 20, reason: 'moving airborne target', target: at })
-    if (self.flying && equipment.spear && state.spearReady && distance <= 6) candidates.push({ id: 'SpearStrike', cost: 2, reason: 'airborne spear window', target: at })
-    if (self.flying && !target.flying && equipment.mace && equipment.chestplate && state.maceReady && state.maceDropReady) candidates.push({ id: 'DiveStrike', cost: 1, reason: 'charged descent above target', target: at })
-    if (self.flying && equipment.pearls > 0 && state.health > state.pearlDamage + 8 && distance > 24) candidates.push({ id: 'PearlReposition', cost: 2 + state.pearlDamage / 2, reason: 'safe midflight reposition', target: safeLanding })
+    if (self.flying && equipment.ranged && state.rangedReady && distance >= 8 && distance <= 48) candidates.push({ id: 'RangedVolley', cost: 3 + distance / 50 + hpRisk, reason: 'clear airborne firing corridor', target: at })
+    if (equipment.elytra && equipment.rockets > 0) candidates.push({ id: 'AerialIntercept', cost: 5 + distance / 20 + hpRisk, reason: 'moving airborne target', target: at })
+    if (self.flying && equipment.spear && state.spearReady && distance <= 6) candidates.push({ id: 'SpearStrike', cost: 2 + hpRisk * 0.8, reason: 'airborne spear window', target: at })
+    if (self.flying && !target.flying && equipment.mace && equipment.chestplate && state.maceReady && state.maceDropReady) candidates.push({ id: 'DiveStrike', cost: 1 + hpRisk * 0.8, reason: 'charged descent above target', target: at })
+    if (self.flying && equipment.pearls > 0 && state.health > state.pearlDamage + 6 && distance > 24) candidates.push({ id: 'PearlReposition', cost: 2 + state.pearlDamage / 2 + hpRisk, reason: 'safe midflight reposition', target: safeLanding })
   }
   candidates.sort((a, b) => a.cost - b.cost || a.id.localeCompare(b.id))
   return { node: candidates[0]?.id ?? (self.flying ? 'AerialIntercept' : 'Ground'), candidates, selected: candidates[0] }

@@ -221,13 +221,30 @@ export async function wingOrbit (session, ctl, p: any = {}) {
     // Стоит на гребне (пользователь 25.10: «с центра колизея тоже скидывать, элитровые в помощь») — не круг, а дуга ±0.8 рад.
     // со стороны центра арены: снаружи заряд толкнул бы его внутрь, а с центра — наружу, через край; сбили — тот же заход
     // добивает падающего. Сторона дуги меняется, когда бот дошёл до её конца.
-    let sweep = 1
+    let sweep = 1, lastFlipAt = -Infinity
     const laneAngle = pursueGround && (p.lane === -1 || p.lane === 0 || p.lane === 1) ? Math.atan2(3 * p.lane, R) : null
     const centreSideAngle = (ai, me, f, d) => {
       if (laneAngle !== null) return ai + laneAngle
+      // Inside half-radius (passing right over the target), keep a steady exit angle instead of flipping atan2 180°.
+      const minCleanD = Math.max(4, R * .5)
+      if (d < minCleanD) return ai + .8 * sweep
       const rel = Math.atan2(Math.sin(Math.atan2(me.z - f.z, me.x - f.x) - ai), Math.cos(Math.atan2(me.z - f.z, me.x - f.x) - ai))
-      if (d < R * 1.6 && rel * sweep > .6) sweep = -sweep
-      return ai + (d < R * 1.6 ? .8 * sweep : 0)
+      const nowMs = gameClock.now()
+      if (d < R * 1.6 && rel * sweep > .65 && nowMs - lastFlipAt >= 1500) {
+        sweep = -sweep
+        lastFlipAt = nowMs
+      }
+      if (d >= R * 1.6) return ai
+      // Glide smoothly ahead along the sweep arc instead of snapping 92° across the tail.
+      return ai + Math.max(-.85, Math.min(.85, rel + .55 * sweep))
+    }
+    const leadTargetHoriz = (e, base, d, keepInside: boolean) => {
+      if (!hasObservedVelocity(e)) return base
+      const ov = observedVelocity(e), oh = Math.hypot(ov.x, ov.z)
+      if (oh <= .04) return base
+      const t = Math.min(6, Math.max(2, Math.round(d / 2)))
+      const led = new Vec3(base.x + ov.x * t, base.y, base.z + ov.z * t)
+      return keepInside && c && windOutside(c, led, pick.hitboxOf(bot, e).w) ? base : led
     }
     const escort = () => sky.fly(bot, ctl, {
       arena: p.arena, useReserve: true, maxMs: Math.max(0, deadline - gameClock.now()), phase: 'облёт',
@@ -235,20 +252,25 @@ export async function wingOrbit (session, ctl, p: any = {}) {
         const e = foe(); if (!e || exited(e)) return null
         const me = bot.entity.position, f = e.position, ground = supported(e)
         const d = Math.hypot(me.x - f.x, me.z - f.z); closest = Math.min(closest, me.distanceTo(f)); if (me.distanceTo(f) < 16) near++
-        // Точка круга на 0.7 рад. впереди по ходу: бот всё время догоняет её и обходит его кругом.
         const ledge = c && ground && (pursueGround || Math.hypot(f.x - c.x, f.z - c.z) > R)
         if (ledge) {
-          const outward = pursueGround ? windOutward(c, f, pick.hitboxOf(bot, e).w) : null
-          const ai = outward ? Math.atan2(-outward.z, -outward.x) : Math.atan2(c.z - f.z, c.x - f.x)
-          const a = centreSideAngle(ai, me, f, d)
-          return { kind: 'point', at: new Vec3(f.x + Math.cos(a) * R, f.y + 2, f.z + Math.sin(a) * R), minY: f.y - 1, maxY: f.y + 10, gap: 3, speedMin: .4 }
+          const aimF = leadTargetHoriz(e, f, d, true)
+          const outward = pursueGround ? windOutward(c, aimF, pick.hitboxOf(bot, e).w) : null
+          const ai = outward ? Math.atan2(-outward.z, -outward.x) : Math.atan2(c.z - aimF.z, c.x - aimF.x)
+          const a = centreSideAngle(ai, me, aimF, d)
+          return { kind: 'point', at: new Vec3(aimF.x + Math.cos(a) * R, f.y + 2, aimF.z + Math.sin(a) * R), minY: f.y - 1, maxY: f.y + 10, gap: 3, speedMin: .4 }
         }
         const arenaAir = c && !ground, height = pick.hitboxOf(bot, bot.entity).h, eye = pick.eyeHeight(bot)
         const targetEye = arenaAir ? pick.eyeHeight(bot, e) : 0
-        let a = Math.atan2(me.z - f.z, me.x - f.x) + (d < R * 1.6 ? .7 : 0)
+        let a: number
         if (arenaAir) {
           const outward = windOutward(c, f, pick.hitboxOf(bot, e).w), ai = Math.atan2(-outward.z, -outward.x)
           a = centreSideAngle(ai, me, f, d)
+        } else {
+          const v = bot.entity.velocity
+          const ownH = v ? Math.hypot(v.x, v.z) : 0
+          // Directly over the target, fly straight out along current velocity until outside turning radius.
+          a = d < Math.max(4, R * .5) && ownH > .1 ? Math.atan2(v.z, v.x) : Math.atan2(me.z - f.z, me.x - f.x) + (d < R * 1.6 ? .5 : 0)
         }
         const forecast = wingForecast(bot, e, p.arena, Math.ceil(R / WIND.speed), sky.gliding(e) && canCoast())
         if (forecast) {
@@ -277,9 +299,10 @@ export async function wingOrbit (session, ctl, p: any = {}) {
             return new Vec3(future.x + Math.cos(a) * R, Math.max(floorY + gap, y + (arenaAir ? targetEye - eye : -height)), future.z + Math.sin(a) * R)
           }, minY: floorY + gap, maxY: arenaAir ? undefined : f.y + 12, gap, speedMin: .4 }
         }
-        if (arenaAir) return { kind: 'point', at: new Vec3(f.x + Math.cos(a) * R,
-          Math.max(floorY + 3, f.y + targetEye - eye), f.z + Math.sin(a) * R), minY: floorY + 3, gap: 3, speedMin: .4 }
-        return { kind: 'point', at: new Vec3(f.x + Math.cos(a) * R, f.y + (sky.gliding(e) ? 0 : 3), f.z + Math.sin(a) * R), minY: f.y - 2, maxY: f.y + 12, gap: 3, speedMin: .4 }
+        const airF = leadTargetHoriz(e, f, d, false)
+        if (arenaAir) return { kind: 'point', at: new Vec3(airF.x + Math.cos(a) * R,
+          Math.max(floorY + 3, f.y + targetEye - eye), airF.z + Math.sin(a) * R), minY: floorY + 3, gap: 3, speedMin: .4 }
+        return { kind: 'point', at: new Vec3(airF.x + Math.cos(a) * R, f.y + (sky.gliding(e) ? 0 : 3), airF.z + Math.sin(a) * R), minY: f.y - 2, maxY: f.y + 12, gap: 3, speedMin: .4 }
       },
       rocketIf: (s, _plan, goal) => {
         const e = foe()

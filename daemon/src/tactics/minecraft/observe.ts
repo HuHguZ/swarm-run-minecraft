@@ -3,12 +3,13 @@ import { isAlly } from '../../combat/ally-safety'
 import { hotSupport } from '../../pvp/lava-exit'
 // Тактика: типы порта Minecraft, снимок состояния для телеметрии, наблюдение угроз и выходов (observeTactics).
 import { S4D, digDownCost, boxBuildCost, threatLevel, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from '../state'
-import { lavaCapabilities, inLava } from '../lava-escape'
+import { lavaCapabilities, inLava, syncLavaClimbGoal } from '../lava-escape'
 import { createEmergencyEscape, lavaFallFloor } from '../../combat/emergency-escape'
 import { webBoatPlan } from '../web-boat'
 import { boatHopAvailable } from '../../combat/boat-hop'
 import { mountedBoatDry } from '../../combat/boat-placement'
-import { blastNear } from '../blast'
+import { blastNear, actionableInstantBlasts, tntCharges, TNT_REACH } from '../blast'
+import { COMMANDED_ESCAPE } from '../commanded-escape'
 import { rangedGuard } from '../../ow-shield'
 import * as clock from '../../game-clock'
 import * as locks from '../../reflex-lock'
@@ -240,7 +241,8 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
     (e.hit ?? MOBS[e.kind].dmg) * Math.ceil(Math.max(0, e.distance - 3) / 4.3 / MOBS[e.kind].every), 0) : undefined
   const dryMountedBoat = mountedBoatDry(bot)
   const lava = !dryMountedBoat && inLava(bot)
-  const lavaEscapePending = !!(session._tacticalLavaClimbGoal && !session._tacticalLavaClimbGoal.failed && at < session._tacticalLavaClimbGoal.deadline)
+  const climbGoal = syncLavaClimbGoal(session)
+  const lavaEscapePending = !!(climbGoal && !climbGoal.failed && at < climbGoal.deadline)
   let refuge: MinecraftEntity | null = null
   // Geometry is cached by TacticalSystem; avoid this scan when there is no incident to solve.
   // A ghast in sight with a drop behind the body (no floor 4 down or lava within 4 blocks away from it): its blast throws the body
@@ -268,8 +270,11 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const hotFloor = !!support && (incident.type === 'hot_floor' ? support === 'magma_block' : support === 'campfire' || support === 'soul_campfire')
   const creeper = process.env.ND_CREEPER_DODGE === '0' ? null : (autopilot ??= (require('../../autopilot') as typeof import('../../autopilot'))).creeperNeed(bot)
   const blast = blastNear(bot, 2)
+  const instant = actionableInstantBlasts(bot, session._ndFoes)
+  const chainTnt = !blast?.alarm && tntCharges(bot).some(c => c.position.distanceTo(bot.entity.position) <= TNT_REACH + 1)
+  const blastKind: TacticalState['blast'] = blast?.alarm ? blast.kind : instant.length ? instant[0].kind : chainTnt ? 'tnt' : blast?.kind ?? null
   // The alarm is the blast reach; the 2 blocks past it only keep a fight from walking back into it (TNT: Fight>Dodge>Fight).
-  const blastAlarm = !!blast?.alarm
+  const blastAlarm = !!blast?.alarm || instant.length > 0 || chainTnt
   const babyKey = bot.registry?.entitiesByName?.piglin?.metadataKeys?.indexOf('is_baby') ?? -1
   // Only a brute fight needs witnesses: the raycasts run every 150 game ms (4 ms of wall time at 750 TPS).
   const piglinWitnesses = enemies.some(enemy => enemy.threatening && enemy.kind === 'piglin_brute') &&
@@ -380,7 +385,7 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   return { dimension, at, health: bot.health ?? 20, food: bot.food ?? 20, armor: inspected.ourArmor || 0, polarBear: polarBear.plan(session, bears),
     weapon, shield: bot.inventory.slots[45]?.name === 'shield' && clock.now() >= (bot._ndShieldDisabledUntil || 0), owRangedApproachHp,
     enemies, incomingProjectiles, owGuard: bot._ndProjectileEvasion?.guard ?? rangedGuard(bot, enemies), burning, hotFloor, lava, lavaAhead, fireResistance,
-    explosion: !!(creeper && (creeper.swelling || creeper.d <= 3.3)) || blastAlarm, blast: blast?.kind ?? null, dangerousFall: !!fall, emergencyController,
+    explosion: !!(creeper && (creeper.swelling || creeper.d <= 3.3)) || blastAlarm, blast: blastKind, dangerousFall: !!fall, emergencyController,
     waterEmergency: movement.owAirEmergency(bot), inWater: wetBody, drowning: (bot.oxygenLevel ?? 20) <= (session._airManaged ? 4 : 8) && movement.inWater(bot), waterEscape: !!session._tacticalWaterEscape, piglinWitnesses, cover: !!refuge?.pocket, portal, escapeRoute: !fall && ground.route && !shaftStand && !(clock.now() < (session._ndCoverUntil || 0)),
     blocks: refuge?.blocks ?? (pack ??= (require('../../pack') as typeof import('../../pack'))).buildCount(bot, /nether/.test(dimension) ? 'the_nether' : 'overworld'),
     water: !/nether/.test(dimension) && items.some(item => item.name === 'water_bucket'),
@@ -433,8 +438,16 @@ export function shieldCanContinue(state: TacticalState | null): state is Tactica
       enemy.threatening && !enemy.unseen && (flee.DOCTRINE[enemy.kind]?.range || 0) >= enemy.distance))
 }
 
-// lava_escape (rpc/pvp-escape, поток «окружение» 21.10): выход из лавы без pathfinder'а — тактика его не перебивает
-// (a39: «прервано (tactical)» и своё бегство вместо выхода — 4 смерти «tried to swim in lava» из 17).
-// Таран по приказу (RPC lance, сцена try-lance 23.10): тактика обрывала его после первого захода.
-const COMMANDED_ESCAPE = /^(evade|juke|take_cover|douse_lava|lava_escape|wind_jump|pearl_to|fly_to|lance|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
-export function commandedEscape(session: any): boolean { const c = session.current; return !!c && !c.ctl?.aborted && (COMMANDED_ESCAPE.test(c.name || '') || locks.protectedClimb(session) || locks.shieldHold(session)) }
+// Unified COMMANDED_ESCAPE from tactics/commanded-escape.ts (matching reflex-lock and intent-runner).
+export { COMMANDED_ESCAPE }
+export function commandedEscape(session: any, state?: TacticalState | null): boolean {
+  const c = session.current
+  if (!c || c.ctl?.aborted) return false
+  if (c.name === 'wing_orbit') {
+    // Airborne escort keeps control under ordinary pressure, but yields to grounded threats, blasts, or dousable fire.
+    const flying = session.bot?.entity?.elytraFlying === true
+    const urgent = !!state && (state.explosion || state.burning && state.water || state.lava || state.drowning || state.embedded)
+    return flying && !urgent
+  }
+  return COMMANDED_ESCAPE.test(c.name || '') || locks.protectedClimb(session) || locks.shieldHold(session)
+}

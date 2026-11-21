@@ -107,7 +107,8 @@ export function installDamageLog (ctx: DuelCtx) {
     }
     ctx.foeHp = h
   }
-  bot.on('physicsTick', onTickDmg)
+  if (ctx.addDuelTick) ctx.addDuelTick(onTickDmg)
+  else bot.on('physicsTick', onTickDmg)
   ctx.used = (what) => {
     st.tricks[what] = (st.tricks[what] || 0) + 1
     ctx.lastTrick = { what, at: gameClock.now() }

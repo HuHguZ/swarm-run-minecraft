@@ -107,8 +107,15 @@ function visibleAllies(bot: any, now: number): WindReport[] {
   const sky: typeof import('../elytra/track') = require('../elytra/track')
   return (Object.values(bot.entities || {}) as any[]).filter(e => e?.position && e !== bot.entity && e.username && isAlly(bot, e) &&
     bot.players?.[e.username]?.gamemode !== 3 && seesPlayer(bot, e))
-    .map(a => ({ id: a.username, position: { ...a.position }, velocity: { ...seenV(a) }, onGround: !!a.onGround,
-      gliding: sky.gliding(a), pitch: a.pitch || 0, yaw: a.yaw || 0, eyeHeight: pick.eyeHeight(bot, a), gameTick: now }))
+    .map(a => {
+      const velocity = { ...seenV(a) }, gliding = sky.gliding(a)
+      const h = Math.hypot(velocity.x || 0, velocity.z || 0), sprint = !!(Number(a.metadata?.[0]) & 8)
+      const moving = !gliding && (h > .04 || sprint)
+      const yaw = moving && h > .04 ? Math.atan2(-velocity.x, -velocity.z) : (a.yaw || 0)
+      const control = moving ? { forward: true, sprint: sprint || a.metadata?.[0] == null && h > .22 } : undefined
+      return { id: a.username, position: { ...a.position }, velocity, onGround: !!a.onGround,
+        gliding, pitch: a.pitch || 0, yaw, eyeHeight: pick.eyeHeight(bot, a), gameTick: now, ...(control && { control }) }
+    })
 }
 
 function alliesNear(foe: any, reports: WindReport[]) {
@@ -156,6 +163,7 @@ export function windKind(o: { worstOut: boolean; nominalOut: boolean; progress: 
 }
 
 function offensiveWindKind(plan: NonNullable<ReturnType<typeof planEnemyWind>>, airborne: boolean) {
+  if (plan.matchedProgress !== undefined && plan.matchedProgress < 0 && !plan.fallThreat && !plan.worst.exited && !plan.nominal.exited) return null
   // A tied first step can still lift the body over a wall in the same simulated trajectory.
   const future = plan.nominal.progress - plan.baseline.progress
   const immediate = plan.nominal.outwardEffect !== undefined && plan.baseline.outwardEffect !== undefined
@@ -241,9 +249,11 @@ export function installWindOut(session: any) {
   hands.install(bot)
   installWindTracking(bot)
   const stats = session._windOut ||= { tries: 0, fired: 0, log: [] as any[] }
-  let busy = false, closed = false, tick = 0, spawnGeneration = 0, planWallEma = 40, releaseWallEma = 40, staleTick: number | null = null
+  let busy = false, closed = false, tick = 0, spawnGeneration = 0, planWallEma = 40, releaseWallEma = 40, emaInit = false, staleTick: number | null = null
   const ownFlights = new WeakMap<object, () => boolean>()
+  const relayBusy = new Map<any, { until: number; count: number; targetPos: Vec3 }>()
   const intercepted = new WeakSet<object>()
+  const tickWatchers = new Set<() => void>()
   const pearlHandsFree = () => !bot._ndDescend && !bot._ndSmashNow && !(bot._ndCombo?.until > clock.now()) &&
     !windOrder(session, worldTick(bot)) && !/^(pearl_ambush|wind_receive|wind_boost)$/.test(session.current?.name || '')
   const intercept = (shot: NonNullable<ReturnType<typeof pearlWindIntercept>>, arena: WindArena, deadline: number) => {
@@ -258,9 +268,13 @@ export function installWindOut(session: any) {
     entity: any; owner: any; nativeClock: any; epoch: number; arena: WindArena; radio?: WindRadio; tick: number; until: number
     local?: { lag: number; movement: WindReport['velocity']; after?: any } } | undefined
   bot._ndWindOut = true
-  const newLife = () => { spawnGeneration++; staleTick = null; denied = undefined }
+  const newLife = () => { spawnGeneration++; staleTick = null; denied = undefined; relayBusy.clear() }
   bot.on('respawn', newLife); bot.on('death', newLife)
-  for (const event of ['end', 'kicked']) bot.once(event, () => { closed = true; newLife() })
+  for (const event of ['end', 'kicked']) bot.once(event, () => {
+    closed = true; newLife()
+    for (const fn of [...tickWatchers]) { try { fn() } catch {} }
+    tickWatchers.clear()
+  })
   const tryTrampoline = (arena: WindArena) => {
     if (!hands.offWind(bot) && hands.hotbarIndex(bot, 'wind_charge') < 0) return
     const report = ex.enemyWindReport(session)
@@ -278,9 +292,9 @@ export function installWindOut(session: any) {
       stats.fired++
       bot.on('entityHurt', onHurt)
       let left = 40
-      const wait = () => { if (--left > 0 && !hurt) return; bot.removeListener('physicsTick', wait); bot.removeListener('entityHurt', onHurt)
+      const wait = () => { if (!closed && --left > 0 && !hurt) return; tickWatchers.delete(wait); bot.removeListener('entityHurt', onHurt)
         entry.hit = hurt; busy = false; stats.log.push(entry); if (stats.log.length > 20) stats.log.shift() }
-      bot.on('physicsTick', wait)
+      tickWatchers.add(wait)
     })
   }
   // Меня подбросили (батут союзника) с булавой в руке, враг внизу в 6 бл. — спуск с ударом (mace.descend): своего взлёта у
@@ -333,12 +347,16 @@ export function installWindOut(session: any) {
     shieldSeen = clock.now()
     if (!reflex.allowed(session)) return true
     const off = bot.inventory.slots[45]
-    if (off?.name !== 'shield') {
-      const sh = bot.inventory.items().find((i: any) => i.name === 'shield')
-      // Тотем в левой руке при малом хп не снимать. Щита нет — спринт с прыжком прочь от точки удара, если до посадки 5+ т. и
+    const shieldDisabled = (bot._ndShieldDisabledUntil || 0) > clock.now()
+    if (shieldDisabled && shieldUp) { bot.deactivateItem(); bot.setControlState('back', false); shieldUp = false }
+    if (shieldDisabled || off?.name !== 'shield') {
+      const sh = shieldDisabled ? null : bot.inventory.items().find((i: any) => i.name === 'shield')
+      // Тотем в левой руке при малом хп не снимать. Щита нет или выбит топором — спринт с прыжком прочь от точки удара, если до посадки 5+ т. и
       // пробег чистый (без обрыва глубже 3 и стен, flee.runLength), — стенд: двое без щита стояли и умирали.
       if (!sh || off?.name === 'totem_of_undying' && bot.health <= 16) {
-        const me = bot.entity.position, dx = me.x - s.at.x, dz = me.z - s.at.z, n = Math.hypot(dx, dz)
+        const at = s.at || s.from
+        if (!at) return !!dodging
+        const me = bot.entity.position, dx = me.x - at.x, dz = me.z - at.z, n = Math.hypot(dx, dz)
         if (s.ticks < 5 || !bot.entity.onGround && !dodging) return !!dodging
         const fl: any = require('../flee')
         const dirs = [0, .8, -.8, 1.6, -1.6].map(a => { const b0 = n > .3 ? Math.atan2(dz, dx) : Math.random() * 6.28; return { x: Math.cos(b0 + a), z: Math.sin(b0 + a) } })
@@ -368,7 +386,7 @@ export function installWindOut(session: any) {
     return true
   }
   const { Vec3 }: typeof import('vec3') = require('vec3')
-  bot.on('physicsTick', () => {
+  const onPhysicsTick = () => {
     if (closed) return
     const cfg = session._rescue
     if (cfg?.arena && bot.entity && bot.health > 0 && smashShield()) return
@@ -498,12 +516,15 @@ export function installWindOut(session: any) {
           const index = candidates.indexOf(denied.foe)
           if (index >= 0 && index < candidates.length - 1 && frame !== null && frame >= denied.tick && frame <= denied.until &&
               denied.owner === owner && denied.entity === entity && denied.nativeClock === nativeClock && denied.epoch === epoch &&
-              denied.arena === cfg.arena && denied.radio === session._windRadio && denied.origin.equals(entity.position) &&
-              denied.target.equals(denied.foe.position) && denied.air === !denied.foe.onGround) {
-            const v = seenV(denied.foe)
-            if (denied.speed.x === v?.x && denied.speed.y === v?.y && denied.speed.z === v?.z) {
-              if (!denied.local) candidates.push(...candidates.splice(0, index + 1))
-              else if (denied.local.lag === lag && denied.local.movement.x === movement.x &&
+              denied.arena === cfg.arena && denied.radio === session._windRadio && denied.air === !denied.foe.onGround) {
+            if (!denied.local) {
+              if (denied.origin.distanceTo(entity.position) < .8 && denied.target.distanceTo(denied.foe.position) < .8) {
+                candidates.push(...candidates.splice(0, index + 1))
+              }
+            } else if (denied.origin.equals(entity.position) && denied.target.equals(denied.foe.position)) {
+              const v = seenV(denied.foe)
+              if (denied.speed.x === v?.x && denied.speed.y === v?.y && denied.speed.z === v?.z &&
+                  denied.local.lag === lag && denied.local.movement.x === movement.x &&
                   denied.local.movement.y === movement.y && denied.local.movement.z === movement.z) {
                 // Try one runner-up. If it has no useful shot, the original foe still gets this frame.
                 const previous = candidates.indexOf(denied.local.after)
@@ -518,15 +539,34 @@ export function installWindOut(session: any) {
         }
         // Сначала — отвод таранщика с линии на своих (жизнь своего дороже выноса), потом вынос за край.
         const radio: WindRadio | undefined = session._windRadio
-        const pick = deflectDecide(bot, report.report, arena, lag, deadline, collision) ??
-          chooseWindShot(candidates, bot, report.report, arena, lag, deadline, windOrder(session, frame)?.target, collision, !!radio,
-            foe => radio?.canBid?.() === false || ownFlights.get(foe)?.() === true)
+        const relayBackedOff = (foe: any) => {
+          const entry = relayBusy.get(foe)
+          if (!entry || frame === null) return false
+          if (frame > entry.until || frame < entry.until - 32 || foe.position.distanceTo(entry.targetPos) >= 3) {
+            if (frame > entry.until + 8 || frame < entry.until - 32 || foe.position.distanceTo(entry.targetPos) >= 3) relayBusy.delete(foe)
+            return false
+          }
+          return entry.count >= 2
+        }
+        // Reserve headroom inside `deadline` for the synchronous release re-check so 61-74ms multi-foe searches don't
+        // expire immediately with `stale_release` inside `send()`.
+        const planDeadline = deadline - Math.min(18, Math.max(0, (deadline - t0) * .24))
+        const pick = deflectDecide(bot, report.report, arena, lag, planDeadline, collision) ??
+          chooseWindShot(candidates, bot, report.report, arena, lag, planDeadline, windOrder(session, frame)?.target, collision, !!radio,
+            foe => radio?.canBid?.() === false || ownFlights.get(foe)?.() === true || relayBackedOff(foe))
         const planMs = Math.round(clock.wall.monotonic() - t0)
-        planWallEma = planWallEma * .8 + planMs * .2
-        if (!pick) { if (clock.wall.monotonic() > deadline) staleTick = frame; return }
+        const prevReleaseEma = releaseWallEma
+        if (!emaInit) { emaInit = true; planWallEma = planMs; releaseWallEma = planMs }
+        else planWallEma = planWallEma * .8 + planMs * .2
+        if (!pick) {
+          if (emaInit) releaseWallEma = releaseWallEma * .8 + planMs * .2
+          if (clock.wall.monotonic() > deadline) staleTick = frame
+          return
+        }
         stats.tries++
+        const netProgress = pick.plan.matchedProgress ?? (pick.plan.nominal.progress - pick.plan.baseline.progress)
         const entry: any = { at: clock.now(), target: pick.foe.username, kind: pick.kind, planMs, foeY: +pick.foe.position.y.toFixed(1),
-          edge: +edgeRoom(arena, pick.foe.position).toFixed(1), air: !pick.foe.onGround, progress: +pick.plan.nominal.progress.toFixed(1), allies: pick.allies.length, lag, airGain: pick.plan.nominal.air - pick.plan.baseline.air }
+          edge: +edgeRoom(arena, pick.foe.position).toFixed(1), air: !pick.foe.onGround, progress: +netProgress.toFixed(1), allies: pick.allies.length, lag, airGain: pick.plan.nominal.air - pick.plan.baseline.air }
         let logged = false
         const done = () => { busy = false; if (logged) return; logged = true; stats.log.push(entry); if (stats.log.length > 20) stats.log.shift() }
         // Замер прогноза: скорость цели сырая (пакеты entity_velocity) и по наблюдённым позициям, где ждём ноги к прилёту.
@@ -579,6 +619,8 @@ export function installWindOut(session: any) {
             }
             const outOfTime = (stage: string, at = clock.wall.monotonic()) => {
               if (at < grantEnd && at <= releaseDeadline) return false
+              const totalMs = Math.max(0, at - t0)
+              releaseWallEma = Math.max(prevReleaseEma, releaseWallEma) * .8 + totalMs * .2
               if (!finish && !pick.kind.startsWith('deflect') && current()) {
                 denied = { ...opening(), local: { lag, movement: { ...movement }, after: trial?.foe === pick.foe ? trial.alternative : undefined } }
               }
@@ -638,7 +680,7 @@ export function installWindOut(session: any) {
                 windTeamSafe({ ...bot, blockAt: p => world.getBlock(p) }, team, [shot], arena, tracks, false, releaseDeadline))
             if (outOfTime('проверка союзников')) return
             const safeTail = !safe || !allies.length || pick.kind.startsWith('deflect') ||
-              windAllyTailSafe(bot, foe, shot, allies, releaseCollision, releaseDeadline)
+              windAllyTailSafe(bot, foe, shot, allies, releaseCollision, releaseDeadline, tracks)
             const releaseObservation = observedAt === undefined ? undefined : nativeClock.observationNow()
             const releaseElapsed = observedAt === undefined ? clock.wall.monotonic() - releaseStart : releaseObservation - observedAt
             const landing = shot && safe && safeTail && foe.onGround && foe._ndPositionReceipts?.[1]
@@ -679,7 +721,7 @@ export function installWindOut(session: any) {
             const wait = () => {
               if (closed || generation !== spawnGeneration || bot.entity !== entity || bot.ndClock !== nativeClock) {
                 if (ownFlights.get(foe) === ownsFlight) ownFlights.delete(foe)
-                bot.removeListener('physicsTick', wait); closeBurst(); return
+                tickWatchers.delete(wait); closeBurst(); return
               }
               if (relay && (--flightLeft <= 0 || entry.burst && --afterBurst <= 0)) {
                 if (ownFlights.get(foe) === ownsFlight) ownFlights.delete(foe)
@@ -689,13 +731,13 @@ export function installWindOut(session: any) {
               if (q0) near = Math.min(near, q0.distanceTo(bot.entity.position.offset(0, .9, 0)))
               if (left === 3) { const q = bot.players?.[pick.foe.username]?.entity?.position; entry.dbg += `, на деле ${r2(q)}` }
               if (--left > -8) return // ещё 8 тиков после окна взрыва — куда его унесло
-              bot.removeListener('physicsTick', wait); closeBurst()
+              tickWatchers.delete(wait); closeBurst()
               const p = bot.players?.[pick.foe.username]?.entity?.position
               if (p) { entry.edgeAfter = +edgeRoom(arena, p).toFixed(1); entry.yAfter = +p.y.toFixed(1) }
               if (deflect) { entry.foiled = bot.health >= hp0 && near > CONTACT; entry.passed = Number.isFinite(near) ? +near.toFixed(1) : null }
               logged = true; stats.log.push(entry); if (stats.log.length > 20) stats.log.shift()
             }
-            bot.on('physicsTick', wait)
+            tickWatchers.add(wait)
           } finally { finish?.(flight); busy = false }
         }
         const granted = (finish: WindBidFinish, requested: number) => {
@@ -715,7 +757,7 @@ export function installWindOut(session: any) {
             if (!waiting) return false
             waiting = false
             clock.wall.clearTimeout(timer)
-            bot.removeListener('physicsTick', advance)
+            tickWatchers.delete(advance)
             for (const event of life) bot.removeListener(event, abort)
             // The session calls abort hooks by iterating this array in place.
             if (owner?.ctl?.aborted) queueMicrotask(unhook); else unhook()
@@ -735,7 +777,7 @@ export function installWindOut(session: any) {
           }
           for (const event of life) bot.on(event, abort)
           hooks?.push(abort)
-          bot.on('physicsTick', advance)
+          tickWatchers.add(advance)
           timer = clock.wall.setTimeout(abort, Math.max(0, requested + WIND_BID_RELEASE_MS - clock.wall.monotonic()))
           timer.unref?.()
           advance()
@@ -756,12 +798,19 @@ export function installWindOut(session: any) {
           void radio({ target: pick.foe.username, entity: pick.foe.id, tick: bidTick, ticks: pick.shot.ticks,
             ...(prefix !== undefined && { prefix }) }, abortBid?.signal).then(finish => {
             if (finish) {
+              relayBusy.delete(pick.foe)
               entry.dbg += `, заказ роя ${Math.round(clock.wall.monotonic() - requested)} мс`
               granted(finish, requested)
             }
             else if (abortBid?.signal.aborted) refuseState()
             else {
-              if (current()) denied = bidOpening
+              if (current()) {
+                denied = bidOpening
+                const prev = relayBusy.get(pick.foe)
+                const count = prev && bidTick <= prev.until + 8 && bidTick >= prev.until - 32 ? prev.count + 1 : 1
+                const backoff = count >= 2 ? Math.min(16, 4 << Math.min(2, count - 2)) : 0
+                relayBusy.set(pick.foe, { until: bidTick + backoff, count, targetPos: pick.foe.position.clone() })
+              }
               refuse('wind_relay_busy')
             }
           }).catch(() => done()).finally(() => {
@@ -771,5 +820,12 @@ export function installWindOut(session: any) {
         } else send()
       } finally { if (!waitingForBid) busy = false }
     })
+  }
+  bot.on('physicsTick', () => {
+    const snapshot = tickWatchers.size ? [...tickWatchers] : null
+    onPhysicsTick()
+    if (snapshot) for (const fn of snapshot) {
+      if (tickWatchers.has(fn)) { try { fn() } catch {} }
+    }
   })
 }

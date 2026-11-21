@@ -135,11 +135,46 @@ function createLastSeen (bot) {
   } }
 }
 
+function cloneMetaValue (v: any): any {
+  if (v == null || typeof v !== 'object') return v
+  if (Array.isArray(v)) {
+    const out = new Array(v.length)
+    for (let i = 0; i < v.length; i++) out[i] = cloneMetaValue(v[i])
+    return out
+  }
+  if (ArrayBuffer.isView(v)) return structuredClone(v)
+  const out: Record<string, any> = {}
+  for (const k of Object.keys(v)) out[k] = cloneMetaValue(v[k])
+  return out
+}
+
+function sameXYZ (a: { x: number; y: number; z: number } | null | undefined, b: { x: number; y: number; z: number } | null | undefined): boolean {
+  if (!a || !b) return a === b
+  return a.x === b.x && a.y === b.y && a.z === b.z
+}
+
+function nearXYZ (a: { x: number; y: number; z: number } | null | undefined, b: { x: number; y: number; z: number } | null | undefined, maxSq: number): boolean {
+  if (!a || !b) return false
+  const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z
+  return dx * dx + dy * dy + dz * dz <= maxSq
+}
+
+function refreshVisibleEquipment (raw, prior) {
+  const equipment = prior.equipment.slice()
+  const known = prior.known.slice()
+  const visible = prior.visible
+  for (let i = 0; i < 6; i++) if (visible[i]) { equipment[i] = visiblePlayerItem(raw.equipment?.[i]); known[i] = true }
+  return { equipment, known, visible, unknownArmorSlots: known.slice(2).filter(k => !k).length }
+}
+
 function buildLastSeen (bot) {
   const records = new Map<number, any>()
   const sources = new WeakMap<object, any>()
   const retired = new WeakMap<object, any>()
   const source = e => sources.get(e) || e
+  const metaKeys = bot.registry?.entitiesByName?.player?.metadataKeys || []
+  const healthIdx = metaKeys.indexOf('health') < 0 ? 9 : metaKeys.indexOf('health')
+  const absorptionIdx = metaKeys.indexOf('player_absorption') < 0 ? 17 : metaKeys.indexOf('player_absorption')
   const gone = raw => {
     const rec = records.get(raw?.id)
     if (!rec || rec.raw !== raw) return
@@ -149,26 +184,98 @@ function buildLastSeen (bot) {
     rec.view.isValid = false
     retired.set(raw, rec.view)
   }
+  const onEquipPacket = pkt => {
+    const rec = records.get(pkt?.entityId)
+    if (rec) rec.equipRev = (rec.equipRev || 0) + 1
+  }
+  const onEquipEntity = e => {
+    const rec = records.get(e?.id)
+    if (rec && rec.raw === e) rec.equipRev = (rec.equipRev || 0) + 1
+  }
+  const onMetaEntity = e => {
+    const rec = records.get(e?.id)
+    if (rec && rec.raw === e) rec.metaRev = (rec.metaRev || 0) + 1
+  }
   const refresh = (rec, occluded = false) => {
     const { raw, view } = rec
+    const tick = bot.ndClock?.ticks
+    const hasTick = Number.isSafeInteger(tick)
+    const fast = bot._ndFastBlocks
+    const terrainVer = fast?.live ? fast.ver : null
+    const myPos = bot.entity?.position
+    const rawPos = raw.position
+    const receipt = raw._ndPositionReceipts?.[1]
+    if (hasTick && terrainVer !== null &&
+        rec.memoTick === tick &&
+        rec.memoTerrain === terrainVer &&
+        rec.memoOccluded === occluded &&
+        rec.memoInspect === !!rec.inspectGear &&
+        rec.memoEquipRev === (rec.equipRev || 0) &&
+        rec.memoMetaRev === (rec.metaRev || 0) &&
+        rec.observer === bot.entity &&
+        rec.memoRawValid === raw.isValid &&
+        rec.memoReceipt === receipt &&
+        rec.memoFlags === raw.metadata?.[0] &&
+        rec.memoYaw === raw.yaw &&
+        rec.memoPitch === raw.pitch &&
+        rec.memoHeadYaw === raw.headYaw &&
+        rec.memoOnGround === raw.onGround &&
+        rec.memoGlide === raw.elytraFlying &&
+        sameXYZ(rec.memoMyPos, myPos) &&
+        sameXYZ(rec.memoRawPos, rawPos)) {
+      return
+    }
     const wasVisible = view._ndVisible && rec.observer === bot.entity
     rec.observer = bot.entity
     view._ndVisible = !occluded && seesPlayer(bot, raw)
     view.isValid = raw.isValid
     if (view.isValid === false) { gone(raw); return }
+    if (hasTick && terrainVer !== null) {
+      rec.memoTick = tick
+      rec.memoTerrain = terrainVer
+      rec.memoOccluded = occluded
+      rec.memoInspect = !!rec.inspectGear
+      rec.memoEquipRev = rec.equipRev || 0
+      rec.memoMetaRev = rec.metaRev || 0
+      rec.memoRawValid = raw.isValid
+      rec.memoReceipt = receipt
+      rec.memoFlags = raw.metadata?.[0]
+      rec.memoYaw = raw.yaw
+      rec.memoPitch = raw.pitch
+      rec.memoHeadYaw = raw.headYaw
+      rec.memoOnGround = raw.onGround
+      rec.memoGlide = raw.elytraFlying
+      rec.memoMyPos = myPos ? { x: myPos.x, y: myPos.y, z: myPos.z } : null
+      rec.memoRawPos = rawPos ? { x: rawPos.x, y: rawPos.y, z: rawPos.z } : null
+    }
     if (!view._ndVisible) return
     const now = raw._ndObservationNow?.() ?? gameClock.observationNow()
-    const receipt = raw._ndPositionReceipts?.[1]
     const moved = !view.position || !view.position.equals(raw.position)
     for (const key of ['id', 'type', 'name', 'username', 'uuid', 'height', 'width', 'onGround', 'yaw', 'pitch', 'headYaw', 'elytraFlying', '_ndGlideBoosted', '_ndGlideRevision']) view[key] = raw[key]
     if (view.position) view.position.update(raw.position)
     else view.position = raw.position.clone()
-    const keys = bot.registry?.entitiesByName?.player?.metadataKeys || []
-    const health = keys.indexOf('health') < 0 ? 9 : keys.indexOf('health')
-    const absorption = keys.indexOf('player_absorption') < 0 ? 17 : keys.indexOf('player_absorption')
-    view.metadata = Array.from({ length: raw.metadata?.length || 0 }, (_, i) => i === health || i === absorption ? undefined : structuredClone(raw.metadata[i]))
+    const rawMeta = raw.metadata
+    const metaLen = rawMeta?.length || 0
+    const meta = new Array(metaLen)
+    for (let i = 0; i < metaLen; i++) meta[i] = (i === healthIdx || i === absorptionIdx) ? undefined : cloneMetaValue(rawMeta[i])
+    view.metadata = meta
     if (rec.inspectGear) {
-      rec.gear = observePlayerGear(bot, raw, rec.gear)
+      const canReuseGearRays = wasVisible && !!rec.gear && hasTick && terrainVer !== null &&
+        terrainVer === rec.gearTerrainVer &&
+        (tick - rec.gearTick) < 4 &&
+        rec.gearHeight === raw.height &&
+        nearXYZ(rec.gearMyPos, myPos, 0.15 * 0.15) &&
+        nearXYZ(rec.gearRawPos, rawPos, 0.15 * 0.15)
+      if (canReuseGearRays) {
+        rec.gear = refreshVisibleEquipment(raw, rec.gear)
+      } else {
+        rec.gear = observePlayerGear(bot, raw, rec.gear)
+        rec.gearTick = hasTick ? tick : -Infinity
+        rec.gearTerrainVer = terrainVer
+        rec.gearHeight = raw.height
+        rec.gearMyPos = myPos ? { x: myPos.x, y: myPos.y, z: myPos.z } : null
+        rec.gearRawPos = rawPos ? { x: rawPos.x, y: rawPos.y, z: rawPos.z } : null
+      }
       view.equipment = rec.gear.equipment
       view._ndMaceSeen ||= rec.gear.equipment.slice(0, 2).some(it => it?.name === 'mace')
       view._ndGearVisible = rec.gear.visible
@@ -226,6 +333,9 @@ function buildLastSeen (bot) {
   bot.on('physicsTick', tick)
   bot.on('entityGone', gone)
   bot.on('entitySwingArm', swing)
+  bot.on('entityEquip', onEquipEntity)
+  bot.on('entityUpdate', onMetaEntity)
+  bot._client?.on?.('entity_equipment', onEquipPacket)
   return {
     observe, observeMotion: e => track(e, false, false), source,
     markOccluded: e => { track(e, true) },
@@ -234,6 +344,9 @@ function buildLastSeen (bot) {
       bot.removeListener('physicsTick', tick)
       bot.removeListener('entityGone', gone)
       bot.removeListener('entitySwingArm', swing)
+      bot.removeListener('entityEquip', onEquipEntity)
+      bot.removeListener('entityUpdate', onMetaEntity)
+      bot._client?.removeListener?.('entity_equipment', onEquipPacket)
       for (const rec of records.values()) rec.raw.removeListener?.('ndPositionObserved', rec.update)
       records.clear()
     }

@@ -398,13 +398,15 @@ async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null
         if (!sol) { resolve(shot); return }
         if (onAim && onAim(shot) === false) { resolve({ ...shot, cancelled: true }); return }
         if (it.name === 'ender_pearl' && !canSurvivePearl(bot)) { resolve({ ...shot, cancelled: true }); return }
+        const currentHeld = hand === 'off-hand' ? bot.inventory?.slots?.[45] : bot.heldItem
+        if (!currentHeld || currentHeld.name !== it.name) { resolve({ ...shot, cancelled: true }); return }
         bot.look(sol.yaw, sol.pitch, true).catch(() => {})
         // 750 TPS (s5, 06.10, свидетель DragonLab): bot.look под замком рефлексов асинхронный — поворот доезжал после броска,
         // а use_item несёт поворот из bot.entity: жемчуг улетал со старым взглядом (yaw 0/pitch 0 после tp — в пустоту;
         // pitch +34 — в блок у ног, перенос на 1 бл.). Взгляд броска — в bot.entity синхронно.
         if (bot.entity) { bot.entity.yaw = sol.yaw; bot.entity.pitch = sol.pitch }
         bot.activateItem(hand === 'off-hand')
-        if (hand === 'off-hand') bot.usingHeldItem = false
+        bot.usingHeldItem = false
         resolve(shot)
       })
     })

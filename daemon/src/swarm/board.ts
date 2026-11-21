@@ -40,6 +40,8 @@ export class SwarmBoard {
   // Штурм держится до исхода в мире; часы — только для журнала (15.10).
   assault: { since: number; target: string; voters: string[]; startAlive: number } | null = null
   assaultEnded: { at: number; why: string; lost: number; target: string; seconds: number } | null = null
+  // Версия наблюдений врагов (растёт при observe/forget/resetRound/истечении): кэш состава команды не перебирает врагов зря.
+  sightingVersion = 0
   private token = 0
   constructor(readonly team: string, readonly now: () => number = Date.now, readonly enemyTtlMs = 3000) {
     if (!team || !Number.isFinite(enemyTtlMs) || enemyTtlMs <= 0) throw new Error('Invalid swarm team/TTL')
@@ -75,10 +77,13 @@ export class SwarmBoard {
       if (task.claim && task.claim.expiresAt <= now) { delete task.claim; task.status = 'pending' }
     }
     for (const [id, sources] of this.sightings) {
-      for (const [source, seen] of sources) if (seen.seenAt + this.enemyTtlMs <= now) sources.delete(source)
+      for (const [source, seen] of sources) if (seen.seenAt + this.enemyTtlMs <= now) { sources.delete(source); this.sightingVersion++ }
       if (!sources.size) this.sightings.delete(id)
     }
-    for (const slots of this.armorSightings.values()) for (const [slot, fact] of slots) if (fact.seenAt + this.enemyTtlMs <= now) slots.delete(slot)
+    for (const [id, slots] of this.armorSightings) {
+      for (const [slot, fact] of slots) if (fact.seenAt + this.enemyTtlMs <= now) slots.delete(slot)
+      if (!slots.size) this.armorSightings.delete(id)
+    }
     for (const [id, fact] of this.marks) if (fact.expiresAt <= now) this.marks.delete(id)
   }
   upsert(input: SwarmTask): SwarmTask {
@@ -97,10 +102,15 @@ export class SwarmBoard {
     return copy(task)
   }
   tasks(): SwarmTask[] { this.prune(); return [...this.work.values()].map(copy) }
+  tasksView(): readonly SwarmTask[] { this.prune(); return [...this.work.values()] }
   task(id: string): SwarmTask | undefined {
     this.prune()
     const task = this.work.get(id)
     return task && copy(task)
+  }
+  taskView(id: string): Readonly<SwarmTask> | undefined {
+    this.prune()
+    return this.work.get(id)
   }
   dislodging(target: string, method: string): boolean {
     this.prune()
@@ -141,7 +151,12 @@ export class SwarmBoard {
     const participants = new Set([owner, ...(task.participants || [])])
     if ([...participants].some(id => !this.alive(id))) return null
     for (const other of this.work.values()) if (other.id !== sameWindow && other.claim && ([other.claim.owner, ...(other.participants || [])].some(id => participants.has(id)) || (['build', 'mine'].includes(task.kind) && ['build', 'mine'].includes(other.kind) && task.position && other.position && cellKey(task.position) === cellKey(other.position)))) return null
-    if (task.kind === 'build' && task.data?.supportPosition && !this.facts().some(f => f.kind === 'support' && cellKey(f.position) === cellKey(task.data!.supportPosition))) return null
+    if (task.kind === 'build' && task.data?.supportPosition) {
+      const need = cellKey(task.data.supportPosition)
+      let supported = false
+      for (const f of this.marks.values()) if (f.kind === 'support' && cellKey(f.position) === need) { supported = true; break }
+      if (!supported) return null
+    }
     task.claim = { owner, token: ++this.token, claimedAt: this.now(), expiresAt: Math.min(this.now() + leaseMs, task.expiresAt ?? Infinity) }
     task.status = 'claimed'
     return copy(task) as ClaimedTask
@@ -166,6 +181,7 @@ export class SwarmBoard {
     const now = this.now()
     this.eliminatedAt.set(id, now)
     this.sightings.delete(id); this.armorSightings.delete(id); this.hpHealing.delete(id); this.searchClues.delete(id)
+    this.sightingVersion++
     const state = pvpMemory.get(this)
     state?.equipment.delete(id); state?.arsenal.delete(id); state?.failed.delete(id); state?.dislodgeEvidence?.delete(id)
     if (state) for (const held of state.retreats.values()) if (held.turned === id) delete held.turned
@@ -228,9 +244,10 @@ export class SwarmBoard {
         const enchanted = !!name && (validGlint ? glint[i] : seen.equipment.enchanted === true || mask === undefined && !!seen.equipment.unknownArmorSlots && prior?.name === name && prior.enchanted)
         slots.set(slot, { name, enchanted, seenAt })
       }
-      this.armorSightings.set(input.id, slots)
+      if (slots.size) this.armorSightings.set(input.id, slots)
     }
     sources.set(source, seen); this.sightings.set(input.id, sources)
+    this.sightingVersion++
     const life = this.observerLives.get(source)
     if (life && !indirect && seenAt >= life.since) life.seen.add(seen)
     if (seenAt >= (this.searchClues.get(seen.id)?.seenAt ?? -Infinity)) {
@@ -268,7 +285,7 @@ export class SwarmBoard {
         : undefined
       const fresh = copy(visual ?? latest)
       const armor = this.armorSightings.get(fresh.id)
-      if (armor) fresh.equipment = { ...fresh.equipment, armor: armorSlots.flatMap(slot => armor.get(slot)?.name || []), armorEnchanted: armorSlots.map(slot => !!armor.get(slot)?.enchanted), unknownArmorSlots: 4 - armor.size }
+      if (armor?.size) fresh.equipment = { ...fresh.equipment, armor: armorSlots.flatMap(slot => armor.get(slot)?.name || []), armorEnchanted: armorSlots.map(slot => !!armor.get(slot)?.enchanted), unknownArmorSlots: 4 - armor.size }
       const heal = this.hpHealing.get(fresh.id)
       if (heal) {
         // Зритель мог пропустить лечение и снова прислать старые 3 с новым seenAt. Его модель уже не верх.
@@ -313,6 +330,8 @@ export class SwarmBoard {
     return true
   }
   facts(): SwarmFact[] { this.prune(); return [...this.marks.values()].map(copy) }
+  factsView(): readonly SwarmFact[] { this.prune(); return [...this.marks.values()] }
+  factView(id: string): Readonly<SwarmFact> | undefined { this.prune(); return this.marks.get(id) }
   noteTacticOutcome(source: string, doctrine: Doctrine, success: boolean): boolean {
     if (!this.known.has(source) || !doctrines.includes(doctrine) || typeof success !== 'boolean') return false
     const stats = this.learned[doctrine] ??= { successes: 0, failures: 0 }
@@ -341,7 +360,7 @@ export class SwarmBoard {
     this.fielded.clear()
     this.observerLives.clear()
     this.eliminatedAt.clear()
-    this.work.clear(); this.sightings.clear(); this.searchClues.clear(); this.armorSightings.clear(); this.hpHealing.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null; this.assault = null; this.assaultEnded = null; fledAt.delete(this); pvpMemory.delete(this)
+    this.work.clear(); this.sightings.clear(); this.searchClues.clear(); this.armorSightings.clear(); this.hpHealing.clear(); this.marks.clear(); this.members.clear(); this.known.clear(); this.current = null; this.teamFight = null; this.assault = null; this.assaultEnded = null; this.sightingVersion++; fledAt.delete(this); pvpMemory.delete(this)
   }
 }
 
@@ -373,6 +392,8 @@ export type PvpMemory = {
   arsenal: Map<string, Set<string>>
   // Эпизод схватки (doctrine.ts): с первого контакта до пропажи врагов из виду — обманки выключены.
   brawlUntil?: number
+  // Память недавней угрозы взрыва (doctrine.ts): удерживает фонтан при секундном переключении слота кристалла.
+  blastUntil?: number
   // Ранг линии на смене (doctrine.lineDuty).
   lineDuty?: number
   lineOrder?: string[]

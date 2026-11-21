@@ -70,7 +70,14 @@ export function swarmMoves (sw: SwarmDriverCtx) {
     const up = at.climbFrom !== undefined && at.y - (pos[b.name]?.p?.y ?? at.y) > 1
     // A walkable upper gallery still needs the travel time priced by the selector.
     const ascentSeconds = at.y - (pos[b.name]?.p?.y ?? at.y) > 1 && Number.isFinite(cost.walk) ? Math.ceil(cost.walk) : 0
-    const params = { ...bounded(at), surface: at.surface ?? false, range, timeoutSeconds: Math.max(seconds, up ? 20 : down ? 10 : 0, ascentSeconds), arena: pathArena, ...(down || up ? { climb: true } : {}), ...(up ? { exactY: true, _climb: true } : {}), _hunt: true }
+    const startPos = pos[b.name]?.p
+    const cellOf = p => p ? cellKey({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }) : ''
+    const startCell = cellOf(startPos), destCell = cellOf(bounded(at))
+    const noPathKey = `noPath:${b.name}`, noPathSig = `${startCell}:${destCell}`
+    if (startCell && sw.blocked?.(b, noPathKey, noPathSig)) return { status: 'failed', code: 'NO_PATH', detail: { stopped: 'noPath backoff' } }
+    const trappedHere = !!startCell && b.swarmNoPath?.round === round && b.swarmNoPath.cell === startCell && b.swarmNoPath.count >= 2
+    const allowClimb = down || up || (trappedHere && !at.walkOnly && at.surface !== 'strict')
+    const params = { ...bounded(at), surface: at.surface ?? false, range, timeoutSeconds: Math.max(seconds, up ? 20 : down ? 10 : 0, ascentSeconds), arena: pathArena, ...(allowClimb ? { climb: true } : {}), ...(trappedHere && allowClimb ? { unstuck: true } : {}), ...(up ? { exactY: true, _climb: true } : {}), _hunt: true }
     const started = now(), previous = b.last ?? null, pending = b.c.call('goto', params), action = b.last
     const reply = await pending.catch(e => {
       if (b.swarmTask?.kind === 'loot' && e?.notStarted === true && e.code === 'ARENA_BOUNDARY')
@@ -78,6 +85,23 @@ export function swarmMoves (sw: SwarmDriverCtx) {
       throw e
     }), here = reply?.state?.pos || pos[b.name]?.p
     const ownsWalk = reply?.notStarted ? !previous?.pending && (b.last === action || (b.last ?? null) === previous) : b.last === action
+    const dReply = detail(reply), endCell = cellOf(here)
+    if (dReply.arrived || (startCell && endCell && endCell !== startCell)) {
+      delete b.swarmNoPath
+    } else if (startCell && endCell === startCell && !reply?.notStarted && reply?.status !== 'interrupted' &&
+        !/^(DAMAGE|ARENA_BOUNDARY|AVOID_NO_PATH)$/.test(reply?.code || dReply.code || '') &&
+        !/^(Tactical|Emergency)$/.test(reply?.state?.tactics?.owner || '')) {
+      const noPathReason = /no\s*path|пути нет/i.test(String(dReply.stopped || dReply.why || reply?.error || '') + ' ' + (Array.isArray(dReply.tried) ? dReply.tried.join(' ') : ''))
+      if (noPathReason || reply?.status === 'failed' || (dReply.stopped && now() - started < 500)) {
+        if (trappedHere && params.unstuck) {
+          sw.failed?.(b, noPathKey, noPathSig, now() + 2500)
+          delete b.swarmNoPath
+        } else {
+          const prev = b.swarmNoPath?.round === round && b.swarmNoPath.cell === startCell ? b.swarmNoPath.count : 0
+          b.swarmNoPath = { round, cell: startCell, count: prev + 1 }
+        }
+      }
+    }
     if (reply?.status === 'failed' && /^(ARENA_BOUNDARY|AVOID_NO_PATH)$/.test(reply.code) &&
         currentTurn(sw, b, round) && ownsWalk && b.swarmTask?.kind === 'loot' && !b.swarmTask.data?.commanded &&
         !b.webRescue && !pos[b.name]?.rescuing && here && pathArena?.avoid?.length) {

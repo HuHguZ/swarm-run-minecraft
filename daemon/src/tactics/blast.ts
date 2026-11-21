@@ -91,9 +91,9 @@ export function blastNear(bot: Bot, margin = 0): Blast | null {
   return best
 }
 
-export function actionableInstantBlasts (bot: Bot, enemies?: string[]) {
-  const scope = bot._ndFoes ?? enemies
-  return instantBlasts(bot, Array.isArray(scope) ? scope : [])
+export function actionableInstantBlasts (bot: Bot, enemies?: string[] | null) {
+  const scope = enemies ?? bot._ndFoes ?? null
+  return instantBlasts(bot, Array.isArray(scope) ? scope : null)
 }
 
 // The source to face: a primed TNT or charged creeper in alarm, else a creeper hissing within its 7-block swell reach
@@ -131,6 +131,7 @@ export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort
   const bot = session.bot
   const start = gameClock.now()
   let until = Infinity
+  const seenSources = new Set<string>()
   const shield = (require('../combat') as typeof import('../combat')).makeShield(session, ctl, { shield: 'always' })
   try { bot.pathfinder?.setGoal(null) } catch {}
   try { bot.clearControlStates() } catch {}
@@ -141,7 +142,19 @@ export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort
     while (!ctl.aborted && gameClock.now() < until && (bot.health ?? 0) > 0) {
       const source = shieldableBlast(bot, enemies ?? session._ndFoes)
       if (!source) break
-      if (until === Infinity) until = start + blastBound(bot, source.entity)
+      const now = gameClock.now()
+      if (source.entity?.name === 'tnt') {
+        const bound = now + blastBound(bot, source.entity)
+        until = until === Infinity ? bound : Math.max(until, bound)
+      } else {
+        const p = source.entity?.position
+        const key = source.entity?.id != null ? `${source.kind}:${source.entity.id}` : p ? `${source.kind}:${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}` : source.kind
+        if (!seenSources.has(key)) {
+          seenSources.add(key)
+          const bound = now + blastBound(bot, source.entity)
+          until = until === Infinity ? bound : Math.max(until, bound)
+        }
+      }
       kind = source.kind
       await bot.lookAt(source.entity.position.offset(0, (source.entity.height || 1) * .5, 0), true)
       if (!shield.blocking()) await shield.raise(true)
@@ -160,6 +173,7 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
   const bot = session.bot
   const start = gameClock.now()
   let until = Infinity
+  const seenSources = new Set<string>()
   const set = (key: string, value: boolean) => { try { bot.setControlState(key, value) } catch {} }
   const stop = () => { for (const key of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(key, false) }
   ctl.onAbort.push(stop)
@@ -178,7 +192,28 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
       const instant = actionableInstantBlasts(bot, enemies ?? session._ndFoes)
       // A calm charged creeper nearby is no reason to keep running once nothing alarms.
       if ((!blast || blast.kind === 'charged_creeper' && !blast.alarm && last?.kind !== 'charged_creeper') && !inReach.length && !instant.length) break
-      if (until === Infinity) until = start + (inReach.length ? Math.max(...inReach.map(c => c.fuse)) * 50 + 1000 : blastBound(bot, blast && bot.entities[blast.id]))
+      const now = gameClock.now()
+      if (inReach.length) {
+        const bound = now + Math.max(...inReach.map(c => c.fuse)) * 50 + 1000
+        until = until === Infinity ? bound : Math.max(until, bound)
+      }
+      for (const contact of instant) {
+        const key = contact.id != null ? `${contact.kind}:${contact.id}` : `${contact.kind}:${Math.round(contact.at.x)},${Math.round(contact.at.y)},${Math.round(contact.at.z)}`
+        if (!seenSources.has(key)) {
+          seenSources.add(key)
+          const bound = now + blastBound(bot, undefined)
+          until = until === Infinity ? bound : Math.max(until, bound)
+        }
+      }
+      if (blast && blast.kind !== 'tnt') {
+        const key = `${blast.kind}:${blast.id}`
+        if (!seenSources.has(key)) {
+          seenSources.add(key)
+          const bound = now + blastBound(bot, bot.entities[blast.id])
+          until = until === Infinity ? bound : Math.max(until, bound)
+        }
+      }
+      if (until === Infinity) until = now + blastBound(bot, blast && bot.entities[blast.id])
       if (instant.length) last = instant[0]
       else if (blast) last = blast
       const source = blast && blast.kind !== 'tnt' ? [{ e: bot.entities[blast.id], doc: { radius: blast.reach, weight: 10, blast: blast.reach }, d: blast.distance, swelling: true }] : []

@@ -104,13 +104,25 @@ export function swarmLoot (sw: SwarmDriverCtx) {
     const danger = h => foes.reduce((s, e) => s + Math.max(0, 40 - distance(h, e.position)) / 4, 0)
     const chestMemory: Map<string, KnownChest> | undefined = knownChests.get(teamOf(b))
     const frame = pos[b.name], pack = packOf(b)
-    const equipped = new Set([...Object.keys(frame.inv || {}).filter(n => frame.inv[n] > 0), ...Object.values<string>(frame.armor || {})].filter(Boolean).map(kitSlot))
+    const invKeys = Object.keys(frame.inv || {}).filter(n => frame.inv[n] > 0)
+    const slotBest = (slot: string) => {
+      if (slot === 'melee') return Math.max(0, ...invKeys.filter(n => kitSlot(n) === 'melee').map(n => weaponScore(n)))
+      const armorKey = { helmet: 'head', chestplate: 'torso', leggings: 'legs', boots: 'feet' }[slot]
+      const worn = armorKey && frame.armor?.[armorKey]
+      return Math.max(0, ...[...invKeys.filter(n => kitSlot(n) === slot), ...(worn ? [worn] : [])].map(n => powerOf([{ name: n }]).armor))
+    }
+    const itemValuable = (n: string) => {
+      const slot = kitSlot(n)
+      if (slot === 'melee') return weaponScore(n) > slotBest('melee')
+      if (slot) return powerOf([{ name: n }]).armor > slotBest(slot)
+      return /^(mace|trident|elytra|totem_of_undying|enchanted_golden_apple)$/.test(n) && !frame.inv?.[n] && frame.armor?.torso !== n && frame.offHand?.item !== n && frame.offHand !== n
+    }
     const options = [...hideouts, ...chestTops].flatMap((h, k) => {
       const id = chestId(h), report = chestMemory?.get(id)?.report, mark = marks.get(k)
       if (report?.items.length === 0 || fullFor.get(`${b.name}:${id}`) === pack) return []
-      // После вскрытия союзник знает, какой слот ещё можно заполнить. В путь одновременно выходит один получатель.
+      // После вскрытия союзник знает, какой слот можно улучшить или какие редкие вещи остались (не только пустой слот).
       const item = report && report.by !== b.name && now() - report.time <= 45000 &&
-        report.items.find(n => { const slot = kitSlot(n); return slot && !equipped.has(slot) })
+        report.items.find(itemValuable)
       if (mark && now() - mark.at <= 45000 && !(mark.by === b.name && !mark.done) &&
           !(item && mark.done && (mark.by === report.by || mark.at < report.time))) return []
       // A ladder only changes this attempt if the bot can actually use it to reach this roof.

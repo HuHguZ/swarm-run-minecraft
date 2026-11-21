@@ -127,12 +127,25 @@ function wrapPlaceBlock (bot) {
     const from = bot.entity.position.clone()
     await bot.lookAt(aim, true)
     const fresh = pick.faceAim(bot, ref.position, face)
-    if (inMe(dest, face) || bot.entity.position.distanceTo(from) > 1e-7 || !fresh || fresh.distanceTo(aim) > 1e-7) {
+    if (inMe(dest, face) || !fresh) {
       throw new Error('позиция или видимая грань постановки изменилась при прицеливании')
+    }
+    if (bot.entity.position.distanceTo(from) > 1e-7 || fresh.distanceTo(aim) > 1e-7) {
+      const eye = pick.eyeOf(bot)
+      const d = fresh.minus(eye)
+      const yaw = Math.atan2(-d.x, -d.z)
+      const pitch = Math.atan2(d.y, Math.hypot(d.x, d.z))
+      if (bot.entity) { bot.entity.yaw = yaw; bot.entity.pitch = pitch }
+      bot._client?.write?.('look', {
+        yaw: 180 - yaw * 180 / Math.PI,
+        pitch: -pitch * 180 / Math.PI,
+        onGround: !!bot.entity?.onGround,
+        flags: { onGround: !!bot.entity?.onGround, hasHorizontalCollision: !!bot.entity?.isCollidedHorizontally }
+      })
     }
     const old = bot.blockAt(dest)
     // Native genericPlace otherwise awaits aim again and can send after the jump has fallen back into this cell.
-    await bot._genericPlace(ref, face, { swingArm: 'right', forceLook: 'ignore', delta: aim.minus(ref.position) })
+    await bot._genericPlace(ref, face, { swingArm: 'right', forceLook: 'ignore', delta: fresh.minus(ref.position) })
     for (let t = 0; t < 10; t++) {
       const now = bot.blockAt(dest)
       if (now && old && now.type !== old.type) { bot.emit('blockPlaced', old, now); return }

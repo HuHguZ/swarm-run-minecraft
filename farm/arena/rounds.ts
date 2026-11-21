@@ -73,10 +73,23 @@ export function installRounds (ctx: ArenaContext) {
         if (byH && teams) ctx.relSay(teamOf(m[1]), byH, -5, `убил ${m[1]}`)
         deadNow.add(m[1])
         killGaps.push(Date.now() - ctx.lastKillAt); ctx.lastKillAt = Date.now()
-        if (pos[m[1]]?.p) deathAt[m[1]] = { p: pos[m[1]].p, at: Date.now(), looted: new Set<string>(), inv: pos[m[1]].inv || {}, armor: pos[m[1]].armor || {}, team: teamOf(m[1]), by: by || byH || null, byMob: !by && !byH && / by /.test(m[2]) }
-        // Кто и как убил: убийца в полёте (таран) или на земле, чем была занята жертва — разбор смертей от тарана (28.10).
+        // Кто и как убил: берём живую позицию жертвы до сброса/телепорта возрождения, иначе расстояние завышалось до 84–94 бл.
         const vb = bots.find(o => o.name === m[1])
-        log(`☠ ${m[1]} ${m[2]}${by ? ` [убийца ${pos[by]?.gliding ? 'летит' : 'на земле'}${pos[by]?.p && pos[m[1]]?.p ? ' в ' + Math.round(Math.hypot(pos[by].p.x - pos[m[1]].p.x, pos[by].p.y - pos[m[1]].p.y, pos[by].p.z - pos[m[1]].p.z)) + ' бл.' : ''}; жертва: ход ${vb?.swarmTask?.kind || '-'}, ${vb?.last?.m || '-'}${pos[m[1]]?.gliding ? ', летела' : ''}]` : ''}`)
+        const preDeathPos = (name: string, bot: any) => {
+          const cur = pos[name]
+          const live = bot?.lastLivePos && bot.lastLivePos.round === ctx.round ? bot.lastLivePos.p : null
+          const prev = bot?.prevLivePos && bot.prevLivePos.round === ctx.round && Date.now() - bot.prevLivePos.at < 5000 ? bot.prevLivePos.p : null
+          if (!cur?.p) return live
+          const outside = belowArenaFloor(ctx, cur.p) || (Number.isFinite(ctx.R) && Math.hypot(cur.p.x - ctx.X, cur.p.z - ctx.Z) > ctx.R + 4)
+          if (cur.hp <= 0 || outside) return live ?? cur.p
+          if (prev && (Math.hypot(cur.p.x - prev.x, cur.p.y - prev.y, cur.p.z - prev.z) > 20 || bot?.respawnedAt && Date.now() - bot.respawnedAt < 3000)) return prev
+          return cur.p
+        }
+        const victimPos = preDeathPos(m[1], vb)
+        if (victimPos) deathAt[m[1]] = { p: { ...victimPos }, at: Date.now(), looted: new Set<string>(), inv: pos[m[1]]?.inv || {}, armor: pos[m[1]]?.armor || {}, team: teamOf(m[1]), by: by || byH || null, byMob: !by && !byH && / by /.test(m[2]) }
+        const kb = by ? bots.find(o => o.name === by) : null
+        const killerPos = by ? preDeathPos(by, kb) : null
+        log(`☠ ${m[1]} ${m[2]}${by ? ` [убийца ${pos[by]?.gliding ? 'летит' : 'на земле'}${killerPos && victimPos ? ' в ' + Math.round(Math.hypot(killerPos.x - victimPos.x, killerPos.y - victimPos.y, killerPos.z - victimPos.z)) + ' бл.' : ''}; жертва: ход ${vb?.swarmTask?.kind || '-'}, ${vb?.last?.m || '-'}${pos[m[1]]?.gliding ? ', летела' : ''}]` : ''}`)
       }
       if (humanEliminated && !ctx.between) ctx.endRound().catch(() => {})
       return end < bytes

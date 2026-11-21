@@ -181,7 +181,7 @@ function* pearlSearch(bot: any, world: CollisionWorld, target: Vec3, arena: Wind
   return best
 }
 
-export async function pearlPositionPlan(bot: any, { to, arena }: { to: Point; arena?: WindArena }) {
+export async function pearlPositionPlan(bot: any, { to, arena, deadline }: { to: Point; arena?: WindArena; deadline?: number }) {
   if (!finite(to) || !bot?.entity || !projectile.canSurvivePearl(bot) || !windInside(to, arena) || !windInside(bot.entity.position, arena)) return { ok: false, best: null, tried: 0 }
   const world = observedWorld(bot), target = vector(to)
   if (!bodyClear(world, target) || !pearlFootprint(world, target, arena)) return { ok: false, best: null, tried: 0 }
@@ -189,6 +189,7 @@ export async function pearlPositionPlan(bot: any, { to, arena }: { to: Point; ar
   const search = pearlSearch(bot, world, target, arena, context)
   let tried = 0, slice = performance.now() + 4
   for (;;) {
+    if (deadline !== undefined && performance.now() >= deadline) return { ok: false, best: null, tried }
     const step = search.next(); tried++
     if (step.done) return { ok: !!step.value, best: step.value, tried }
     if (performance.now() >= slice) { await new Promise<void>(resolve => setImmediate(resolve)); slice = performance.now() + 4 }
@@ -212,8 +213,23 @@ export async function pearlToPosition(session: any, ctl: any, { to, arena }: { t
       if (!bodyClear(world, target) || !pearlFootprint(world, target, arena) || !projectile.canSurvivePearl(bot)) return null
       const release = pearlTrial(bot, world, target, arena, context, proposal.best)
       if (release) { chosen = release; return chosen }
-      const search = pearlSearch(bot, world, target, arena, context)
-      for (;;) { const result = search.next(); if (result.done) { chosen = result.value; return chosen } }
+      // Bound synchronous physics-tick fallback to a tiny ±2° neighborhood (<=10 trials) instead of 360 steps.
+      const low = projectile.aim(context.from, target, projectile.KINDS.ender_pearl, context.moved, context.airborne)
+      let best: any = low ? pearlTrial(bot, world, target, arena, context, low) : null
+      let nearest = best ? Math.hypot(best.land.x - target.x, best.land.z - target.z) : Infinity
+      const yaw = Math.atan2(-(target.x - context.from.x), -(target.z - context.from.z))
+      const baseDeg = proposal.best.pitch * 180 / Math.PI
+      for (const offset of [.5, -.5, 1, -1, 1.5, -1.5, 2, -2]) {
+        const deg = baseDeg + offset
+        if (deg < -80 || deg > 89.875) continue
+        const result = pearlTrial(bot, world, target, arena, context, { yaw, pitch: deg * Math.PI / 180 })
+        if (result) {
+          const off = Math.hypot(result.land.x - target.x, result.land.z - target.z)
+          if (off < nearest) { nearest = off; best = result }
+        }
+      }
+      chosen = best
+      return chosen
     }, onAim(frame) {
       if (ctl.aborted || teleported) return false
       const release = projectile.pearlReleaseFrame(bot, frame)
@@ -297,6 +313,7 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
   const methods = new Set(query.methods || ['walk', 'pearl', 'wind', 'build'])
   const counts: Record<string, number> = {}
   for (const item of bot.inventory?.items?.() || []) counts[item.name] = (counts[item.name] || 0) + item.count
+  const hasBow = !!counts.bow && !!(counts.arrow || counts.spectral_arrow || counts.tipped_arrow)
   const world = observedWorld(bot), start = bot.entity.position.clone(), enemies = visibleEnemies(bot, query.enemies), cache = new Map<string, Vec3[]>(), seen = new Set<string>()
   const candidates: SwarmPosition[] = []
   const upper = new Set<string>()
@@ -318,7 +335,7 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
       const floor = supportAt(world, at, .03)
       if (!floor || at.x <= floor.box.minX || at.x >= floor.box.maxX || at.z <= floor.box.minZ || at.z >= floor.box.maxZ) continue
       seen.add(key(at))
-      const assessed = tactical(world, at, start, enemies, query.purpose, !!counts.bow && !!(counts.arrow || counts.spectral_arrow || counts.tipped_arrow))
+      const assessed = tactical(world, at, start, enemies, query.purpose, hasBow)
       candidates.push({ at: point(at), support: floor.block.name, methods: [], ...assessed })
     }
   }
@@ -332,7 +349,7 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
     const at = vector(candidate.at), cost = methods.has('walk') ? walkCost(world, start, at, query.arena) : null
     if (cost !== null) candidate.methods.push({ kind: 'walk', cost, skill: 'goto', params: { ...candidate.at } })
     if (!candidate.methods.length && methods.has('pearl') && counts.ender_pearl && at.distanceTo(start) > 2 && pearlChecks++ < 6) {
-      const plan = await pearlPositionPlan(physicsBot, { to: at, arena: query.arena })
+      const plan = await pearlPositionPlan(physicsBot, { to: at, arena: query.arena, deadline })
       if (plan.best) candidate.methods.push({ kind: 'pearl', cost: 1 + 5 / Math.max(1, bot.health || 20) + 3 / counts.ender_pearl, skill: 'pearl_to', params: { to: point(at), arena: query.arena, observed: true }, plan: plan.best })
     }
     if (!candidate.methods.length && methods.has('wind') && counts.wind_charge && windChecks++ < 2) {
@@ -349,28 +366,32 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
         skill: 'wind_receive', params: { to: candidate.at }, plan })
     }
   }
-  if (methods.has('build')) {
+  if (methods.has('build') && performance.now() < deadline) {
     const item = material(bot, counts, query.reserve || {})
     if (item) for (const source of candidates.filter(c => c.methods.some(m => m.kind === 'walk'))) {
+      if (performance.now() >= deadline) break
+      if (performance.now() >= slice) { await new Promise<void>(resolve => setImmediate(resolve)); slice = performance.now() + 4 }
       const at = vector(source.at), support = supportAt(world, at, .03)
       if (!support || Math.abs(at.y - Math.round(at.y)) > 1e-6 || support.box.maxX - support.box.minX < .99 || support.box.maxZ - support.box.minZ < .99) continue
       for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        if (performance.now() >= deadline) break
         const cell = support.block.position, place = new Vec3(cell.x + dx, at.y - 1, cell.z + dz), target = place.offset(.5, 1, .5), current = world.blockAt(place)
         if (!current || shapeBoxes(current).length || HAZARD.test(current.name) || seen.has(key(target)) || !windInside(target, query.arena) || !bodyClear(world, target)) continue
-        const assessed = tactical(world, target, start, enemies, query.purpose, !!counts.bow && !!counts.arrow)
+        const assessed = tactical(world, target, start, enemies, query.purpose, hasBow)
         seen.add(key(target))
         const cost = (source.methods.find(m => m.kind === 'walk')?.cost || 0) + 1 + 3 / Math.max(1, counts[item] - Math.max(1, query.reserve?.[item] || 0))
         candidates.push({ at: point(target), support: item, ...assessed, methods: [{ kind: 'build', cost, skill: 'swarm_work', params: { kind: 'place', at: point(place), item }, plan: { approach: source.at, reference: point(cell), cells: [{ kind: 'place', at: point(place), item }], reserve: Math.max(1, query.reserve?.[item] || 0) } }] })
       }
     }
   }
-  if (methods.has('build') && ['ranged', 'build'].includes(query.purpose)) {
+  if (methods.has('build') && ['ranged', 'build'].includes(query.purpose) && performance.now() < deadline) {
     const item = material(bot, counts, query.reserve || {}), reserve = Math.max(1, query.reserve?.[item] || 0)
     if (item) for (let height = 1; height <= Math.min(16, counts[item] - reserve) && performance.now() < deadline; height++) {
+      if (performance.now() >= slice) { await new Promise<void>(resolve => setImmediate(resolve)); slice = performance.now() + 4 }
       const params = { height, item, reserve, arena: query.arena }
       const column = (require('./swarm-position-work') as typeof import('./swarm-position-work')).pillarCheck(bot, params, world)
       if (!column.ok) break
-      const at = vector(column.at), assessed = tactical(world, at, start, enemies, query.purpose, !!counts.bow && !!counts.arrow)
+      const at = vector(column.at), assessed = tactical(world, at, start, enemies, query.purpose, hasBow)
       const cost = height * .8 + height / Math.max(1, counts[item] - reserve) + 1
       candidates.push({ at: point(at), support: item, ...assessed,
         methods: [{ kind: 'build', cost, skill: 'swarm_pillar', params, plan: { kind: 'pillar', cells: column.cells.map(point), height, item, reserve } }] })

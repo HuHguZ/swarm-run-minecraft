@@ -91,10 +91,18 @@ function install (bot) {
       S.boundaryReturn = false
       if (b.elytraFlying && !S.driving && GUARD) {
         const W = worldOf(bot, { observed: !!S.arenaBounds })
-        const st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: S.fd }
-        const r = rollout(W, b.position, b.velocity, b.yaw, b.pitch, st.boost, 8, { fd: S.fd, arena: S.arenaBounds })
+        const st = { p: b.position, v: b.velocity, yaw: b.yaw, pitch: b.pitch, ...rocketForecast(bot), fd: S.fd }
+        const hazard = (res: any) => res.kind === 'outside' || (res.kind === 'wall' && res.dmg >= 1) || (res.kind === 'floor' && res.fd > 3)
+        let r = rollout(W, b.position, b.velocity, b.yaw, b.pitch, st.boost, 8, { fd: S.fd, arena: S.arenaBounds })
+        if (!hazard(r) && st.boost > 0) {
+          for (const alt of [st.boostMin, st.boostMax]) {
+            if (!Number.isFinite(alt) || alt < 0 || alt === st.boost) continue
+            const probe = rollout(W, b.position, b.velocity, b.yaw, b.pitch, alt, 8, { fd: S.fd, arena: S.arenaBounds })
+            if (hazard(probe)) { r = probe; break }
+          }
+        }
         S.boundaryReturn = r.kind === 'outside'
-        if (S.boundaryReturn || (r.kind === 'wall' && r.dmg >= 1) || (r.kind === 'floor' && r.fd > 3)) {
+        if (hazard(r)) {
           const h = Math.hypot(b.velocity.x, b.velocity.z) > 0.2 ? Math.atan2(-b.velocity.x, -b.velocity.z) : b.yaw
           const L = lookVec(h, 0)
           const pl = choose(W, st, { kind: 'point', at: new Vec3(b.position.x + L.x * 12, b.position.y + 2, b.position.z + L.z * 12), gap: 3, speedMin: 0.3, arena: S.arenaBounds }) || (S.arenaBounds ? returnInside(W, st, S.arenaBounds) : null)

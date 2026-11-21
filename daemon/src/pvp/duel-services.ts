@@ -112,20 +112,26 @@ export function installServices (ctx: DuelCtx) {
   ctx.buildHot = (...args: any[]) => ctx.pvpSkills.buildHot(...args)
   ctx.noteBuild = (...args: any[]) => ctx.pvpSkills.noteBuild(...args)
 
-  ctl.onAbort.push(() => {
-    gameClock.clearInterval(aimTimer)
-    bot.removeListener('path_update', onRoutePath)
-    bot.removeListener('blockBreakProgressObserved', onCrack)
-    bot.removeListener('blockBreakProgressEnd', onCrackEnd)
-    clear()
-    try { bot.pathfinder.setGoal(null) } catch {}
-    try { bot.deactivateItem() } catch {}
-    restoreMoves()
-    edgeGuard.stop()
-    bot.removeListener('nd_mlg', onMlg)
-    tt.close()
-    if (session.tempo === tt) session.tempo = null
-    mf.close()
-    ctx.pvpSkills.closeEquipment()
-  })
+  // Note: full listener & service cleanup (including onHurt/onTick*/calc.stop/blk.close) is handled
+  // idempotently by ctx.cleanup() registered on ctl.onAbort and in duelBody's try/finally.
+  if (!ctx.cleanup) {
+    ctl.onAbort.push(() => {
+      gameClock.clearInterval(aimTimer)
+      bot.removeListener('path_update', onRoutePath)
+      bot.removeListener('blockBreakProgressObserved', onCrack)
+      bot.removeListener('blockBreakProgressEnd', onCrackEnd)
+      clear()
+      try { bot.pathfinder.setGoal(null) } catch {}
+      try { bot.deactivateItem() } catch {}
+      restoreMoves()
+      edgeGuard.stop()
+      bot.removeListener('nd_mlg', onMlg)
+      tt.close()
+      if (session.tempo === tt) session.tempo = null
+      mf.close()
+      ctx.pvpSkills?.closeEquipment?.()
+      ctx.calc?.stop?.()
+      ctx.blk?.close?.()
+    })
+  }
 }

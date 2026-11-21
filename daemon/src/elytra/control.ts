@@ -49,6 +49,10 @@ function choose (W, st, goal, { H = 18, rocketNow = false }: any = {}) {
   const heading = hs0 > 0.2 ? Math.atan2(-st.v.x, -st.v.z) : bearing
   const yaws = new Set<number>()
   for (const o of YAW_OFF) { yaws.add(wrap(bearing + o)); if (Math.abs(o) <= 0.9) yaws.add(wrap(heading + o)) }
+  // Smooth live steering: include fine yaw increments around current look to prevent stair-stepping / jitter.
+  if (Number.isFinite(st.yaw)) {
+    for (const o of [0, 0.06, -0.06, 0.18, -0.18]) yaws.add(wrap(st.yaw + o))
+  }
   const boost = Math.max(0, st.boost || 0) + (rocketNow ? 26 : 0)
   if (goal.kind === 'land' && typeof goal.at !== 'function') {
     const planned = (require('./landing') as typeof import('./landing')).landingPlan(W, { ...st, boost }, goal,
@@ -71,23 +75,42 @@ function choose (W, st, goal, { H = 18, rocketNow = false }: any = {}) {
   // At longer horizons the existing collision time discounts can be negative.
   const boundPoint = goal.kind === 'point' && typeof goal.at !== 'function' && H > 0 && H <= 18
   const movingPoint = goal.kind === 'point' && typeof goal.at === 'function' && !goal.reach && H > 0 && H <= 18
-  let best = null
-  for (const yaw of yaws) {
-    for (const pitch of goal.pitches || PITCHES) {
-      if (best && boundPoint && !pointCanBeat(st, tgt0, yaw, pitch, boost, H, best.c)) continue
-      // Every contact costs at least 60 at this horizon. A clear winner has already cached at(H).
-      if (best && movingPoint && best.r.kind === null && best.c <= 60 &&
-          !movingPointCanBeat(W, st, goal, at, yaw, pitch, boost, H, best.c)) continue
-      const r = rollout(W, st.p, st.v, yaw, pitch, boost, H, options)
-      if (r.kind === 'outside') continue
-      let c = cost(W, st, goal, at, r, yaw, pitch)
-      // Emergency descent still prices the expiry bounds used by complete landing routes.
-      for (const alternative of bounds) {
-        if (best && c >= best.c) break
-        const possible = rollout(W, st.p, st.v, yaw, pitch, alternative, H, options)
-        c = Math.max(c, cost(W, st, goal, at, possible, yaw, pitch) + (possible.kind === 'outside' ? landingRisk(W, goal, possible) : 0))
+  const evaluateAll = (extraBounds: number[]) => {
+    let best = null
+    for (const yaw of yaws) {
+      for (const pitch of goal.pitches || PITCHES) {
+        if (best && !extraBounds.length && boundPoint && !pointCanBeat(st, tgt0, yaw, pitch, boost, H, best.c)) continue
+        // Every contact costs at least 60 at this horizon. A clear winner has already cached at(H).
+        if (best && !extraBounds.length && movingPoint && best.r.kind === null && best.c <= 60 &&
+            !movingPointCanBeat(W, st, goal, at, yaw, pitch, boost, H, best.c)) continue
+        const r = rollout(W, st.p, st.v, yaw, pitch, boost, H, options)
+        if (r.kind === 'outside') continue
+        let c = cost(W, st, goal, at, r, yaw, pitch)
+        // Emergency descent & rocket-expiry guard price the expiry bounds.
+        for (const alternative of extraBounds) {
+          if (best && c >= best.c) break
+          const possible = rollout(W, st.p, st.v, yaw, pitch, alternative, H, options)
+          c = Math.max(c, cost(W, st, goal, at, possible, yaw, pitch) + (possible.kind === 'outside' ? landingRisk(W, goal, possible) : 0))
+        }
+        if (!best || c < best.c) best = { c, yaw, pitch, r }
       }
-      if (!best || c < best.c) best = { c, yaw, pitch, r }
+    }
+    return best
+  }
+  let best = evaluateAll(bounds)
+  // Lazy rocket-expiry safety check for active flight (TODO 05.11 #6): if current rocket could expire early (boostMin=0)
+  // or burn longer (boostMax) into a wall/floor/outside, re-evaluate with expiry bounds so we don't fly into hazard.
+  if (best && !bounds.length && (st.boost || 0) > 0 && !rocketNow && Number.isFinite(st.boostMin)) {
+    const expiryBounds: number[] = []
+    for (const value of [st.boostMin, st.boostMax]) {
+      if (Number.isFinite(value) && value >= 0 && value !== boost && !expiryBounds.includes(value)) expiryBounds.push(value)
+    }
+    if (expiryBounds.length) {
+      const risky = expiryBounds.some(alt => {
+        const probe = rollout(W, st.p, st.v, best.yaw, best.pitch, alt, H, options)
+        return probe.kind === 'outside' || (probe.kind === 'wall' && probe.dmg >= 1) || (probe.kind === 'floor' && probe.fd > SAFE_FALL)
+      })
+      if (risky) best = evaluateAll(expiryBounds)
     }
   }
   if (best && floorDepth < 12) best.r = rollout(W, st.p, st.v, best.yaw, best.pitch, boost, H, { ...options, floorDepth: 12 })
@@ -190,6 +213,8 @@ function cost (W, st, goal, at, r, yaw, pitch, landRisk?: number) {
     }
     if (first) c += first.t + first.k * 0.5 - Math.min(10, first.fd) * 0.8
     else c += 60 + bestD * 4 + (r.kind === 'floor' ? 300 + (18 - r.t) * 8 : 0)
+    if (Number.isFinite(st.yaw)) c += Math.abs(wrap(yaw - st.yaw)) * 0.35
+    if (Number.isFinite(st.pitch)) c += Math.abs(pitch - st.pitch) * 0.25
     return c
   }
   // point: к точке, в коридоре высот, подальше от него, не сваливаться.
@@ -205,6 +230,9 @@ function cost (W, st, goal, at, r, yaw, pitch, landRisk?: number) {
       if (d < bestD) { bestD = d; bestT = t }
     }
     c += bestD + bestT * 0.15
+    // When moving away from the target (closest point is tick 0), also score the horizon endpoint so the glider
+    // banks smoothly back toward the target instead of ignoring where the 18-tick curve actually goes.
+    if (bestT === 0 && Number.isFinite(st.yaw)) c += Math.hypot(end.x - tgt.x, end.y - tgt.y, end.z - tgt.z) * 0.35
   } else c += Math.hypot(end.x - tgt.x, end.y - tgt.y, end.z - tgt.z)
   if (goal.minY != null && end.y < goal.minY) c += (goal.minY - end.y) * 4
   if (goal.maxY != null && end.y > goal.maxY) c += (end.y - goal.maxY) * 4
@@ -217,6 +245,22 @@ function cost (W, st, goal, at, r, yaw, pitch, landRisk?: number) {
   }
   // Резкий крен без нужды — дрожь взгляда: чуть дороже.
   c += Math.abs(pitch) * 0.5
+  // Smooth live flight steering (when st.yaw/st.pitch provided): penalize abrupt single-tick head snaps
+  // and commit to one turn direction through tight arcs so elytra bots bank smoothly instead of spinning in place.
+  if (Number.isFinite(st.yaw)) {
+    const dyaw = Math.abs(wrap(yaw - st.yaw))
+    c += dyaw * 0.65 + (dyaw > 0.85 ? (dyaw - 0.85) * 1.6 : 0)
+    const hs0 = st.v ? Math.hypot(st.v.x, st.v.z) : 0
+    if (hs0 > 0.4) {
+      const heading = Math.atan2(-st.v.x, -st.v.z)
+      const bank = wrap(yaw - heading)
+      // Prefer smooth banked arcs (<= 1.35 rad off velocity) over violent 180-deg head-whipping.
+      if (Math.abs(bank) > 1.35) c += (Math.abs(bank) - 1.35) * 1.5
+      // Keep consistent turn side while banking around a target behind / inside turning radius.
+      if (st.turnSign && Math.abs(bank) > 0.25 && Math.sign(bank) !== st.turnSign) c += 1.8
+    }
+  }
+  if (Number.isFinite(st.pitch)) c += Math.abs(pitch - st.pitch) * 0.45
   return c
 }
 

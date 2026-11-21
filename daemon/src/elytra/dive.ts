@@ -26,26 +26,31 @@ function smashBonus (h) {
   return 22 + (h - 8)
 }
 
-// Щит у него (в руке и не выбит) — пике не делать: он видит взлёт и заход
-// (mace.track: «булава сверху») и поднимает щит, а щит держит удар и сверху:
-// горизонталь «к источнику» ноль → normalize() ноль → acos(0) = 90°, и это
-// ещё «в угле» (BlocksAttacks.DamageReduction.resolve: блок, пока угол ≤ 90°).
-// Замер try-elytra «пике» 2026-09-26: 8 пике из 8 в щит — снял 0, себе −15 за
-// раунд (высота падения из пике без удара — вся в урон).
-function divePlan (bot, e, { d, dy, hp, foeGrounded, hisShield = false, W = worldOf(bot) }: any = {}) {
-  if (!ON || hisShield) return null
+// Оценка пике с булавой (гибкость вместо жёстких ворот, AGENTS.md 06.10): физические условия (элитры, булава, нагрудник,
+// тяга, небо) обязательны; щит соперника, хп, дистанция и высота — цена и риск (с топором slamHit выбивает щит в том же тике).
+function divePlan (bot, e, { d, dy, hp, foeGrounded = true, hisShield = false, arena = null, W = worldOf(bot, { observed: !!arena }) }: any = {}) {
+  if (!ON) return null
   const k = kit(bot)
   if (!k.elytra || !k.mace || (k.rockets < 2 && !maceLift.windReady(bot)) || !k.chest) return null
-  if (!bot.entity || !bot.entity.onGround || bot.entity.isInWater) return null
-  if (hp < 9 || !foeGrounded || Math.abs(dy) > 2 || d < 3 || d > 22) return null
+  if (!bot.entity || !bot.entity.onGround || bot.entity.isInWater || !e?.position) return null
+  if (e.elytraFlying) return null
+  const hasAxe = !!findItem(bot, i => /_axe$/.test(i.name))
+  const hasTotem = offName(bot) === 'totem_of_undying' || !!findItem(bot, 'totem_of_undying')
+  // Без топора пике в поднятый щит, смотрящий на нас, приносит 0 урона при риске падения; с топором slamHit пробивает щит.
+  if (hisShield && !hasAxe && maceLift.shieldAtUs(bot, e)) return null
+  if (!(d >= 2 && d <= 30) || Math.abs(dy) > 5) return null
+  if (hp < (hasTotem ? 5 : 7)) return null
   const me = bot.entity.position
   if (headroom(W, me, 12) < 10) return null
   if (headroom(W, e.position, 12) < 9) return null
+  // EV score: ожидаемый урон булавы с 8–10 бл. (~20+) против риска промаха / потери хп.
+  const risk = (hp < 9 ? (9 - hp) * 1.5 : 0) + (!foeGrounded ? 3 : 0) + (hisShield ? 2 : 0) + (d > 22 ? (d - 22) * 0.4 : 0)
+  if (risk > 10 && !hasTotem) return null
   return { kind: 'dive' }
 }
 
 async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), stats = {}, used = () => {}, allow = null, maxMs = 12000, telemetryHp = e => healthOf(bot, e), arena = null, chain = null }: any = {}) {
-  const W = worldOf(bot)
+  const W = worldOf(bot, { observed: !!arena })
   const S = install(bot)
   const out: any = { ok: false, hit: false, note: '' }
   const t0 = gameClock.now()
@@ -54,7 +59,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   const hisHp0 = telemetryHp(e)
   // Подготовка на земле: элитры на тело (правой), булава — в правую (заряд
   // пошёл), фейерверки — в левую.
-  const sw = await swapChest(bot, 'elytra', { hand: 'main' })
+  const sw = await swapChest(bot, 'elytra', { hand: 'main', ctl })
   if (!sw.ok) { out.note = 'пике: элитры не надел — ' + sw.why; return out }
   const mace = findItem(bot, 'mace')
   try { if (mace && (!bot.heldItem || bot.heldItem.name !== 'mace')) await bot.equip(mace, 'hand') } catch {}
@@ -63,7 +68,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   const liftItem = it => windTakeoff ? it?.name === 'wind_charge' : plainRocket(it)
   try { const rk = bot.inventory.items().find(liftItem); if (rk && !liftItem(bot.inventory.slots[45])) await bot.equip(rk, 'off-hand') } catch {}
   if (!bot.heldItem || bot.heldItem.name !== 'mace' || !liftItem(bot.inventory.slots[45])) {
-    await swapChest(bot, 'chest')
+    await swapChest(bot, 'chest', { ctl })
     out.note = 'пике: булава или фейерверк не в руках'
     return out
   }
@@ -115,29 +120,29 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   }
   let phase = 'climb'
   let chestReady = false
-  // Сторона захода — та, где мы были на взлёте: точка над ним не прыгает с
-  // одной стороны на другую, пока мы кружим.
+  // Сторона захода — та, где мы были на взлёте; пока булава заряжается, держим отступ 7 бл. (вне радиуса разворота,
+  // чтобы не крутиться на месте), а к готовности сводим в 2.5 бл. с упреждением по скорости цели.
   const side = yawTo(foe(), bot.entity.position)
-  // Заход — дольше и шире (арена 2026-09-26: он бегает, и за 6 с условие «выше
-  // на 8 и ближе 5.5» не выполнялось — «не зашёл сверху (долго)», 5 ракет зря).
   const r: any = await fly(bot, ctl, { arena,
-    maxMs: 8000, phase: 'пике: заход',
+    maxMs: 6500, phase: 'пике: заход',
     stats,
     goal: () => {
       const f = foe()
+      const tv = vel() || { x: 0, y: 0, z: 0 }
+      const lead = new Vec3(f.x + (Number.isFinite(tv.x) ? tv.x * 6 : 0), f.y, f.z + (Number.isFinite(tv.z) ? tv.z * 6 : 0))
       const L = lookVec(side, 0)
-      const P = new Vec3(f.x + L.x * 3, topY(), f.z + L.z * 3)
-      return { kind: 'point', at: P, reach: true, minY: f.y + 3, maxY: topY() + 1, gap: 2.5, speedMin: 0.3 }
+      const offset = gameClock.now() - maceAt >= 26 * TICK_MS ? 2.5 : 7.0
+      const P = new Vec3(lead.x + L.x * offset, topY(), lead.z + L.z * offset)
+      return { kind: 'point', at: P, reach: true, minY: f.y + 3, maxY: topY() + 1, gap: 2.5, speedMin: 0.35 }
     },
     rocketIf: (st) => st.p.y < topY() - 3 ? true : null,
     onTick: () => { if (allow) allow() },
-    // Пике — только с заряженной булавой (33 тика с того, как взяли в руку):
-    // без крита удар с 6 бл. по алмазу — 8 хп вместо 20 (замер elytra-probe3:
-    // пике раньше заряда — свапа нет, и в пол с высотой падения 6.9, −5 себе).
+    // Пике — с заряженной булавой (33 тика); расширенное окно (dy > 5.5, dh < 9.5) даёт быстрый заход без лишних кругов.
     until: () => {
+      if (e.isValid === false || !e.position) return 'цель пропала'
       const me = bot.entity.position; const f = foe()
       const dh = Math.hypot(me.x - f.x, me.z - f.z)
-      return (me.y > f.y + 7 && dh < 6.5 && gameClock.now() - maceAt >= 33 * TICK_MS + 150) ? 'над ним' : null
+      return (me.y > f.y + 5.5 && dh < 9.5 && gameClock.now() - maceAt >= 33 * TICK_MS + 50) ? 'над ним' : null
     }
   })
   if (r.why !== 'над ним') {
@@ -173,6 +178,8 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   let confirmed = false
   const onDamage = pk => { if (hit && (require('../combat/aerial-lance') as typeof import('../combat/aerial-lance')).ownHit(pk, bot.entity.id, e.id)) confirmed = true }
   bot._client.on('damage_event', onDamage)
+  let reglideTimer: any = null
+  const clearReglide = () => { if (reglideTimer != null) { gameClock.clearTimeout(reglideTimer); reglideTimer = null } }
   try {
   const res = await new Promise<any>(resolve => {
     let done = false
@@ -186,7 +193,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
     const onT = () => {
       if (done) return
       try {
-        if (ctl.aborted || (bot.health ?? 0) <= 0) return fin('прервали')
+        if (ctl.aborted || (bot.health ?? 0) <= 0 || e.isValid === false || !e.position) return fin(e.isValid === false ? 'цель пропала' : 'прервали')
         if (confirmed && chain && (require('../read') as typeof import('../read')).enchLevel(bot, mace, 'wind_burst') > 0) return fin('Wind Burst')
         const b = bot.entity
         if (b.onGround) return fin(hit ? 'сел после удара' : 'сел')
@@ -200,7 +207,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
           // над его головой (2.4 — чтобы свап успел до его рамки), только круто
           // вниз: скорость вниз копит высоту падения (> −0.5), горизонталь для
           // его щита — почти ноль.
-          const pl = choose(W2, { p, v, ...rocketForecast(bot), fd: S.fd }, { kind: 'strike', at: strikeAt, foot: footAt, pitches: DIVE_PITCHES, arena }, { rocketNow: diveRocket === 'нужна' })
+          const pl = choose(W2, { p, v, yaw: b.yaw, pitch: b.pitch, ...rocketForecast(bot), fd: S.fd }, { kind: 'strike', at: strikeAt, foot: footAt, pitches: DIVE_PITCHES, arena }, { rocketNow: diveRocket === 'нужна' })
           // Дуга за границей арены не выбирается (Codex 15.10) — нет дуги внутри: выход.
           if (!pl) return fin('no_safe_arena_trajectory')
           steer(bot, pl.yaw, pl.pitch)
@@ -283,7 +290,11 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
           ;(require('../combat/aerial-recovery') as typeof import('../combat/aerial-recovery')).beginAerialRecovery(bot, ctl)
           bot.activateItem(true)
           bot.usingHeldItem = false
-          gameClock.setTimeout(() => { try { startGlide(bot); bot.look(bot.entity.yaw, 0.5, true).catch(() => {}) } catch {} }, 60)
+          reglideTimer = gameClock.setTimeout(() => {
+            reglideTimer = null
+            if (ctl.aborted || !bot.entity || bot.entity.onGround || bot.entity.elytraFlying || (bot.health ?? 0) <= 0) return
+            try { startGlide(bot); bot.look(bot.entity.yaw, 0.5, true).catch(() => {}) } catch {}
+          }, 60)
           return fin('мимо — элитры обратно')
         }
       } catch (err) { fin('ошибка: ' + err.message) }
@@ -301,6 +312,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   // Мимо на подлёте (не свапнули) — сесть; свапнули и вернули элитры — сесть.
   if (bot.entity.elytraFlying) await land(bot, ctl, { away: null, stats, arena })
   await sleep(250)
+  clearReglide()
   await chestDown(bot, ctl, { stats, arena })
   out.hit = confirmed
   out.ok = true
@@ -314,7 +326,7 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
   out.note = `элитры: пике с булавой — ${confirmed ? `удар с падения ${hit.fd} бл.${out.dealt != null ? `, снял ${out.dealt}` : ''}` : hit ? 'взмах без подтверждения попадания' : res}${out.self ? `, себе −${out.self}` : ''}`
   void phase
   return out
-  } finally { bot._client.removeListener('damage_event', onDamage) }
+  } finally { clearReglide(); bot._client.removeListener('damage_event', onDamage) }
 }
 
 function healthOf (bot, e) {
@@ -330,8 +342,9 @@ function healthOf (bot, e) {
 // позицией, в которой мы его посчитали.
 function afterPacket (bot, fn) {
   let done = false
-  const run = () => { if (done) return; done = true; bot.removeListener('physicsTick', run); try { fn() } catch {} }
-  bot.prependListener('physicsTick', run)
+  const run = () => { if (done) return; done = true; bot.removeListener?.('physicsTick', run); try { fn() } catch {} }
+  if (typeof bot.prependListener === 'function') bot.prependListener('physicsTick', run)
+  else if (typeof bot.on === 'function') bot.on('physicsTick', run)
   setImmediate(run)
 }
 

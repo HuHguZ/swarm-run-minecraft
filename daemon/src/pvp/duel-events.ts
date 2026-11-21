@@ -153,7 +153,8 @@ export function installEvents (ctx: DuelCtx) {
       if (swatted.size > 64) for (const id of swatted.keys()) if (!bot.entities[id]) swatted.delete(id)
     } catch {}
   }
-  bot.on('physicsTick', onTickSwat)
+  if (ctx.addDuelTick) ctx.addDuelTick(onTickSwat)
+  else bot.on('physicsTick', onTickSwat)
   const arrowLog = arrows.track(bot)
   const onTickArcher = ctx.onTickArcher = () => {
     try {
@@ -176,7 +177,8 @@ export function installEvents (ctx: DuelCtx) {
       }
     } catch {}
   }
-  bot.on('physicsTick', onTickArcher)
+  if (ctx.addDuelTick) ctx.addDuelTick(onTickArcher)
+  else bot.on('physicsTick', onTickArcher)
 }
 
 // Ломают пол подо мной — выход на соседнюю опору, пока ломающий не бросил.
@@ -244,7 +246,10 @@ export function installFallAndAim (ctx: DuelCtx) {
       }
     } catch {}
   }
-  if (!bot._ndFallGuard) bot.on('physicsTick', onTickFall)
+  if (!bot._ndFallGuard) {
+    if (ctx.addDuelTick) ctx.addDuelTick(onTickFall)
+    else bot.on('physicsTick', onTickFall)
+  }
   const onMlg = ctx.onMlg = (e) => {
     if (e.what === 'fired') used('вода под себя (MLG)')
     else if (e.what === 'saved') used('MLG: приземлился в воду')

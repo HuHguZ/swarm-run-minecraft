@@ -1,4 +1,5 @@
 import * as gameClock from '../game-clock'
+import { bestWeapon, weaponScore } from '../items'
 import * as mace from '../mace'
 import { thundering } from '../perception'
 import * as spear from '../spear'
@@ -48,13 +49,21 @@ export async function fightGraphTurn (ctx: DuelCtx, turn: TurnFrame) {
         const mc0 = fg.meleeChoice(obs)
         // Щит: топор — ударом-свапом в тик удара (melee.FAST_AXE, заряд меча не теряется), не сменой в руке.
         const want = mc0 && !mc0.shield ? mc0.item : null
-        if (want && want !== ctx.chosenWeapon) {
-          ctx.chosenWeapon = want
-          st.calc.weapons = st.calc.weapons || {}
-          st.calc.weapons[want] = (st.calc.weapons[want] || 0) + 1
-          // Сменить в руке, только если сейчас в руке меч/топор/пусто (копьё, булава, удочка — у своих веток).
+        if (want) {
+          const changed = want !== ctx.chosenWeapon
+          if (changed) {
+            ctx.chosenWeapon = want
+            st.calc.weapons = st.calc.weapons || {}
+            st.calc.weapons[want] = (st.calc.weapons[want] || 0) + 1
+          }
+          // Сменить в руке, только если сейчас в руке меч/топор/пусто (копьё, булава, удочка — у своих веток),
+          // включая смену обычного стека того же имени на более сильный зачарованный.
           const hn = bot.heldItem ? bot.heldItem.name : null
-          if (!hn || /_(sword|axe)$/.test(hn)) await holdWeapon()
+          const upgradeSameName = !changed && hn === want && (() => {
+            const top = bestWeapon(bot, i => i.name === want)
+            return !!top && top !== bot.heldItem && weaponScore(bot, top) > weaponScore(bot, bot.heldItem) + 1e-6
+          })()
+          if ((changed || upgradeSameName) && (!hn || /_(sword|axe)$/.test(hn))) await holdWeapon()
         }
       }
       // След решения — в трассу боя (не в used: метка не должна перехватывать урон приёма в trickDmg).

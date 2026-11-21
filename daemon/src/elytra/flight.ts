@@ -43,6 +43,7 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
     let done = false
     let ticks = 0
     let planMs = 0
+    let turnSign = 0
     const evasion = { lance: null }
     S.driving = (S.driving || 0) + 1
     const finish = (why) => {
@@ -76,27 +77,36 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
         let g = typeof goal === 'function' ? goal() : goal
         if (!g) return finish('цели нет')
         if (arena) g = { ...g, arena }
-        // Лук натянут на меня или стрела на подлёте — рывок вбок с ракетой: прямой полёт — лёгкая мишень (пользователь 25.10:
-        // «на элитрах не уворачиваются от стрел, должны летать активнее и быстро»). Сторона меняется каждые 0.6 с — «змейка».
+        // Лук натянут на меня или стрела на подлёте — плавный манёвр вбок: прямой полёт — лёгкая мишень.
+        // При посадке (land) не сжигаем резерв RESCUE_ROCKETS на необязательный уворот.
         const landing = g.kind === 'land'
         const jink = (g.kind === 'point' || landing) && dodgeSide(bot, b, !landing, evasion)
         if (jink) {
           const at0 = g.at, shift = q => new Vec3(q.x + jink.x * 5, q.y, q.z + jink.z * 5)
-          g = { ...g, ...(g.kind === 'land' ? { kind: 'point', gap: 3 } : {}), at: jink.at || (typeof at0 === 'function' ? t => shift(at0(t)) : shift(at0)) }
+          g = { ...g, ...(g.kind === 'land' ? { kind: 'point', gap: 3, _jink: true } : { _jink: true }), at: jink.at || (typeof at0 === 'function' ? t => shift(at0(t)) : shift(at0)) }
         }
         S.phase = phase || g.kind
-        const st = { p: b.position, v: b.velocity, ...rocketForecast(bot), fd: landing ? Math.max(S.fd, S.moveFd || 0) : S.fd }
+        const st = { p: b.position, v: b.velocity, yaw: b.yaw, pitch: b.pitch, turnSign, ...rocketForecast(bot), fd: landing ? Math.max(S.fd, S.moveFd || 0) : S.fd }
         const tp = gameClock.wall.now()
         let pl = inside ? choose(W, st, g) : null
         const returning = !pl && !!arena
         if (returning) { pl = returnInside(W, st, arena); if (pl) g = pl.goal; S.phase = 'возврат в арену' }
         if (!pl) return finish('no_safe_arena_trajectory')
         let fire = false
-        if (!(noRocket && noRocket()) && !(bot.fireworkRocketDuration > 0) && rocketCount(bot) > (useReserve ? 0 : RESCUE_ROCKETS)) {
-          const want = jink ? true : rocketIf ? rocketIf(st, pl, g) : false
+        const rocketsHave = rocketCount(bot)
+        const allowReserve = useReserve && (!jink || (rocketIf ? rocketIf(st, pl, g) === true : false))
+        if (!(noRocket && noRocket()) && !(bot.fireworkRocketDuration > 0) && rocketsHave > (allowReserve ? 0 : RESCUE_ROCKETS)) {
+          const want = jink && rocketsHave > RESCUE_ROCKETS ? true : rocketIf ? rocketIf(st, pl, g) : false
           const rc = rocketChoice(W, st, g, pl, want)
           if (rc.fire) { fire = true; pl = { ...pl, ...rc } } else if (rc.veto && stats) stats.rocketVeto = (stats.rocketVeto || 0) + 1
         }
+        const hsNow = Math.hypot(b.velocity.x, b.velocity.z)
+        if (hsNow > 0.4) {
+          const hNow = Math.atan2(-b.velocity.x, -b.velocity.z)
+          const bankNow = wrap(pl.yaw - hNow)
+          if (Math.abs(bankNow) > 0.35) turnSign = Math.sign(bankNow)
+          else if (Math.abs(bankNow) < 0.15) turnSign = 0
+        } else turnSign = 0
         planMs += gameClock.wall.now() - tp
         S.lastPlan = { c: r2(pl.c), k: pl.r.kind, t: pl.r.t, fd: r2(pl.r.fd), vyHit: pl.r.vyHit == null ? null : r2(pl.r.vyHit), gx: r2(typeof g.at === 'function' ? g.at(0).x : g.at.x), gz: r2(typeof g.at === 'function' ? g.at(0).z : g.at.z) }
         // Диагностика S7d: план без события, а стена по ходу в ≤ 4 бл. — входы плана целиком в лог (повтор офлайн).
@@ -114,7 +124,7 @@ function fly (bot, ctl, { goal, until = null, maxMs = 15000, rocketIf = null, on
           }
         }
         steer(bot, pl.yaw, pl.pitch)
-        if (fire && (useReserve || rocketCount(bot) > RESCUE_ROCKETS)) {
+        if (fire && (allowReserve || rocketCount(bot) > RESCUE_ROCKETS)) {
           const fr = fireRocket(bot)
           if (fr.ok && stats) stats.rockets = (stats.rockets || 0) + 1
         }
@@ -174,10 +184,10 @@ function dodgeSide (bot, b, arrows, memory) {
     d = threats.projectileDangers(bot, scope)
   } catch { memory.lance = null; return null }
   const shot = (d.arrows || []).filter(p => p.ticks <= 12 && p.from).sort((x, y) => x.ticks - y.ticks)[0]
-  const src = shot?.from || (d.aims || []).find(a => a.at && b.position.distanceTo(a.at) <= 40)?.at
+  const src = shot?.from || (d.aims || []).find(a => a.at && b.position.distanceTo(a.at) <= 28)?.at
   if (!src) return null
   const dx = b.position.x - src.x, dz = b.position.z - src.z, n = Math.hypot(dx, dz) || 1
-  const flip = Math.floor(gameClock.now() / 600) % 2 ? 1 : -1
+  const flip = Math.floor(gameClock.now() / 1200) % 2 ? 1 : -1
   return { x: -dz / n * flip, z: dx / n * flip, at: null }
 }
 
@@ -410,7 +420,7 @@ async function land (bot, ctl, { at = null, away = null, maxMs = 12000, stats = 
       return { kind: 'land', at: spot, away, edge, maxFallDamage }
     },
     maxMs,
-    rocketIf: (_st, _plan, goal) => goal.kind === 'point',
+    rocketIf: (_st, _plan, goal) => goal.kind === 'point' && !goal._jink,
     useReserve: true,
     arena,
     stats

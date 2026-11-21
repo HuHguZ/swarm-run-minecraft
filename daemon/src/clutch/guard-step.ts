@@ -1,8 +1,8 @@
 'use strict'
 // Сторож блочного клатча — тик (st.step на physicsTick): учёт посадки и высоты падения, прогноз и решение decide, вода
 // рядом, лестница на стену, блок под траекторию. Щелчок — на ближайшем move (clutch/guard-fire.ts).
-import { FILLER, key, decide } from './blocks'
-import { type ClutchGuard, eyeHeight, controls, climbing, emit, releaseSteering, prepare, cancelScheduled } from './guard-state'
+import { isFiller, key, decide } from './blocks'
+import { type ClutchGuard, eyeHeight, available, controls, climbing, emit, releaseSteering, prepare, cancelScheduled } from './guard-state'
 import { context, waterStep } from './guard-forecast'
 import { fire, ladderState, fireLadder } from './guard-fire'
 
@@ -42,7 +42,7 @@ function trackFlight (g: ClutchGuard, e) {
       if (now() - f.landed >= 300) {
         const contact = f.cells.some(r => r.confirmed && world.getBlock(r.cell)?.stateId === r.stateId && Math.abs(e.position.y - r.cell.y - 1) < 1e-6 &&
           e.position.x + 0.3 > r.cell.x && e.position.x - 0.3 < r.cell.x + 1 && e.position.z + 0.3 > r.cell.z && e.position.z - 0.3 < r.cell.z + 1)
-        if (bot.health >= f.hp - 0.01 && !pending.size && (contact || f.ladder) && !f.denied) { stats.saved++; emit(g, 'saved', { hp: bot.health, fall: f.fall, ladder: !!f.ladder }) }
+        if (bot.health >= f.hp - 0.01 && !pending.size && (contact || f.ladder || f.cobweb) && !f.denied) { stats.saved++; emit(g, 'saved', { hp: bot.health, fall: f.fall, ladder: !!f.ladder, cobweb: !!f.cobweb }) }
         else emit(g, 'damaged_or_unconfirmed', { hp: bot.health, fall: f.fall, pending: pending.size })
         st.flight = null; st.blocks = 0; st.steering = null; st.ladderPlaced = false
       }
@@ -80,9 +80,18 @@ function planBlock (g: ClutchGuard, s, e, decision) {
   // а самый верхний блок дал бы шаг в 1 блок.
   const deep = !st.blocks && (bot._ndClutchDeep || 0) > now()
   if (deep && (st.peak ?? e.position.y) - e.position.y < 0.4) return decision
-  const count = bot.inventory.slots.slice(36, 45).filter(i => i && FILLER.test(i.name)).reduce((n, i) => n + i.count, 0) - (opts.reserve ?? 0) - [...spent.values()].reduce((n, v) => n + v, 0)
-  const p = api.plan({ state: s, world, peak: st.peak, blockCount: count, maxBlocks: (opts.maxBlocks ?? 3) - st.blocks, entities: bot.entities, selfId: e.id, eyeHeight: eyeHeight(g),
-    canReference: b => !blocked.has(key(b.position)), steer: opts.steer, deep })
+  const sel = available(g)
+  if (!sel) { stats.no_face++; emit(g, 'no_face'); return decision }
+  const cobweb = sel.name === 'cobweb'
+  const hotbarCount = (match: (name: string) => boolean, reserve: number) =>
+    bot.inventory.slots.slice(36, 45)
+      .filter(i => i && match(i.name))
+      .reduce((n, i) => n + Math.max(0, i.count - (spent.get(i.slot) || 0)), 0) - reserve
+  const count = cobweb ? Math.min(1, hotbarCount(n => n === 'cobweb', 0)) : hotbarCount(isFiller, opts.reserve ?? 0)
+  const webState = cobweb ? bot.registry?.blocksByName?.cobweb?.defaultState : undefined
+  const blockFor = cobweb && webState != null ? (cell: any) => g.makeBlock(cell, webState) : undefined
+  const p = api.plan({ state: s, world, peak: st.peak, blockCount: count, maxBlocks: cobweb ? 1 : (opts.maxBlocks ?? 3) - st.blocks, entities: bot.entities, selfId: e.id, eyeHeight: eyeHeight(g),
+    canReference: b => !blocked.has(key(b.position)), steer: opts.steer, deep, cobweb, blockFor })
   if (!p || blocked.has(key(p.cell))) { stats.no_face++; emit(g, 'no_face'); return decision }
   g.scheduled = p
   const snapshot = s.pos.clone()

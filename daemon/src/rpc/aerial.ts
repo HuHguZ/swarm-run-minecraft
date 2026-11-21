@@ -336,9 +336,15 @@ function aerialMethods ({ session }: RpcContext) {
           const fd = S.fd + Math.max(0, (S.lastY ?? b.position.y) - b.position.y)
           if (b.elytraFlying) {
             // Обычный управляемый полёт не перебиваем; авария — смертельное касание или зона смерти в прогнозе.
-            const r = sky.rollout(W, b.position, b.velocity, b.yaw, b.pitch, bot.fireworkRocketDuration || 0, 8, { fd, arena: cfg.arena })
-            const lethal = r.kind === 'floor' && Math.max(0, Math.floor(r.fd + 1e-6 - 3)) >= bot.health
-            if (!lethal && r.p.y > cfg.killY + 1 && !outside && !unmanaged) return
+            // Учитываем ранний обрыв тяги ракеты (boostMin = 0, TODO 05.11 #6): install.ts держит fireworkRocketDuration=40
+            // до entityGone, и прогноз с 40 тиками тяги задерживал спасение ниже killY.
+            const fc = typeof sky.rocketForecast === 'function' ? sky.rocketForecast(bot) : { boost: bot.fireworkRocketDuration || 0, boostMin: 0 }
+            const r = sky.rollout(W, b.position, b.velocity, b.yaw, b.pitch, fc.boost, 8, { fd, arena: cfg.arena })
+            const rMin = fc.boost !== fc.boostMin ? sky.rollout(W, b.position, b.velocity, b.yaw, b.pitch, fc.boostMin, 8, { fd, arena: cfg.arena }) : r
+            const isLethal = (res: any) => res.kind === 'floor' && Math.max(0, Math.floor(res.fd + 1e-6 - 3)) >= bot.health
+            const lethal = isLethal(r) || isLethal(rMin)
+            const hitsKillY = r.p.y <= cfg.killY + 1 || rMin.p.y <= cfg.killY + 1
+            if (!lethal && !hitsKillY && !outside && !unmanaged) return
           }
           const fall = f ? fd + Math.max(0, b.position.y - f.top) : Infinity
           const damage = Math.max(0, Math.floor(fall + 1e-6 - 3))

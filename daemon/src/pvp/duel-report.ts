@@ -25,37 +25,42 @@ export function installReport (ctx: DuelCtx) {
     // Погиб — отчёт сразу: сессия ждёт его 1 с реального времени после смерти (intent-runner), щит и вычерпывание
     // лавы мёртвому не нужны (S7c: у погибшего в ROUND пустые crystal/elytra — отчёт не успевал).
     if (!itemsReleased) await releaseFightItems()
-    bot.removeListener('entityHurt', onHurt)
-    bot.removeListener('physicsTick', onTickSwat)
-    bot.removeListener('physicsTick', onTickArcher)
-    bot.removeListener('entityHurt', onMobHurt)
-    bot.removeListener('death', onSelfDeath)
-    bot.removeListener('physicsTick', onTickFall)
-    bot.removeListener('physicsTick', onTickDmg)
-    edgeGuard.stop()
-    bot.removeListener('nd_mlg', onMlg)
-    if (edgeGuard.stats.saves || edgeGuard.stats.air) st.tricks['рефлекс края: ' + (Object.entries(edgeGuard.stats.why) as [string, any][]).map(([k, v]) => `${k}×${v}`).join(', ')] = 1
-    bot.removeListener('blockBreakProgressObserved', onCrack)
-    bot.removeListener('blockBreakProgressEnd', onCrackEnd)
-    bot.removeListener('path_update', onRoutePath)
-    bot.removeListener('entityDead', onDead)
-    if (ctx.onDeathNotice) bot.removeListener('message', ctx.onDeathNotice)
-    tt.close()
-    if (session.tempo === tt) session.tempo = null
-    mc.close()
-    ctx.pvpSkills.closeEquipment()
-    sky.close()
-    ctx.calc.stop()
-    blk.close()
-    pearlResponse.close()
-    bm.close()
-    cx.close()
-    mf.close()
-    duo.close()
-    util.close()
-    vision.close()
     const human = hm && ctx.prof.player ? hm.report() : undefined
-    if (hm) hm.close()
+    if (ctx.cleanup) {
+      ctx.cleanup()
+    } else {
+      bot.removeListener('entityHurt', onHurt)
+      if (ctx.onDuelTick) bot.removeListener('physicsTick', ctx.onDuelTick)
+      bot.removeListener('physicsTick', onTickSwat)
+      bot.removeListener('physicsTick', onTickArcher)
+      bot.removeListener('entityHurt', onMobHurt)
+      bot.removeListener('death', onSelfDeath)
+      bot.removeListener('physicsTick', onTickFall)
+      bot.removeListener('physicsTick', onTickDmg)
+      edgeGuard.stop()
+      bot.removeListener('nd_mlg', onMlg)
+      bot.removeListener('blockBreakProgressObserved', onCrack)
+      bot.removeListener('blockBreakProgressEnd', onCrackEnd)
+      bot.removeListener('path_update', onRoutePath)
+      bot.removeListener('entityDead', onDead)
+      if (ctx.onDeathNotice) bot.removeListener('message', ctx.onDeathNotice)
+      tt.close()
+      if (session.tempo === tt) session.tempo = null
+      mc.close()
+      ctx.pvpSkills.closeEquipment()
+      sky.close()
+      ctx.calc.stop()
+      blk.close()
+      pearlResponse.close()
+      bm.close()
+      cx.close()
+      mf.close()
+      duo.close()
+      util.close()
+      vision.close()
+      if (hm) hm.close()
+    }
+    if (edgeGuard.stats.saves || edgeGuard.stats.air) st.tricks['рефлекс края: ' + (Object.entries(edgeGuard.stats.why) as [string, any][]).map(([k, v]) => `${k}×${v}`).join(', ')] = 1
     if (st.spearCharges || st.spearSwaps) st.tricks[`копьё: разгонов ${st.spearCharges || 0}, попал ${st.spearChargeHits || 0}; смен копьё↔меч ${st.spearSwaps || 0}`] = 1
     const tricks = Object.keys(st.tricks).length ? st.tricks : undefined
     const ts = tt.stats

@@ -106,20 +106,87 @@ function percentLeft (item) {
   return Math.round(((max - wear(item)) / max) * 100)
 }
 
-function score (item) {
+// Self-contained enchantment reader (no extra require() so isolated VM tests still run).
+function readEnchants (bot, item): Record<string, number> {
+  const out: Record<string, number> = {}
+  if (!item) return out
+  try {
+    const comp = item.componentMap?.get?.('enchantments') ||
+      (Array.isArray(item.components) ? item.components.find(c => c?.type === 'enchantments') : null)
+    const d = comp && comp.data
+    const list = (d && (d.enchantments || (Array.isArray(d) ? d : null))) || null
+    if (Array.isArray(list)) {
+      const reg = bot?.registry?.enchantments
+      for (const x of list) {
+        if (!x) continue
+        const id = x.id ?? x.enchantment
+        const n = typeof id === 'number'
+          ? (reg?.[id]?.name || `id:${id}`)
+          : String(id || '').replace(/^minecraft:/, '')
+        const lvl = Number(x.level ?? x.lvl ?? 1)
+        if (n && lvl > 0) out[n] = Math.max(out[n] || 0, lvl)
+      }
+    }
+  } catch {}
+  try {
+    if (item.ench && typeof item.ench === 'object') {
+      for (const [k, v] of Object.entries(item.ench)) {
+        const n = String(k).replace(/^minecraft:/, '')
+        const lvl = Number(v)
+        if (n && lvl > 0) out[n] = Math.max(out[n] || 0, lvl)
+      }
+    }
+  } catch {}
+  try {
+    if (!Object.keys(out).length && Array.isArray(item.enchants)) {
+      for (const e of item.enchants) {
+        const n = String(e?.name || '').replace(/^minecraft:/, '')
+        const lvl = Number(e?.lvl ?? e?.level ?? 0)
+        if (n && lvl > 0) out[n] = Math.max(out[n] || 0, lvl)
+      }
+    }
+  } catch {}
+  return out
+}
+
+function enchKey (ench: Record<string, number>): string {
+  const keys = Object.keys(ench)
+  if (!keys.length) return ''
+  keys.sort()
+  return keys.map(k => `${k}:${ench[k]}`).join(',')
+}
+
+// Effective protection score (1.21.11 CombatRules + EnchantmentHelper EPF):
+// - armor points + toughness (~0.35 pts per toughness against PvP hits)
+// - Protection: 1 EPF/lvl across ALL damage (~1.1 effective pts/lvl; P4 = +4.4)
+// - Feather Falling: 3 EPF/lvl vs fall damage (~0.5 effective pts/lvl; FF4 = +2.0)
+// - Blast/Fire/Projectile Protection: 2 EPF/lvl vs their damage type (~0.45 pts/lvl)
+// - Utility enchants (unbreaking/mending/thorns/mobility) act as small tiebreakers,
+//   and Unbreaking scales effective durability (vanilla chance 0.6 + 0.4/(L+1)).
+function score (item, bot: any = null) {
   const a = ARMOR[item.name]
   if (!a) return null
+  const ench = readEnchants(bot, item)
+  const prot = ench.protection || 0
+  const ff = ench.feather_falling || 0
+  const spec = (ench.blast_protection || 0) + (ench.fire_protection || 0) + (ench.projectile_protection || 0)
+  const unb = ench.unbreaking || 0
+  const util = (ench.thorns || 0) * 0.15 + unb * 0.1 + (ench.mending ? 0.2 : 0) +
+    ((ench.depth_strider || 0) + (ench.soul_speed || 0) + (ench.swift_sneak || 0) + (ench.respiration || 0) + (ench.aqua_affinity || 0)) * 0.08
+  const eff = a.points + a.tough * 0.35 + prot * 1.1 + ff * 0.5 + spec * 0.45 + util
   const max = item.maxDurability || 0
-  const left = max ? max - wear(item) : Infinity
-  return { points: a.points, tough: a.tough, left, leftFrac: max ? left / max : 1 }
+  const rawLeft = max ? Math.max(0, max - wear(item)) : Infinity
+  const effLeft = Number.isFinite(rawLeft) ? rawLeft / (0.6 + 0.4 / (unb + 1)) : Infinity
+  return { points: a.points, tough: a.tough, eff, left: effLeft, rawLeft, leftFrac: max ? rawLeft / max : 1, ench, key: enchKey(ench) }
 }
 
 // Damage does not reduce protection — a diamond chestplate with 1 durability
 // left still blocks all eight points, right up until it breaks. So durability
-// is a tiebreak here and never part of the ranking.
+// is a tiebreak here and never overrides higher effective protection / enchants.
 function better (x, y) {
   if (!x) return false
   if (!y) return true
+  if (Math.abs(x.eff - y.eff) > 1e-6) return x.eff > y.eff
   if (x.points !== y.points) return x.points > y.points
   if (x.tough !== y.tough) return x.tough > y.tough
   return x.left > y.left
@@ -134,7 +201,7 @@ function choose (candidates) {
   let alt = null
   for (const c of candidates) {
     if (c === best || c.score.leftFrac < HEALTHY) continue
-    if (best.score.points - c.score.points > DOWNGRADE) continue
+    if (best.score.eff - c.score.eff > DOWNGRADE) continue
     if (better(c.score, alt && alt.score)) alt = c
   }
   // Nothing healthy within range: wear the dying piece anyway. Refusing it
@@ -184,14 +251,14 @@ function planSwaps (bot) {
     // «нагрудник на груди» на высоте 14–21 бл.: бой (combat.fight → одеться) и автопилот меняли элитры на нагрудник,
     // полёт гас, «fell from a high place»). Сменит chestDown на земле.
     if (dest === 'torso' && worn && worn.name === 'elytra' && bot.entity && (bot.entity.elytraFlying || !bot.entity.onGround)) continue
-    const wornScore = worn ? score(worn) : null
+    const wornScore = worn ? score(worn, bot) : null
 
     const candidates = []
     if (wornScore) candidates.push({ item: worn, score: wornScore, onBody: true })
     for (const it of bot.inventory.items()) {
       const a = ARMOR[it.name]
       if (!a || a.dest !== dest) continue
-      candidates.push({ item: it, score: score(it), onBody: false })
+      candidates.push({ item: it, score: score(it, bot), onBody: false })
     }
 
     const pick = choose(candidates)
@@ -201,8 +268,9 @@ function planSwaps (bot) {
       slot,
       name: pick.item.name,
       wear: wear(pick.item),
+      enchKey: pick.score.key,
       was: worn ? worn.name : null,
-      gain: pick.score.points - (wornScore ? wornScore.points : 0),
+      gain: Math.round((pick.score.eff - (wornScore ? wornScore.eff : 0)) * 100) / 100,
       // The only way gain goes negative: the cliff rule traded points for a
       // slot that will still be there after the fight. Say so out loud.
       note: wornScore && wornScore.leftFrac < CLIFF ? 'старое почти сломано' : undefined
@@ -223,25 +291,28 @@ function planSwaps (bot) {
 function ensurePiglinSafePlan (bot, plan) {
   if (bot.game?.dimension !== 'the_nether') return
   const gold = [...SLOTS.map(([, slot]) => bot.inventory.slots[slot]), ...bot.inventory.items()]
-    .filter(item => item && /^golden_/.test(item.name) && ARMOR[item.name] && score(item).left > 0)
+    .filter(item => item && /^golden_/.test(item.name) && ARMOR[item.name] && score(item, bot).left > 0)
     .map(item => {
       const dest = ARMOR[item.name].dest
       const slot = SLOTS.find(([name]) => name === dest)[1]
       const planned = plan.find(step => step.dest === dest)
-      const normal = ARMOR[planned?.name ?? bot.inventory.slots[slot]?.name]
-      const goldScore = score(item)
-      return { item, dest, slot, loss: (normal?.points ?? 0) - goldScore.points,
-        toughnessLoss: (normal?.tough ?? 0) - goldScore.tough, left: goldScore.left }
+      const plannedItem = planned ? findAgain(bot, planned) : null
+      const normalItem = plannedItem || bot.inventory.slots[slot]
+      const normalScore = normalItem ? score(normalItem, bot) : null
+      const goldScore = score(item, bot)
+      return { item, dest, slot, goldScore, loss: (normalScore?.eff ?? 0) - goldScore.eff,
+        toughnessLoss: (normalScore?.tough ?? 0) - goldScore.tough, left: goldScore.left }
     })
     .sort((a, b) => a.loss - b.loss || a.toughnessLoss - b.toughnessLoss || b.left - a.left)[0]
   if (!gold) return
   const previous = plan.findIndex(step => step.dest === gold.dest)
   if (previous >= 0) plan.splice(previous, 1)
   const worn = bot.inventory.slots[gold.slot]
-  if (worn?.name === gold.item.name && wear(worn) === wear(gold.item)) return
+  const wornScore = worn ? score(worn, bot) : null
+  if (worn?.name === gold.item.name && wear(worn) === wear(gold.item) && wornScore?.key === gold.goldScore.key) return
   // PiglinAi.isWearingSafeArmor needs one gold piece; equip it before removing the old one.
-  plan.push({ dest: gold.dest, slot: gold.slot, name: gold.item.name, wear: wear(gold.item), was: worn?.name ?? null,
-    gain: ARMOR[gold.item.name].points - (worn ? score(worn)?.points ?? 0 : 0), note: 'золото для пиглинов' })
+  plan.push({ dest: gold.dest, slot: gold.slot, name: gold.item.name, wear: wear(gold.item), enchKey: gold.goldScore.key, was: worn?.name ?? null,
+    gain: Math.round((gold.goldScore.eff - (wornScore ? wornScore.eff : 0)) * 100) / 100, note: 'золото для пиглинов' })
 }
 
 // Only ever fills an EMPTY off-hand. Whatever is already in there was put there
@@ -251,7 +322,7 @@ function shieldStep (bot) {
   if (bot.inventory.slots[OFF_HAND]) return null
   const shield = bot.inventory.items().find(i => i.name === 'shield')
   if (!shield) return null
-  return { dest: 'off-hand', slot: OFF_HAND, name: shield.name, wear: wear(shield), was: null, gain: 0 }
+  return { dest: 'off-hand', slot: OFF_HAND, name: shield.name, wear: wear(shield), enchKey: enchKey(readEnchants(bot, shield)), was: null, gain: 0 }
 }
 
 // Kept out of readWorn on purpose: defenseOf() sums points over everything
@@ -289,10 +360,14 @@ function whyNotEquip (bot) {
 
 // The plan was made a few clicks ago and item.slot is a snapshot: the previous
 // swap, or the autopilot juggling food through the hotbar, may have moved the
-// piece since. Find it again by what it is rather than by where it was — two
-// stacks with the same name and the same damage are interchangeable.
+// piece since. Find it again by what it is rather than by where it was — match
+// name, damage AND enchantments so an unenchanted duplicate can never substitute
+// for a Protection/Feather Falling piece.
 function findAgain (bot, step) {
-  return bot.inventory.items().find(i => i.name === step.name && wear(i) === step.wear) || null
+  const wantKey = step.enchKey ?? ''
+  return bot.inventory.items().find(i =>
+    i.name === step.name && wear(i) === step.wear && enchKey(readEnchants(bot, i)) === wantKey
+  ) || null
 }
 
 async function swap (bot, step) {
@@ -306,11 +381,12 @@ async function swap (bot, step) {
   return { ok: true }
 }
 
-// Damage is part of the check because a swap may be one iron helmet for a
-// fresher iron helmet, and the name alone cannot tell those two apart.
+// Damage and enchantments are part of the check because a swap may be one
+// piece for a better-enchanted or fresher piece of the same name.
 function isWorn (bot, step) {
   const now = bot.inventory.slots[step.slot]
-  return !!(now && now.name === step.name && wear(now) === step.wear)
+  const wantKey = step.enchKey ?? ''
+  return !!(now && now.name === step.name && wear(now) === step.wear && enchKey(readEnchants(bot, now)) === wantKey)
 }
 
 // Armour slots get no acknowledgement on 1.21.11. clickWindow only awaits a
@@ -432,5 +508,5 @@ function armorReport (session) {
   }
 }
 
-module.exports = { equipBestArmor, armorReport, readWorn, readOffHand, defenseOf, ARMOR, OFF_HAND }
-export { equipBestArmor, armorReport, readWorn, readOffHand, defenseOf, ARMOR, OFF_HAND }
+module.exports = { equipBestArmor, armorReport, readWorn, readOffHand, defenseOf, planSwaps, score, ARMOR, OFF_HAND }
+export { equipBestArmor, armorReport, readWorn, readOffHand, defenseOf, planSwaps, score, ARMOR, OFF_HAND }

@@ -189,9 +189,16 @@ async function breakAway (rf: RefugeRun) {
   // Ад, нора (ND_NE_REFUGE_HOLE): от брута/пиглина не оторваться — копать сразу, удар-другой до дна дешевле бега под ударами.
   if (rf.a.nether && rf.pick.how === 'hole' && process.env.ND_NE_REFUGE_HOLE === '1') return
   for (let k = 0; k < 2 && !ctl.aborted && outrun(rf.a, rf.pick.how); k++) {
+    const near = rf.a.nearest
     // От паука не оторваться — с ним бой (если он один на один), а не рывок.
-    if (process.env.ND_REFUGE_SPIDER !== '0' && /^(spider|cave_spider)$/.test(rf.a.nearest.name) && await spiderFirst(rf)) continue
-    step(`${rf.a.nearest.name} в ${rf.a.nearest.d} бл. дойдёт за ${(rf.a.nearest.etaMs / 1000).toFixed(1)} с, стройка ~${(buildMsOf(rf.a, rf.pick.how) / 1000).toFixed(1)} с — сперва отрываюсь`)
+    if (near && process.env.ND_REFUGE_SPIDER !== '0' && /^(spider|cave_spider)$/.test(near.name) && await spiderFirst(rf)) continue
+    if (near) {
+      step(`${near.name} в ${near.d} бл. дойдёт за ${(near.etaMs / 1000).toFixed(1)} с, стройка ~${(buildMsOf(rf.a, rf.pick.how) / 1000).toFixed(1)} с — сперва отрываюсь`)
+    } else if (rf.a.owRanged) {
+      step(`обстрел (${rf.a.owRanged.shots?.length ?? 1} стрелк.), стройка ~${(buildMsOf(rf.a, rf.pick.how) / 1000).toFixed(1)} с — сперва отрываюсь`)
+    } else {
+      step(`угроза рядом, стройка ~${(buildMsOf(rf.a, rf.pick.how) / 1000).toFixed(1)} с — сперва отрываюсь`)
+    }
     const p0 = bot.entity.position.clone()
     const f = await flee.smartFlee(session, ctl, { timeoutMs: REFUGE_FLEE_MS, safeDist: 10 })
     const moved = bot.entity.position.distanceTo(p0)
@@ -216,7 +223,8 @@ async function tryRefuge (rf: RefugeRun, how): Promise<RefugeTurn> {
     rf.a = refugeLook(session)
     if (rf.a.nearest && rf.a.nearest.d <= 8) { step(`${how}: ${rf.a.nearest.name} в ${rf.a.nearest.d} бл. — не успеть, бегство`); return 'next' }
     if (outrun(rf.a, how)) {
-      step(`${how}: ${rf.a.nearest.name} в ${rf.a.nearest.d} бл. — сперва рывок`)
+      const near = rf.a.nearest
+      step(near ? `${how}: ${near.name} в ${near.d} бл. — сперва рывок` : `${how}: обстрел (${rf.a.owRanged?.shots?.length ?? 1} стрелк.) — сперва рывок`)
       const f = await flee.smartFlee(session, ctl, { timeoutMs: REFUGE_FLEE_MS, safeDist: 10 })
       out.ran = (out.ran || 0) + (f.ran || 0)
       await (require('.././fortify') as typeof import('.././fortify')).landed(bot, 600)

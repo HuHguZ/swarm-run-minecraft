@@ -1,7 +1,7 @@
 // Рой (swarm.ts): приёмы — очки по обстановке, выбор и гистерезис — и места строя (formation, смена линий).
 import type { SharedEnemy, SwarmPosition, SwarmMember, Doctrine } from './types'
 import { type SwarmBoard, liveMembers, pvpState } from './board'
-import { ratio, count, doctrines, distance } from './common'
+import { ratio, count, doctrines, distance, hasShield } from './common'
 import { memberFight, TEAM_LINK } from './fight'
 
 export const CONTACT_FRESH_MS = 1000
@@ -29,7 +29,7 @@ export function doctrineScores(board: SwarmBoard, members: SwarmMember[], focus?
   if (foes.length) {
     const healers = team.filter(m => m.role === 'healer' && m.canHeal).length
     // A defended healing ring competes with terrain/build/push opportunities; merely holding a bow cannot veto them.
-    scores.ring = foes.some(e => e.threat === 'bow' || e.threat === 'aerial' || /^(bow|crossbow)$/.test(e.equipment?.weapon || '')) ? 3 + healers + team.filter(m => count(m.inventory, 'shield') > 0).length * .5 : 0
+    scores.ring = foes.some(e => e.threat === 'bow' || e.threat === 'aerial' || /^(bow|crossbow)$/.test(e.equipment?.weapon || '')) ? 3 + healers + team.filter(m => hasShield(m)).length * .5 : 0
     // Скорость окружения зависит от движения его цели. Начатый кокон допускает небольшой сдвиг.
     const { center, primary } = focus ?? doctrineFocus(team, foes, board.now())
     if (primary && !primary.nametag && !primary.glowing && now - primary.seenAt <= CONTACT_FRESH_MS && team.some(m => ratio(m) < .6)) {
@@ -48,7 +48,9 @@ export function doctrineScores(board: SwarmBoard, members: SwarmMember[], focus?
       return sp > .1 && (v.x * dx + v.z * dz) / (sp * d) > .5 }
     // Начатый ложный отход — манёвр до схватки, а не отклик на скорость: «идёт на нас» дрожит с каждым шагом врага, и приём
     // мигал с ложной слабостью каждые полсекунды (стенд 15×15, 21.10: «goto ↔ засада» 104 раза за 2 мин).
-    scores['false-retreat'] = foes.some(charging) || board.doctrineState()?.doctrine === 'false-retreat' ? team.length * .8 : 0
+    const feignedRally = board.factView('feigned-rally')
+    const feignedActive = cur === 'false-retreat' && (!feignedRally || now - feignedRally.seenAt < 8000)
+    scores['false-retreat'] = foes.some(charging) || feignedActive ? team.length * .8 : 0
     // Обманки (ложные отход и слабость) — до схватки: в свалке «враг движется» верно всегда, и приём мигал с ложной
     // слабостью каждые 1–3 с, обрывая походы и бой (стенд 15×15, 21.10: 109 + 100 смен фазы за раунд). Схватка (враг в
     // 6 бл. от любого своего) выключает их до конца эпизода — пока враги снова не пропадут из виду; иначе отскок за 6 бл.
@@ -95,10 +97,23 @@ export function keepDoctrine(board: SwarmBoard, members: SwarmMember[], aggressi
   // линии, кольцо щитов, «слабый центр» — против людей это толпа, что стоит или бежит (соло-арена 14.10: «стояли рядом и
   // не били», «стоят толпой на открытом — вырезаю как дурачков»).
   if (aggressive) for (const d of PASSIVE) scores[d] = -Infinity
-  const best = doctrines.slice().sort((a, b) => scores[b] - scores[a])[0]
+  const now = board.now()
   const cur = board.doctrineState()
-  const keep = cur && cur.doctrine !== best && scores[cur.doctrine] > 0 && scores[best] - scores[cur.doctrine] < 1.5
-  const chosen = keep ? cur!.doctrine : best
+  const state = pvpState(board)
+  // Короткая память недавней взрывной угрозы убирает секундные переключения hunt ↔ fountain при смене слота кристалла.
+  if (scores.fountain > 0) state.blastUntil = Math.max(state.blastUntil ?? -Infinity, now + 5000)
+  else if (cur?.doctrine === 'fountain' && (state.blastUntil ?? -Infinity) > now) {
+    scores.fountain = 10 + liveMembers(board, members).length * .8
+  }
+  const best = doctrines.slice().sort((a, b) => scores[b] - scores[a])[0]
+  const age = cur ? Math.max(0, now - cur.since) : Infinity
+  // Цена перестроения команды (обрыв походов, боя и сброса): выше сразу после смены, затухает за 6 с.
+  // Смена линий (line) срабатывает сразу при реальной усталости переднего ранга, не задерживаясь гистерезисом.
+  const switchCost = best === 'line' ? 1.5 : 2.5 + 4 * Math.max(0, 1 - age / 6000)
+  const keepValid = cur && cur.doctrine !== best && scores[cur.doctrine] > 0 && scores[best] - scores[cur.doctrine] < switchCost
+  // Мимолётный триггер (прыжок на 0.5 с → wave) не дёргает строй обратно через секунду, пока приём не запрещён и нет срочного взрыва/смены линий.
+  const keepFresh = cur && cur.doctrine !== best && scores[cur.doctrine] >= 0 && age < 4000 && best !== 'fountain' && best !== 'line'
+  const chosen = keepValid || keepFresh ? cur!.doctrine : best
   board.setDoctrine(chosen)
   return chosen
 }

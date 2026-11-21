@@ -68,14 +68,18 @@ export function watchAlarm (ctx: ArenaContext) {
       // обрывала спуск к нему каждые 5 с).
       // Но поход к его старому месту, когда он уже в другом и ближе цели похода (вбежал в комнату, спрыгнул), или когда он
       // уже рядом — не ответ: рвать (стенд бота-противника 22.10: лез ко мне наверх 5 с, а я стоял в 5 бл. от него).
-      const hunting = b.last?.p?._hunt && !b.swarmTask?.data?.dig
-      if (hunting && (!Number.isFinite(b.last.p.x) || !Number.isFinite(b.last.p.z) || /^(flee|recover)$/.test(b.swarmTask?.kind || ''))) continue
+      if (b.last?.p?._hunt && /^(flee|recover)$/.test(b.swarmTask?.kind || '')) continue
+      const hunting = b.last?.p?._hunt && !b.swarmTask?.data?.dig &&
+        !/^(loot|scout)$/.test(b.swarmTask?.kind || '') && !b.swarmTask?.data?.search && !b.swarmTask?.data?.reserve && !b.swarmTask?.data?.gather
+      if (hunting && (!Number.isFinite(b.last.p.x) || !Number.isFinite(b.last.p.z))) continue
       // Выход из коробки и активный облёт уже отвечают на угрозу, даже если лут ещё числится за бойцом.
       if (b.campReacting || b.last?.m === 'wing_orbit' && b.last.pending === true) continue
-      if (busy.has(b.name) || (!b.looting && (/^(fight|drink_buffs|pearl_to|wind_jump|burrow|flee|block_behind|evade|douse_lava|fly_to|peek_shot|wind_leap|juke|take_cover|undercut)$/.test(b.last?.m || '') || b.waiting))) continue
+      if (busy.has(b.name) || (!b.looting && (/^(fight|drink_buffs|pearl_to|wind_jump|burrow|flee|block_behind|evade|douse_lava|lava_escape|dodge_blast|clear_web|eat|antidote|swarm_hold|pearl_ambush|pearl_trap|boost_lance|boost_shot|fly_to|peek_shot|wind_leap|juke|take_cover|undercut)$/.test(b.last?.m || '') || b.waiting))) continue
       const en = ctx.enemiesOf(b, m.p)
       const now = Date.now()
-      const hot = en.filter(e => alarmThreat(e, m.p, now) && (!hunting || huntOver(b.last.p, m.p, e, now)))
+      const hitRecently = m.hurtTick > 0 && Number.isFinite(m.tick) && m.tick - m.hurtTick <= 20
+      const hot = en.filter(e => (alarmThreat(e, m.p, now) || hitRecently && e.d <= 8 && (e.seenAt == null || recentBody(e, now))) &&
+        (!hunting || hitRecently || huntOver(b.last.p, m.p, e, now)))
       if (!hot.length) continue
       // При смертельном подкопе цену удара считает тело по оставшейся копке; обычную яму контакт по-прежнему прерывает.
       if (b.swarmTask?.data?.dig && (b.swarmTask.data.undermine || hot.every(e => e.d > 3.5))) continue
@@ -471,7 +475,7 @@ export function watchStatus (ctx: ArenaContext) {
       // The old frozen anchor predates a fresh escape; allow its first movement sample.
       if (/^(flee|evade|juke)$/.test(b.last?.m || '') && Date.now() - b.last.at < Math.min(5, (b.last.p?.timeoutSeconds ?? 3) + 2) * 1000) continue
       // Враг вплотную, а я стою и не в бою — это хуже всего (10.10: «стоит рядом, не атакует, я ваншочу»): 3 с; иначе 5 с.
-      const near = ctx.enemiesOf(b, m.p).some(e => e.d < 3)
+      const near = ctx.enemiesOf(b, m.p).some(e => e.d < 3 && (e.seenAt == null || recentBody(e, Date.now())))
       if ((near && b.last?.m === 'fight') || still < (b.last?.m === 'fight' ? 8000 : near ? 3000 : 5000)) continue
       const L0 = b.last || {}
       const goal = localAction ? null : L0.p?.at || L0.p?.to || L0.p
@@ -603,9 +607,10 @@ export function watchStatus (ctx: ArenaContext) {
       // Зелья (12.10: «кидаю зелья — стоят со щитом и помирают; видно же, что я взял зелье»): щит брызги не держит. Летит
       // вредное (или неизвестное) и ляжет в 4.5 бл. — рывок на 5 бл. от точки падения; у врага взрывное вредное в руке, а
       // свой стоит вплотную (≤ 2.5 бл.) — разойтись на 4, чтобы одно зелье не накрыло двоих.
+      const isHostile = (id: string) => ctx.hostile ? ctx.hostile(b, id) : (teams ? teamOf(id) !== b.team && !(rel?.[b.team]?.[id] > 0) : true)
       const dz = s.detail?.dangers
       if (!below && dz && !s.detail?.rescuing && ctx.alive(b.name) && !out.has(b.name)) {
-        const holder = (dz.holders || []).find(hd => teams ? teamOf(hd.name) !== b.team && !(rel[b.team][hd.name] > 0) : true)
+        const holder = (dz.holders || []).find(hd => isHostile(hd.name))
         // В рукопашной (враг в 3.5 бл.) не расходиться: отход на 4 бл. дарит ему удары, а бой рвался — каждый четвёртый
         // оборванный бой стенда 15×15 был «расходимся» (21.10: 24 из 94).
         // Идущий бой — тоже: человек держит зелье в руке не бросая, и «расходимся» рвал подход каждые 1–2 с (игра пользователя
@@ -614,7 +619,7 @@ export function watchStatus (ctx: ArenaContext) {
         // пользователя 25.10: «толпятся сверху — зельями херачу, подыхают»). Рукопашная в 3.5 бл. — по-прежнему стоять.
         const close = holder ? names.filter(n => n !== b.name && teamOf(n) === b.team && ctx.alive(n) && pos[n]?.p && Math.hypot(pos[n].p.x - p.x, pos[n].p.z - p.z) <= 2.5) : []
         const melee = (b.last?.m === 'fight' && b.last.pending !== false && close.length < 2) ||
-          (s.detail?.sightings || []).some(e => e.id !== b.name && teamOf(e.id) !== b.team && dist3(e.position, p) <= 3.5)
+          (s.detail?.sightings || []).some(e => e.id !== b.name && isHostile(e.id) && dist3(e.position, p) <= 3.5)
         const mate = holder && !melee && close[0]
         const old = spreading.get(b)
         if (!holder || old && (!pos[old.mate]?.p || dist3(pos[old.mate].p, p) >= 4)) spreading.delete(b)
@@ -628,7 +633,7 @@ export function watchStatus (ctx: ArenaContext) {
       const dt = was && was.p && tick > was.tick ? tick - was.tick : 0
       const v = dt ? { x: (p.x - was.p.x) / dt, y: (p.y - was.p.y) / dt, z: (p.z - was.p.z) / dt } : { x: 0, y: 0, z: 0 }
       // «Ранен» — только рядом с противником (≤ 8 бл.): своя посадка и удар о землю — не повод его добивать.
-      const foeNear = (s.detail?.sightings || []).some(e => e.id !== b.name && teamOf(e.id) !== b.team && dist3(e.position, p) <= 8)
+      const foeNear = (s.detail?.sightings || []).some(e => e.id !== b.name && isHostile(e.id) && dist3(e.position, p) <= 8)
       const hurtTick = was && s.state.health < was.hp && foeNear ? tick : (was ? was.hurtTick : 0)
       if (!below && was && teams) {
         const visibleHumans = (s.detail?.sightings || []).filter(e => !names.includes(e.id))
@@ -658,6 +663,17 @@ export function watchStatus (ctx: ArenaContext) {
         if (!prev || prev.id !== clockId || prev.owner !== s.state.busy) holdClock.set(askedAction, { id: clockId, startTick: tick, owner: s.state.busy })
       }
       const frameAt = was?.frame === frame && was?.clockId === clockId ? (was.frameAt ?? now) : now
+      // Запоминаем живую позицию на арене до смерти/телепорта возрождения: readDeaths иначе мерял 46–94 бл. до спавна
+      // (в том числе после мгновенного респауна от взрыва кристалла/якоря, когда спавн внутри арены и был кадр с hp<=0).
+      const inArena = !below && Number.isFinite(ctx.R) && Math.hypot(p.x - X, p.z - Z) <= ctx.R + 4
+      if (inArena && s.state.health > 0 && !out.has(b.name) && !deadNow.has(b.name)) {
+        const respawned = !!was && was.hp <= 0
+        if (b.lastLivePos?.round === observedRound && (respawned || !was?.gliding && dist3(p, b.lastLivePos.p) > 25)) {
+          b.prevLivePos = { p: { ...b.lastLivePos.p }, at: b.lastLivePos.at, round: observedRound }
+          if (respawned) b.respawnedAt = now
+        }
+        b.lastLivePos = { p: { ...p }, at: now, round: observedRound }
+      }
       pos[b.name] = { p, v, hp: s.state.health, food: s.state.food, gliding: !!s.state.gliding, rescuing: !!s.detail?.rescuing, combo: s.detail?.combo || null, lance: s.state.lance || null, hurtTick, tick, frame, clockId, frameAt, observedAt: now, tactics: s.state.tactics, pots: (s.state.inventory || {}).splash_potion || 0, inv: withOffHand(s.state.inventory, s.state.offHand), attackArrows: s.state.attackArrows, armor: s.state.armor || {}, offHand: s.state.offHand || null, potions: s.state.potions || {}, enchants: s.detail?.ownEnchants || [], labNeed: labNeed[b.name] || [], water: !!s.detail?.water }
       pos[b.name].watchRound = observedRound
       pos[b.name].hpAskedAt = asked

@@ -13,6 +13,7 @@ import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 import { webSmash } from '../mace/web'
 import { isMeleeWeapon } from './damage-model'
 import { smashShieldAim } from '../combat/shield'
+import { tridents, wetOrRain } from '../utility/trident'
 
 // Булава сверху: тотем, щит, жемчуг или бег.
 export async function maceDefenseTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -215,13 +216,28 @@ export async function smashTurn (ctx: DuelCtx, turn: TurnFrame) {
     // Булава и заряд есть, а взлёта нет — почему (smashCheck), раз в 4 с: отказ молчал, и взлётов за раунд было по одному.
     else if (!sp0 && ready('smashWhyNote') && findItem(bot, i => i.name === 'mace')) { const why = mace.smashCheck?.(bot, ctx.entity, probe)?.why; if (why) { rest('smashWhyNote', 4000); used('булава: не взлетаю — ' + why) } }
     // Нет заряда для взлёта — «Тягун» трезубцем вместо него (дождь/вода), удар булавой с падения.
+    // Прежде чем опускать активный щит и сбрасывать прицел, убедиться, что «Тягун» вообще возможен (дождь/вода + трезубец + булава + дистанция).
     if (!sp0 && !hitSoon && (ctx as any).util?.riptideSmash) {
-      if (guard) await guard.raise(false)
-      // Взгляд — свой на заряд и выпуск: прицел боя каждый тик поворачивал к врагу и сбивал рывок (riptide_release_aim_changed).
-      ctx.aim = 'free'
-      let r
-      try { r = await (ctx as any).util.riptideSmash(ctx.entity, ctl) } finally { ctx.aim = 'target' }
-      if (r?.ok) { await holdWeapon(); return NEXT }
+      const canRiptide = (() => {
+        try {
+          if (!ctx.entity?.position || !ctx.entity.onGround || (bot.health ?? 0) < 12) return false
+          const me0 = bot.entity?.position
+          if (!me0) return false
+          const dist = Math.hypot(ctx.entity.position.x - me0.x, ctx.entity.position.z - me0.z)
+          if (dist < 4 || dist > 14) return false
+          if (!findItem(bot, i => i.name === 'mace')) return false
+          if (!tridents(bot).some(t => t.riptide > 0)) return false
+          return !!wetOrRain(bot)
+        } catch { return false }
+      })()
+      if (canRiptide) {
+        if (guard) await guard.raise(false)
+        // Взгляд — свой на заряд и выпуск: прицел боя каждый тик поворачивал к врагу и сбивал рывок (riptide_release_aim_changed).
+        ctx.aim = 'free'
+        let r
+        try { r = await (ctx as any).util.riptideSmash(ctx.entity, ctl) } finally { ctx.aim = 'target' }
+        if (r?.ok) { await holdWeapon(); return NEXT }
+      }
     }
     if (sp && (!ctx.failedSmash || ctx.failedSmash.inputs !== windInputs(ctx.failedSmash.native))) {
       const first = maceChain.choose(bot.entity.position.y, true)

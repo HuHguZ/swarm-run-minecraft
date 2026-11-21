@@ -198,7 +198,20 @@ function hazardMethods ({ session, gameClock }: RpcContext) {
           })
           if (!at) { why = 'web_not_in_pick'; break }
           const block = bot.blockAt(at), before = webs().length
-          remaining = tools.bestFor(bot, block).ms; started = gameClock.now()
+          const best = tools.bestFor(bot, block)
+          remaining = best.ms; started = gameClock.now()
+          check()
+          if (why) break
+          if (best.item && bot.heldItem !== best.item) {
+            try { await bot.equip(best.item, 'hand') } catch {}
+            if (ctl.aborted || why) break
+          }
+          remaining = typeof bot.digTime === 'function'
+            ? bot.digTime(block)
+            : (typeof block?.digTime === 'function'
+                ? block.digTime(bot.heldItem?.type ?? null, false, !!bot.entity?.isInWater, !bot.entity?.onGround)
+                : best.ms)
+          started = gameClock.now()
           check()
           if (why) break
           await bot.lookAt(at.offset(.5, .5, .5), true)

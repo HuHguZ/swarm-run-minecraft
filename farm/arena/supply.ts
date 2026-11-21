@@ -221,29 +221,28 @@ export function installSupply (ctx: ArenaContext) {
 
 export async function startTactics (ctx: ArenaContext) {
   const { i, teams, arms, bots, pos, busy, labNeed, brewed, alchemist, log, sleep } = ctx
-  // Роли пересчитываются при смене состава или снаряжения; период опроса не задаёт срок роли.
-  const roles: Record<string, string> = {}
-  let assigned = ''
-  const assign = () => {
-    if (!teams) return
+  // В режиме arms роли ведёт swarm-driver/team.ts; прежний 250мс таймер rolesT убран, в обычном team роли печатаются по смене.
+  let lastLine = ''
+  const logLegacyRoles = () => {
+    if (!teams || arms) return
     const members = bots.filter(b => pos[b.name] && (!ctx.alive || ctx.alive(b.name))).map(b => ({ name: b.name, team: b.team, inv: pos[b.name].inv || {}, armor: pos[b.name].armor || {} })).sort((a, b) => a.name.localeCompare(b.name))
-    const key = JSON.stringify(members.map(b => [b.name, b.team, Object.entries(b.inv).filter(([, n]) => Number(n) > 0).sort(([a], [b]) => a.localeCompare(b)), Object.entries(b.armor).sort(([a], [b]) => a.localeCompare(b))]))
-    if (key === assigned) return
-    assigned = key
-    for (const n of Object.keys(roles)) delete roles[n]
+    const roles: Record<string, string> = {}
     for (const t of ['red', 'blue']) Object.assign(roles, crowd.assignRoles(members.filter(b => b.team === t), tierOf))
-    log('роли: ' + ['red', 'blue'].map(t => (t === 'red' ? '🟥 ' : '🟦 ') + bots.filter(b => b.team === t).map(b => `${b.name.replace('NeuroFarm' + i, '#') || '#'}=${roles[b.name] || '?'}`).join(' ')).join('  '))
+    const line = 'роли: ' + ['red', 'blue'].map(t => (t === 'red' ? '🟥 ' : '🟦 ') + bots.filter(b => b.team === t).map(b => `${b.name.replace('NeuroFarm' + i, '#') || '#'}=${roles[b.name] || '?'}`).join(' ')).join('  ')
+    if (line === lastLine) return
+    lastLine = line
+    log(line)
   }
   await sleep(600)
-  assign()
-  const rolesT = setInterval(assign, 250)
+  logLegacyRoles()
   const tactT = setInterval(() => {
     if (!teams) return
+    logLegacyRoles()
     if (arms && !ctx.between && Date.now() - ctx.roundT0 > Number(process.env.ROUND_S || 420) * 1000) ctx.endRound(true).catch(() => {})
     if (arms && !ctx.between) for (const t of ['red', 'blue']) {
       const chef = bots.find(b => b.name === alchemist[t])
       if (chef && !busy.has(chef.name) && !brewed[t + 'strong_healing'] && (labNeed[chef.name] || []).length && labNeed[chef.name].every(x => (pos[chef.name]?.inv || {})[x])) { log(`⚗ ${chef.name}: набор собран — снова в лабораторию`); ctx.brewTask(chef, t) }
     }
   }, 2000)
-  return { rolesT, tactT }
+  return { tactT }
 }

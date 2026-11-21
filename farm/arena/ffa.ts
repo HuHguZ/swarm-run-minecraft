@@ -135,9 +135,9 @@ async function run (i, kit = 'elytra', { teams = false, arms = false } = {}) {
   const { mobPollT, frozenT, poll } = watchStatus(ctx)
   const boardT = watchBoard(ctx)
   if (arms) { ctx.roundT0 = Date.now(); if (process.env.ARMS_PHASES === '1') await ctx.armsPrep() }
-  const { rolesT, tactT } = await startTactics(ctx)
+  const { tactT } = await startTactics(ctx)
   await Promise.all(bots.map(b => fighterLoop(ctx, b)))
-  clearInterval(poll); if (refillT) clearInterval(refillT); if (fallT) clearInterval(fallT); if (rescueT) clearInterval(rescueT); clearInterval(frozenT); if (mobPollT) clearInterval(mobPollT); if (mobT) clearInterval(mobT); clearInterval(humanT); clearInterval(boostT); clearInterval(lootWatch); clearInterval(giftT); clearInterval(boardT); clearInterval(announce); clearInterval(rolesT); clearInterval(tactT)
+  clearInterval(poll); if (refillT) clearInterval(refillT); if (fallT) clearInterval(fallT); if (rescueT) clearInterval(rescueT); clearInterval(frozenT); if (mobPollT) clearInterval(mobPollT); if (mobT) clearInterval(mobT); clearInterval(humanT); clearInterval(boostT); clearInterval(lootWatch); clearInterval(giftT); clearInterval(boardT); clearInterval(announce); clearInterval(tactT)
   for (const b of bots) await b.c.call('stop').catch(() => {})
   log('итог (убил/умер) ' + ctx.board())
   process.exit(0)

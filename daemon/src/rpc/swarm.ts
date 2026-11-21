@@ -77,7 +77,38 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
       const outside = (q) => q.x !== cell.x || q.z !== cell.z || q.y < cell.y || q.y >= cell.y + 2
       if (outside(F.feetCell(bot))) { box?.close(); return { left: true, at: bot.entity.position } }
       if (!box && !F.enclosure(bot, cell).sealed && F.enclosure(bot, cell).open.some(s => s.feet && s.head)) return { left: false, why: 'не заперт', at: bot.entity.position }
-      const out = await F.breakOut(bot, cell, { toward: p.toward || null, away: p.away || box?.away || null })
+      let wakeAbort: (() => void) | null = null
+      const aborted = new Promise<any>(resolve => { wakeAbort = () => resolve({ ok: false, steps: ['прервано'] }) })
+      const onAbort = () => {
+        try { bot.stopDigging?.() } catch {}
+        try { bot.clearControlStates?.() } catch {}
+        wakeAbort?.()
+      }
+      ctl.onAbort?.push(onAbort)
+      const guardedBot = new Proxy(bot, { get(target, prop) {
+        if (prop === 'dig') return (...args) => {
+          if (ctl.aborted) return Promise.reject(new Error('прервано'))
+          return target.dig(args[0], args[1], args[2], args[3] || ctl)
+        }
+        if (['equip', 'unequip', 'look', 'lookAt'].includes(String(prop))) return (...args) => {
+          if (ctl.aborted) return Promise.reject(new Error('прервано'))
+          return target[prop](...args)
+        }
+        if (['setControlState', 'clearControlStates'].includes(String(prop))) return (...args) => {
+          if (ctl.aborted) return
+          return target[prop](...args)
+        }
+        const v = target[prop]; return typeof v === 'function' ? v.bind(target) : v
+      } })
+      let out
+      try {
+        if (ctl.aborted) return { left: false, why: 'прервано' }
+        const breaking = F.breakOut(guardedBot, cell, { toward: p.toward || null, away: p.away || box?.away || null, ctl })
+        breaking.catch(() => {})
+        out = await Promise.race([breaking, aborted])
+      } finally {
+        const i = ctl.onAbort?.indexOf(onAbort); if (i >= 0) ctl.onAbort.splice(i, 1)
+      }
       if (ctl.aborted) return { left: false, why: 'прервано' }
       if (!out.ok) {
         await F.leaveSealedCell(session, ctl, p.toward || null)
@@ -180,23 +211,34 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
     fight_guard: async (p) => ({ status: 'done', detail: require('../combat').requestFightGuard(session, p || {}), events: [], state: session.state() }),
     // Выпить баффы, которых на мне нет (арена 10.10: «пусть ускоряются жёстко и мочат»; в рюкзаках по 2–6 зелий, бой их
     // не пил). Зелье узнаётся по potion_contents (pvp.potionOf): скорость — swiftness, сила — strength, реген, огнестойкость.
-    drink_buffs: async (p) => session.immediate(async () => {
-      session.require()
-      const bot = session.bot
+    drink_buffs: async (p) => session.runIntent('drink_buffs', async ctl => {
+      const bot = session.require()
       const { potionOf } = require('../pvp')
       const EFF = { swiftness: 'speed', strength: 'strength', regeneration: 'regeneration', fire_resistance: 'fire_resistance', turtle_master: 'resistance', leaping: 'jump_boost' }
       const want = (p && p.kinds) || ['swiftness', 'strength']
       const norm = (n) => String(n || '').toLowerCase().replace(/^minecraft:/, '').replace(/_/g, '')
       const has = (eff) => Object.values(bot.entity.effects || {}).some((e: any) => norm(bot.registry.effects?.[e.id]?.name) === norm(eff))
       const drunk = []
-      for (const k of want) {
-        if (has(EFF[k])) continue
-        const it = bot.inventory.items().find(i => i.name === 'potion' && (potionOf(i) || '').replace(/^(long|strong)_/, '') === k)
-        if (!it) continue
-        try { await bot.equip(it, 'hand'); await bot.consume(); drunk.push(k) } catch {}
+      const onAbort = () => { try { bot.deactivateItem?.() } catch {} }
+      ctl.onAbort?.push(onAbort)
+      try {
+        for (const k of want) {
+          if (ctl.aborted) break
+          if (has(EFF[k])) continue
+          const it = bot.inventory.items().find(i => i.name === 'potion' && (potionOf(i) || '').replace(/^(long|strong)_/, '') === k)
+          if (!it) continue
+          try {
+            await bot.equip(it, 'hand')
+            if (ctl.aborted) break
+            await bot.consume()
+            if (!ctl.aborted) drunk.push(k)
+          } catch {}
+        }
+      } finally {
+        const i = ctl.onAbort?.indexOf(onAbort); if (i >= 0) ctl.onAbort.splice(i, 1)
       }
-      return { drunk }
-    })
+      return ctl.aborted ? { drunk, aborted: true } : { drunk }
+    }, { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p || {} })
   }
 }
 

@@ -2,6 +2,7 @@ import { recoveryDecision } from './recovery-graph'
 import { consumeHand } from './hand-policy'
 import { canSurvivePearl } from '../throw'
 import * as bow from '../bow'
+import * as totemMod from '../totem'
 
 type CombatContext = Record<string, any>
 
@@ -149,12 +150,20 @@ const consumeItem = async (item, abortIf = null, opt: any = {}) => {
     if (ctx.itemReady && !ctx.itemReady(item) || ctx.bot._ndUse?.cur) return false
     const previousOff = ctx.bot.inventory.slots[45]
     const enemyReach = ctx.reachFrom(ctx.entity.position.offset(0, ctx.EYE, 0), ctx.bot.entity)
+    const totemCheck = (() => {
+      try {
+        const mod = ctx.totemMod || totemMod
+        return !!mod.wantTotem(ctx.bot, { entity: ctx.entity, maceThreat: ctx.maceNow?.() ? true : null, theirR: enemyReach }).yes
+      } catch {
+        return (ctx.bot.health ?? 20) <= 10
+      }
+    })()
     const hand = consumeHand({ main: ctx.bot.heldItem?.name || null, off: previousOff?.name || null,
       safe: ctx.tt.safe(ctx.tempo.consumeMs(item.name), { fortSealed: ctx.fortSealed() }).ok,
       grounded: !!ctx.bot.entity.onGround, clutchActive: ctx.edges.falling(ctx.bot),
       flightStable: !!opt.flightStable && !!ctx.bot.entity.elytraFlying,
       usingMain: !!ctx.bot.usingHeldItem,
-      shieldNeeded: enemyReach < 7 && !ctx.fortSealed(), totemNeeded: (ctx.bot.health ?? 20) <= 10 })
+      shieldNeeded: enemyReach < 7 && !ctx.fortSealed(), totemNeeded: totemCheck })
     if (!hand) { failedConsumes.set(key, { inputs, why: 'no_safe_consume_hand' }); return false }
     const offhand = hand === 'off-hand'
     let consumed = false

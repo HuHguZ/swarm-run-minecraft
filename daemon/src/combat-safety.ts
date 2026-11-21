@@ -4,6 +4,8 @@ const gameClock: typeof import('./game-clock') = require('./game-clock')
 // Общая граница риска для боевых модулей. Тактика моба выбирает атаки,
 // но не может отменить решение о сохранении жизни близостью противника.
 const assess: typeof import('./assess') = require('./assess')
+const read: typeof import('./read') = require('./read')
+const dm: typeof import('./pvp/damage-model') = require('./pvp/damage-model')
 const { usesLeft }: typeof import('./items') = require('./items')
 const RISKY = /^(rotten_flesh|spider_eye|poisonous_potato|pufferfish|chicken|suspicious_stew)$/
 const HOT = /^(lava|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|sweet_berry_bush|wither_rose)$/
@@ -141,10 +143,13 @@ function inspect (bot, { target = null, entities = null, observedHit = 0, minHea
     if (player && e !== target && !entities) continue
     const distance = e.position.distanceTo(bot.entity.position)
     if (distance > 16 || !assess.inSight(bot, e)) continue
-    const hand = e.equipment?.[0]?.name
-    const damage = player ? ({ wooden_sword: 4, stone_sword: 5, iron_sword: 6, diamond_sword: 7,
-      netherite_sword: 8, wooden_axe: 7, stone_axe: 9, iron_axe: 9, diamond_axe: 9, netherite_axe: 10,
-      trident: 9, mace: 6 }[hand] || 4) : e.name === 'blaze' && distance < 3 ? 6 : base.dmg
+    const handItem = e.equipment?.[0]
+    const hand = handItem?.name
+    const playerBase = hand && dm.isMeleeWeapon(hand)
+      ? (dm.isSpear(hand) ? Math.max(dm.attackDamage(hand), dm.spearChargeRaw({ weapon: hand, rel: e.elytraFlying ? 25 : 6 })) : dm.attackDamage(hand))
+      : 4
+    const playerSharp = handItem ? dm.sharpBonus(read.enchLevel(bot, handItem, 'sharpness')) : 0
+    const damage = player ? (playerBase + playerSharp) : e.name === 'blaze' && distance < 3 ? 6 : base.dmg
     if (!player) mobs.push(e)
     else people++
     let hit = Math.round(assess.afterArmor(damage, gear.armor, gear.tough) * 10) / 10

@@ -64,11 +64,25 @@ export async function offhandTurn (ctx: DuelCtx, turn: TurnFrame) {
     const mt = ctx.prof.player ? mc.threat() : null
     const wt = totemMod.wantTotem(bot, { entity: ctx.entity, maceThreat: mt && mt.mace ? mt : null, theirR })
     if (wt.yes && offN !== 'totem_of_undying' && now - tot.lastSwitch > 400 && findItem(bot, i => i.name === 'totem_of_undying')) {
-      if (tot.equip('заранее: ' + wt.why)) { tot.preempt++; used('тотем в левую руку: ' + wt.why) }
-    } else if (!wt.yes && offN === 'totem_of_undying' && guard && guard.stats && guard.stats.have &&
+      if (guard?.raise) await guard.raise(false)
+      if (tot.equip('заранее: ' + wt.why)) {
+        if (guard?.stats) try { guard.stats.worn = false } catch {}
+        tot.preempt++; used('тотем в левую руку: ' + wt.why)
+      }
+    } else if (!wt.yes && offN === 'totem_of_undying' && guard && (guard.stats?.have || findItem(bot, i => i.name === 'shield')) &&
         wt.hp >= 2 * wt.burst + 8 && !bot.currentWindow) {
       const sh = findItem(bot, i => i.name === 'shield')
-      if (sh) { tot.lastSwitch = now; tot.shieldBack++; try { await bot.equip(sh, 'off-hand'); used('щит обратно в левую руку') } catch {} }
+      if (sh) {
+        tot.lastSwitch = now; tot.shieldBack++
+        try {
+          await bot.equip(sh, 'off-hand')
+          if (guard.stats) {
+            guard.stats.have = true
+            try { guard.stats.worn = bot.inventory.slots[45]?.name === 'shield' } catch {}
+          }
+          used('щит обратно в левую руку')
+        } catch {}
+      }
     }
   }
 }

@@ -343,8 +343,9 @@ export function swarmCaches (sw: SwarmDriverCtx) {
     stats.calls++
     const job = jobsOf(b).get(b.name)
     if (!job) return false
-    // Боец, к которому подошёл враг (16 бл., виден ≤ 3 с), — в бой, даже если выбран копать (выбор раз в 2 с — мог устареть).
-    if (b.swarmTask?.kind === 'fight' && boardOf(b).enemies().some(e => now() - e.seenAt < 3000 && distance(e.position, pos[b.name].p) < 16)) return false
+    // К боту подошёл враг (16 бл. в задаче fight, 10 бл. для любого — виден ≤ 3 с): не стоять с киркой в стене.
+    const threatRange = b.swarmTask?.kind === 'fight' ? 16 : 10
+    if (boardOf(b).enemies().some(e => now() - e.seenAt < 3000 && distance(e.position, pos[b.name].p) < threatRange)) return false
     stats.chosen++
     if (!pickOf(b)) { stats.noPick++; return craftPick(b) }
     const plan = job.offer, me = pos[b.name].p, gen = sw.generation

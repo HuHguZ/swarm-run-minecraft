@@ -151,35 +151,63 @@ export async function pitPearl(bot: any, ctl: { aborted: boolean }, { killY, are
   const reject = (why: string) => { rejected[why] = (rejected[why] ?? 0) + 1 }
   const from = bot.entity.position.clone()
   const budget = ticksToY(from.y, bot.entity.velocity.y, killY)
-  const result = await projectiles.throwAt(bot, null, { item, preferOffhand: true,
-    pick: (ctx: any) => {
-      let best: any = null
-      for (let i = 0; i < 16; i++) for (const degrees of [-30, -10, 5, 15, 25, 35, 45, 55, 65, 75, 85]) {
-        const yaw = i * Math.PI / 8, pitch = degrees * Math.PI / 180
-        const land = ctx.landing(yaw, pitch)
-        if (!land?.tp || land.void) { reject(land?.void ? 'void' : 'unloaded'); continue }
-        // Только верхняя грань: попал в стену сбоку — перенос к стене, и тело падает дальше (стенд 25.10: «перенос не подтверждён»).
-        // Грань сам: raycast с фильтром её не отдаёт — точка перед попаданием на верху блока или выше — значит, сверху.
-        if (!land.block?.position || land.tp.y < land.block.position.y + .9) { reject('не на верх блока'); continue }
-        if (land.tp.y < killY + 1) { reject('ниже линии смерти'); continue }
-        if (!inside(land.tp)) { reject('вне арены'); continue }
-        const settled = pearls.settle(pearls.worldOf(bot), land.tp)
-        if (!settled?.ok) { reject(settled?.why ?? 'нет опоры'); continue }
-        const score = pitPearlScore(land, { budget, foes, edge: !!settled.edge1 })
-        if (!best || score > best.score) best = { yaw, pitch, score, at: land.tp, ticks: land.ticks }
-      }
-      return best
-    },
-    onAim: (shot: any) => !ctl.aborted && !!shot.land?.tp && !shot.land.void })
-  if (!result.thrown) return { ok: false, why: `${result.why ?? 'не бросил'}: ${JSON.stringify(rejected)}`, budget }
-  // Перенос — скачок тела (больше 3 бл. за тик) на высоту выше линии смерти: точка переноса расходится с расчётной на несколько бл.
-  const at = result.land?.tp, began = clock.now(), deadline = ((result.ticks ?? 60) + 20) * 50
-  let last = bot.entity.position.clone()
-  while (!ctl.aborted && bot.health > 0 && clock.now() - began < deadline) {
-    const p = bot.entity.position
-    if (p.distanceTo(last) > 3 && p.y >= killY + 1) return { ok: true, pearl: true, at: p.clone(), y: Math.round(p.y), ticks: result.ticks, budget, error: at ? +p.distanceTo(at).toFixed(1) : null }
-    last = p.clone()
-    await clock.sleep(50)
+  // Listen for server `forcedMove` teleport packets BEFORE throwing so ultra-short (2-tick) rescue pearls
+  // that land during `throwAt` or move < 3 blocks onto a nearby clutch block are reliably confirmed.
+  let teleportedAt: any = null
+  const onTeleport = () => {
+    const p = bot.entity?.position
+    if (p && p.y >= killY + 1) teleportedAt = p.clone()
   }
-  return { ok: false, why: ctl.aborted ? 'прервано' : bot.health <= 0 ? 'death' : 'перенос не подтверждён', ticks: result.ticks, budget, at }
+  bot.on?.('forcedMove', onTeleport)
+  let result: any
+  try {
+    result = await projectiles.throwAt(bot, null, { item, preferOffhand: true,
+      pick: (ctx: any) => {
+        const world = pearls.worldOf(bot)
+        const sweep = (yawOffset: number, pitches: number[]) => {
+          let best: any = null
+          for (let i = 0; i < 16; i++) for (const degrees of pitches) {
+            const yaw = (i + yawOffset) * Math.PI / 8, pitch = degrees * Math.PI / 180
+            const land = ctx.landing(yaw, pitch)
+            if (!land?.tp || land.void) { reject(land?.void ? 'void' : 'unloaded'); continue }
+            if (!land.block?.position) { reject('не на верх блока'); continue }
+            const topFace = land.tp.y >= land.block.position.y + .9
+            if (land.tp.y < killY + 1) { reject('ниже линии смерти'); continue }
+            if (!inside(land.tp)) { reject('вне арены'); continue }
+            const settled = pearls.settle(world, land.tp)
+            // Side-face hits over open void still fail `settled.ok`; allow a side hit only when solid non-edge
+            // ground sits directly beneath `land.tp` (e.g. inner rim/wall sitting on the arena deck).
+            if (!topFace && (!settled?.ok || (settled.fall ?? 0) > 2 || settled.feet.y < killY + 1 || settled.edge1)) {
+              reject('не на верх блока'); continue
+            }
+            if (!settled?.ok) { reject(settled?.why ?? 'нет опоры'); continue }
+            const score = pitPearlScore(land, { budget, foes, edge: !!settled.edge1 }) + (topFace ? 3 : 0)
+            if (!best || score > best.score) best = { yaw, pitch, score, at: land.tp, ticks: land.ticks }
+          }
+          return best
+        }
+        return sweep(0, [-30, -10, 5, 15, 25, 35, 45, 55, 65, 75, 85]) ??
+          sweep(.5, [-20, 0, 10, 20, 30, 40, 50, 60, 70, 80])
+      },
+      onAim: (shot: any) => !ctl.aborted && !!shot.land?.tp && !shot.land.void })
+    if (!result.thrown) return { ok: false, why: `${result.why ?? 'не бросил'}: ${JSON.stringify(rejected)}`, budget }
+    const at = result.land?.tp, began = clock.now(), deadline = ((result.ticks ?? 60) + 20) * 50
+    const confirm = (p: any) => ({ ok: true, pearl: true, at: p.clone(), y: Math.round(p.y), ticks: result.ticks, budget, error: at ? +p.distanceTo(at).toFixed(1) : null })
+    if (teleportedAt) return confirm(teleportedAt)
+    let last = bot.entity.position.clone()
+    while (!ctl.aborted && bot.health > 0 && clock.now() - began < deadline) {
+      if (teleportedAt) return confirm(teleportedAt)
+      const p = bot.entity.position
+      if (p.y >= killY + 1 && (p.distanceTo(last) > 3 ||
+          (at && p.distanceTo(at) <= 1.8 && (p.distanceTo(from) > 1 || bot.entity.onGround)))) {
+        return confirm(p)
+      }
+      last = p.clone()
+      await clock.sleep(50)
+    }
+    if (teleportedAt) return confirm(teleportedAt)
+    return { ok: false, why: ctl.aborted ? 'прервано' : bot.health <= 0 ? 'death' : 'перенос не подтверждён', ticks: result.ticks, budget, at }
+  } finally {
+    bot.removeListener?.('forcedMove', onTeleport)
+  }
 }

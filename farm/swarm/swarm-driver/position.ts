@@ -419,19 +419,30 @@ export function swarmPosition (sw: SwarmDriverCtx) {
     if (occupied) delete b.swarmPosition // Occupied footing must be confirmed again before the next construction action.
     const recheck = purpose === 'build' && occupied?.scene === scene && stillHere(occupied.at)
     const holding = !!me && b.swarmPosition?.purpose === purpose && b.swarmPosition.scene === scene && distance(me, b.swarmPosition.at) < 1.5
-    if (sw.positionQueries >= 2 || holding) return false
+    const team = teamOf(b)
+    const teamQueries = (sw.positionQueriesByTeam ??= new Map<string, number>())
+    if ((teamQueries.get(team) || 0) >= 2 || holding) return false
     const helper = !recheck && windHelper(b), hp = helper && pos[helper.name].p
     const windLandings = hp ? reservedWindLandings(b) : []
     const attempt = hp ? `${scene}:wind:${helper.name}:${Math.floor(hp.x)},${Math.floor(hp.y)},${Math.floor(hp.z)}:${windLandings.map(cellKey).sort().join('|')}` : scene
     if (!recheck && sw.blocked(b, `position:${b.name}`, attempt)) return false
     if (!recheck) sw.failed(b, `position:${b.name}`, attempt)
-    sw.positionQueries++; b.swarmBusyUntil = now() + 20000
+    b.swarmBusyUntil = now() + 20000
     const round = sw.generation
     try {
       const m = pos[b.name], board = context.board
-      const report = helper && await helperReport(helper).catch(() => null)
-      if (!currentTurn(sw, b, round)) return false
-      const query = await execute(b, 'swarm_position', { purpose, arena, enemies: board.enemies().map(e => ({ id: e.id })), radius: 12, limit: 6, reserve: context.member.reserve, budgetMs: 1500, ...(recheck && { currentBuildOnly: true }), ...(report && { windPartner: report, windLandings }) })
+      let report: any = null, query: any
+      teamQueries.set(team, (teamQueries.get(team) || 0) + 1)
+      sw.positionQueries = (sw.positionQueries || 0) + 1
+      try {
+        report = helper && await helperReport(helper).catch(() => null)
+        if (!currentTurn(sw, b, round)) return false
+        query = await execute(b, 'swarm_position', { purpose, arena, enemies: board.enemies().map(e => ({ id: e.id })), radius: 12, limit: 6, reserve: context.member.reserve, budgetMs: 1500, ...(recheck && { currentBuildOnly: true }), ...(report && { windPartner: report, windLandings }) })
+      } finally {
+        const left = (teamQueries.get(team) || 1) - 1
+        if (left > 0) teamQueries.set(team, left); else teamQueries.delete(team)
+        sw.positionQueries = Math.max(0, (sw.positionQueries || 1) - 1)
+      }
       if (!currentTurn(sw, b, round)) return false
       const candidates = query.observed ? query.candidates || [] : []
       // A visible player can leave the ledge within the shared launch preparation (40 game ticks).
@@ -534,7 +545,7 @@ export function swarmPosition (sw: SwarmDriverCtx) {
         return true
       }
       return false
-    } finally { sw.positionQueries--; if (round === sw.generation) delete b.swarmBusyUntil }
+    } finally { if (round === sw.generation) delete b.swarmBusyUntil }
   }
   const rangedAdvantage = b => {
     const here = b.swarmPosition, m = pos[b.name], enemies = boardOf(b).enemies()

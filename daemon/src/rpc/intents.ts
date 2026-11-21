@@ -21,8 +21,14 @@ function intentMethods ({ session, bus, vision }: RpcContext) {
     escort: async (p) => session.escort(p || {}),
     give: async (p) => session.giveItem(p || {}),
     take: async (p) => session.takeItem(p || {}),
-    // Спасение на элитрах (rescue) стоп драйвера не рвёт: тревога «человек рядом» глушила полёт из пропасти.
-    stop: async () => (session.current?.name === 'fly_to' && session.current?.params?.rescue && !session.current.ctl?.aborted) ? { status: 'done', detail: { ignored: 'спасаюсь на элитрах' } } : session.stop(),
+    // Спасение на элитрах или жемчугом (rescue) стоп драйвера не рвёт: тревога «человек рядом» глушила спасение из пропасти/лавы.
+    stop: async () => {
+      const cur = session.current
+      if (cur && (cur.name === 'fly_to' || cur.name === 'pearl_to') && cur.params?.rescue && !cur.ctl?.aborted) {
+        return { status: 'done', detail: { ignored: cur.name === 'fly_to' ? 'спасаюсь на элитрах' : 'спасаюсь жемчугом' } }
+      }
+      return session.stop()
+    },
     wait: async (p) => session.wait(p || {}),
     look_at: async (p) => session.lookAt(p),
     observe: async (p) => session.observe(p || {}),

@@ -3,13 +3,11 @@ import * as gameClock from '../game-clock'
 import * as gear from '../preflight'
 import { resultCode } from './results'
 import { INTERRUPTING } from '../events'
+import { COMMANDED_ESCAPE, TIMED_COMBOS } from '../tactics/commanded-escape'
+const isImmediateEscape = (name: string) => COMMANDED_ESCAPE.test(name) && !TIMED_COMBOS.test(name)
 // ND_CHAT_INTERRUPT=0 — чат не рвёт работу (совместная игра 10.10: человек пишет, кампания идёт, а не «стоишь и тупишь»);
 // строки чата приезжают в событиях результата, wait по-прежнему будится чатом.
 const chatOff = process.env.ND_CHAT_INTERRUPT === '0'
-// Уворот не перебивается обычным приказом (12.10, арена: бой, баф, лут драйвера рвали рывок от зелья и стрел — бот
-// стоял под брызгами): новый ждёт конца уворота (он короткий: рывок ≤ 1.5 с, джук ≤ 4 с), stop — рвёт как раньше.
-// Тот же набор, что reflex-lock COMMANDED_ESCAPE: ветер/жемчуг/элитры тоже рвались боем драйвера до старта (roof-free-1).
-const DODGES = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
 
 async function runIntent (this: any, name, worker, { exclusive = true, interruptible = true, timeoutMs = 120000, interruptOn = null, params = null, canStart = null }: any = {}) {
     // Уворот не ждёт тактики (12.10: «ест/пьёт зелье — булавой ваншотаю, ноль реакции»; mace-6: рывок стоял в очереди за
@@ -28,7 +26,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     }
     const reflexLock: typeof import('../reflex-lock') = require('../reflex-lock')
     try {
-    if (DODGES.test(name)) {
+    if (isImmediateEscape(name)) {
       const o = reflexLock.owner(this); if (o && o.owner !== 'Emergency') reflexLock.cancel(this)
       while (reflexLock.owner(this)?.owner === 'Emergency' && this.reflex) await beforeStart(this.reflex)
     } else if (exclusive && this.tactics?.enabled()) await beforeStart(this.tactics.waitForRelease())
@@ -36,7 +34,7 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     // Спасаюсь из пропасти на элитрах (rescue) — его не рвёт ничто, кроме stop (13.10: подстрелил — рывок от следующей
     // стрелы отменил полёт, и бот упал).
     if (cur && (cur.name === 'fly_to' || cur.name === 'pearl_to') && cur.params?.rescue && cur.ctl && !cur.ctl.aborted) return { status: 'failed', error: cur.name === 'fly_to' ? 'спасаюсь на элитрах' : 'спасаюсь жемчугом', code: 'RESCUE_BUSY' }
-    if (exclusive && !DODGES.test(name) && cur && DODGES.test(cur.name) && cur.ctl && !cur.ctl.aborted && cur.done) await beforeStart(cur.done.catch(() => {}))
+    if (exclusive && !isImmediateEscape(name) && cur && COMMANDED_ESCAPE.test(cur.name) && cur.ctl && !cur.ctl.aborted && cur.done) await beforeStart(cur.done.catch(() => {}))
     if (stopped) throw cancelled
     if (canStart && !canStart()) return { status: 'failed', notStarted: true, code: 'ACTION_EXPIRED', error: 'окно действия прошло' }
     // A flank route planned before a shield went up may arrive after it. Discard that stale movement at handover.

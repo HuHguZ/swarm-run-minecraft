@@ -18,6 +18,7 @@ export function newArmedContact(foe, previous) {
 
 export function swarmSafety (sw: SwarmDriverCtx) {
   const { now, pos, unsafeCache, planned, boardOf, membersOf, rangedAdvantage, teamOf } = sw
+  const futileChecked = new Map<string, string>()
   const unsafe = b => {
     const c = unsafeCache.get(b.name)
     if (c && now() - c.at >= 0 && now() - c.at < 250) return c.v
@@ -47,12 +48,19 @@ export function swarmSafety (sw: SwarmDriverCtx) {
     const hurt = !!member && member.health < (b.plannedHp ?? Infinity) - .5
     let urgent = (why === 'залп' || why === 'рана' || why === 'пустой размен') && (unplanned || hurt)
     if (urgent && onslaught && why === 'пустой размен') {
-      // У края может выиграть и голый. Спросить общий план один раз на новую угрозу, прежде чем прерывать действие.
+      // У края может выиграть и голый. Спросить общий план один раз на новую угрозу/смену обстановки (не долбить каждые 250 мс).
       urgent = foes.some(e => e.id === risk.target && now() - e.seenAt < 1000 && !e.nametag && !e.glowing)
       if (urgent) {
-        sw.plannedAt.set(teamOf(b), -Infinity)
-        const task = sw.refresh(b).task
-        urgent = task?.kind === 'flee' && !!task.data?.panic
+        const sig = `${sw.generation}:${board.sightingVersion}:${Math.round(member!.health * 2)}:${risk.target}`
+        if (futileChecked.get(b.name) !== sig) {
+          futileChecked.set(b.name, sig)
+          sw.plannedAt.set(teamOf(b), -Infinity)
+          const task = sw.refresh(b).task
+          urgent = task?.kind === 'flee' && !!task.data?.panic
+        } else {
+          const task = planned.get(teamOf(b))?.get(b.name)
+          urgent = task?.kind === 'flee' && !!task.data?.panic
+        }
       }
     }
     const v = urgent || planned.get(teamOf(b))?.get(b.name)?.kind === 'flee'

@@ -15,6 +15,8 @@ export interface EscapeObservation {
 const escapeActions = new Set<ActionId>(['Flee', 'CreateDistance', 'BlockOff', 'PillarUp', 'DigDown', 'Hide', 'EnterPortal', 'FlightEscape', 'PearlEscape', 'UseFireResistance', 'ClimbOut', 'WebBoatEscape', 'BoatLavaHop'])
 
 const RUNS = new Set<ActionId>(['Flee', 'CreateDistance'])
+// Stationary shelters succeed in place (or by digging down); only an explicit failure result counts against them.
+const STATIONARY_SUCCESS = new Set<ActionId>(['UseFireResistance', 'BlockOff', 'Hide', 'DigDown'])
 // Runs that ended with the pursuer as close as they started, counted across places for the whole incident: a new cell is a
 // new exit signature, so in open ground the per-place count never reached 2 - the body ran from a wither skeleton (it keeps
 // within 4 blocks on a bounded platform) six times in a phase until a hit knocked it over the edge (native A/B s4c-ab /
@@ -54,7 +56,7 @@ export class EscapeProgress {
     const chased = RUNS.has(action) && (chasedReceipt || !before.swim && !!before.armed && before.threatDistance !== null && observation.threatDistance !== null && !farther && !climbed)
     if (chased) this.runFailures++
     else if (RUNS.has(action)) this.runFailures = 0
-    if (result === 'failed' || action !== 'UseFireResistance' && !farther && !climbed && moved < 1.5) {
+    if (result === 'failed' || !STATIONARY_SUCCESS.has(action) && !farther && !climbed && moved < 1.5) {
       this.failures++
       this.failed.add(action)
     } else {

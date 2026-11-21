@@ -213,6 +213,7 @@ function duoKnow (ds: DuoState) {
   const co: typeof import('./pvp/combat-observe') = require('./pvp/combat-observe')
   const hpTrackers = new Map()
   const ehpOf = (e) => {
+    if (ds.closed) return 20
     if (!co.isPlayer(e)) { const hp = read.healthRaw(bot, e); return (hp == null ? 20 : hp) + read.absorptionOf(bot, e) }
     // Знание раунда (roundScope арены): мои попадания по нему за прошлые куски боя по 3 с — трекер цели боя пишет их в
     // память раунда; свой трекер здесь начинал бы с 20 каждый кусок (try-crowd c5c: «добиваемый 20 хп» после 3 ударов).

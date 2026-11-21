@@ -506,14 +506,26 @@ const xyz = (p) => p ? `${r1(p.x)},${r1(p.y)},${r1(p.z)}` : '?'
 const countPearls = (bot) => bot.inventory.items().filter(i => i.name === 'ender_pearl').reduce((n, i) => n + i.count, 0)
 const sleep = (ms) => new Promise<any>(resolve => gameClock.setTimeout(resolve, ms))
 
-async function waitTeleport (bot, from, ms) {
+async function waitTeleport (bot, from, ms, abortIf = null) {
   const t0 = gameClock.now()
-  while (gameClock.now() - t0 < ms) {
-    await sleep(50)
+  let forced = false
+  const onForced = () => {
     const p = bot.entity && bot.entity.position
-    if (p && p.distanceTo(from) > 2.5) return true
+    if (p && p.distanceTo(from) > 0.8) forced = true
   }
-  return false
+  bot.on?.('forcedMove', onForced)
+  try {
+    while (gameClock.now() - t0 < ms && !(abortIf && abortIf())) {
+      if (forced) return true
+      await sleep(50)
+      if (forced) return true
+      const p = bot.entity && bot.entity.position
+      if (p && p.distanceTo(from) > 2.5) return true
+    }
+    return forced
+  } finally {
+    bot.removeListener?.('forcedMove', onForced)
+  }
 }
 
 // Еда/регенерация между бросками: доесть до сытости и подождать хп (не дольше maxMs).
@@ -670,8 +682,9 @@ async function hopTo (bot, goal, opts: any = {}) {
     if (!r || !r.thrown) { out.stop = `не бросил: ${r && r.why}`; log(out.stop); break }
     out.pearls++
     const ticks = (picked && picked.ticks) || pl.ticks
-    const moved = await waitTeleport(bot, from0, ticks * 50 + 2500)
-    await sleep(350)
+    const moved = await waitTeleport(bot, from0, ticks * 50 + 2500, opts.abortIf)
+    if (!moved && opts.abortIf?.()) { out.stop = 'прервано'; break }
+    if (!opts.abortIf?.()) await sleep(350)
     const p1 = bot.entity.position.clone()
     const lost = Math.max(0, r1(hp0 - bot.health))
     const want = (picked && picked.feet) || pl.feet
@@ -696,4 +709,4 @@ async function hopTo (bot, goal, opts: any = {}) {
   return out
 }
 
-export { recover, hopWorth, worldOf, reach, simulate, settle, surfaceAt, groundBelow, pitchesFor, planHop, planAscentHop, planRoute, worth, walkEstimate, hopSeconds, pearlDamage, obstaclesOf, hopTo, stepFromEdge, velOf, PEARL_DMG, SPREAD, EYE }
+export { recover, hopWorth, worldOf, reach, simulate, settle, surfaceAt, groundBelow, pitchesFor, planHop, planAscentHop, planRoute, worth, walkEstimate, hopSeconds, pearlDamage, obstaclesOf, hopTo, stepFromEdge, waitTeleport, velOf, PEARL_DMG, SPREAD, EYE }

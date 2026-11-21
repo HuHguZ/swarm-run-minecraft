@@ -67,10 +67,12 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
     try { return !bot.world.raycast(from, d.scaled(1 / Math.max(distance, 0.001)), distance, (b: any) => b?.boundingBox === 'block') } catch { return false }
   }
   const shielded = (target: any) => usingOf(bot, target)?.name === 'shield'
+  const hasAxe = () => bot.inventory.items().some((i: any) => /_axe$/.test(i?.name || ''))
+  const maceBlockedByShield = (target: any) => shielded(target) && !hasAxe()
   const maceReady = () => bot.heldItem?.name === 'mace' && clock.now() - (bot._ndMaceHeldAt ?? clock.now()) >= 33 * TICK_MS
   // Сбрасываем элитры по прогнозу свободного падения, а не ждём разгона в glide.
   const dropWindow = (target: any, velocity = target?.velocity, initialFall = 0) => {
-    if (!target?.position || target._ndVisible === false || operations.gliding(target) || shielded(target)) return false
+    if (!target?.position || target._ndVisible === false || operations.gliding(target) || maceBlockedByShield(target)) return false
     const world = operations.worldOf(bot), p = { ...bot.entity.position }, v = { ...bot.entity.velocity }
     const tv = velocity ?? { x: 0, y: 0, z: 0 }
     let fall = initialFall
@@ -124,18 +126,19 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
     ctl = flightControl(bot, ctl)
     const recoveryDone = beginAerialRecovery(bot, ctl, 2500)
     const mark = { at: clock.now() }
+    const { afterPacket }: typeof import('../elytra/dive') = require('../elytra/dive')
     let hit = false
     bot._ndDescend = mark
     bot._ndElytra.driving = (bot._ndElytra.driving || 0) + 1
     try {
       const swapped = await operations.swapChest(bot, 'chest', { hand: 'off', ctl })
       if (!swapped.ok || !valid(ctl, target.id)) return { ok: false, why: 'mace window cancelled' }
-      // После подтверждения нагрудника ждём настоящее падение и видимую рамку.
-      for (let ticks = 0; ticks < 40 && valid(ctl, target.id) && !bot.entity.onGround && !operations.gliding(target) && !shielded(target) && bot.heldItem?.name === 'mace'; ticks++) {
+      // После подтверждения нагрудника ждём настоящее падение и видимую рамку; удар через _ndSmashNow + afterPacket + slamHit.
+      for (let ticks = 0; ticks < 40 && valid(ctl, target.id) && !bot.entity.onGround && !operations.gliding(target) && !maceBlockedByShield(target) && bot.heldItem?.name === 'mace'; ticks++) {
         await clock.sleep(TICK_MS)
         operations.allow()
         const eye = pick.eyeOf(bot)
-        if (!valid(ctl, target.id) || operations.gliding(target) || shielded(target)) break
+        if (!valid(ctl, target.id) || operations.gliding(target) || maceBlockedByShield(target)) break
         if (bot.entity.elytraFlying) continue
         if (!pick.canHit(bot, target, { eye, range: 2.9 })) {
           if (!dropWindow(target, target.velocity, bot._ndElytra.fd)) break
@@ -145,26 +148,48 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
         const aim = pick.aim(bot, target, { eye, range: 2.9 })
         if (!aim) continue
         await bot.lookAt(aim.point, true)
-        if (valid(ctl, target.id) && maceReady() && !operations.gliding(target) && !shielded(target) && !bot.entity.elytraFlying && !bot.entity.onGround && bot._ndElytra.fd > 1.5 && bot.entity.velocity.y < 0 && pick.canHit(bot, target, { range: 2.9 })) {
-          bot.attack(target)
-          hit = true
-          stats.airSmashes = (stats.airSmashes ?? 0) + 1
-          operations.used('midair-mace')
-          break
+        if (valid(ctl, target.id) && maceReady() && !operations.gliding(target) && !maceBlockedByShield(target) && !bot.entity.elytraFlying && !bot.entity.onGround && bot._ndElytra.fd > 1.5 && bot.entity.velocity.y < 0 && pick.canHit(bot, target, { range: 2.9 })) {
+          await new Promise<void>(resolve => {
+            const doHit = () => {
+              try {
+                if (valid(ctl, target.id) && !bot.entity.elytraFlying && !bot.entity.onGround && bot._ndElytra.fd > 1.5 && bot.entity.velocity.y < 0 && pick.canHit(bot, target, { range: 2.9 })) {
+                  const strike = (require('../mace') as typeof import('../mace')).slamHit(bot, target, stats)
+                  if (!strike?.blocked) {
+                    hit = true
+                    stats.airSmashes = (stats.airSmashes ?? 0) + 1
+                    operations.used('midair-mace')
+                  }
+                }
+              } catch {} finally { resolve() }
+            }
+            bot._ndSmashNow = doHit
+            afterPacket(bot, () => { if (bot._ndSmashNow === doHit) { bot._ndSmashNow = null; doHit() } })
+          })
+          if (hit) break
         }
       }
     } finally {
-      // Отмена может потребовать спасения; новый владелец полёта отзывает и этот свап.
+      // Отмена может потребовать спасения; возвращаем элитры в воздухе только при запасе высоты (> 3.5 бл.),
+      // иначе остаёмся в нагруднике — не дерёмся на земле в элитрах (TODO 05.11 #2).
       const recoveryCtl = flightControl(bot, ctl, true)
       try {
         if (!recoveryCtl.aborted && !bot.entity.onGround) {
-          const restored = await operations.swapChest(bot, 'elytra', { hand: 'off', ctl: recoveryCtl })
-          if (restored.ok && !recoveryCtl.aborted) operations.startGlide(bot)
+          const world = operations.worldOf(bot)
+          const floor = world?.floorBelow?.(bot.entity.position.x, bot.entity.position.y, bot.entity.position.z, 12)
+          const height = floor ? bot.entity.position.y - floor.top : 12
+          // At 0..2.2 bl above solid ground, swapping back to elytra cannot reglide before touchdown (leaves bot in elytra on ground).
+          if (!(height > 0 && height <= 2.2)) {
+            const restored = await operations.swapChest(bot, 'elytra', { hand: 'off', ctl: recoveryCtl })
+            if (restored.ok && !recoveryCtl.aborted) {
+              if (bot.entity.onGround) await operations.swapChest(bot, 'chest', { hand: 'off', ctl: recoveryCtl })
+              else operations.startGlide(bot)
+            }
+          }
         }
       } finally {
         if (bot._ndDescend === mark) bot._ndDescend = null
         bot._ndElytra.driving = Math.max(0, bot._ndElytra.driving - 1)
-        if (recoveryCtl.aborted || bot.entity.onGround) recoveryDone()
+        if (recoveryCtl.aborted || bot.entity.onGround || bot.inventory?.slots?.[6]?.name !== 'elytra') recoveryDone()
       }
     }
     return { ok: hit, hit, why: hit ? 'midair mace attack' : 'target moved out of reach' }
@@ -229,11 +254,22 @@ export function createAerialCombat(bot: any, operations: FlightOperations) {
         // пролёт мимо его груди (point + reach) над полом (gap), пол и высота падения в цене как у всех полётов.
         goal: () => {
           const at = (ticks: number) => operations.predictGlider(target, ctx.vel?.() ?? target.velocity ?? { x: 0, y: 0, z: 0 }, ticks)
-          // Пролёт не вплотную, а в 3 бл. от его груди с моей стороны: копьё бьёт на 2–4.5 бл. (ближе 2 — «мёртвая зона»;
-          // s7d-z-27p р.5 — 2 мин «midair-spear» на 1.5–2.3 бл. без попадания, ничья по застою).
+          // Пролёт не вплотную, а в 3 бл. от его груди с моей стороны (копьё бьёт на 2–4.5 бл.).
+          // Если цель оказалась сзади внутри радиуса разворота (< 8 бл. за спиной), выходим плавной дугой на 10 бл.
+          // вперёд+вбок вместо резкого разворота на 180° и вращения на месте.
           const stand = (ticks: number) => {
-            const c = at(ticks).offset(0, 1.2, 0); const m = bot.entity.position
+            const c = at(ticks).offset(0, 1.2, 0); const m = bot.entity.position; const v = bot.entity.velocity
             const dx = m.x - c.x; const dy = m.y + 0.4 - c.y; const dz = m.z - c.z; const n = Math.hypot(dx, dy, dz) || 1
+            const hs = Math.hypot(v?.x || 0, v?.z || 0)
+            const dh = Math.hypot(dx, dz)
+            if (hs > 0.45 && dh < 8) {
+              const ux = v.x / hs; const uz = v.z / hs
+              const ahead = (-dx) * ux + (-dz) * uz
+              if (ahead < -0.5) {
+                const sideSign = (ux * (-dz) - uz * (-dx)) >= 0 ? 1 : -1
+                return new Vec3(m.x + (ux * 8 - uz * sideSign * 6), Math.max(c.y + 2, m.y), m.z + (uz * 8 + ux * sideSign * 6))
+              }
+            }
             return c.offset(dx / n * 3, dy / n * 3, dz / n * 3)
           }
           return decision.node === 'DiveStrike' ? { kind: 'strike', at, within: 3.5 } : { kind: 'point', at: stand, reach: true, gap: 1.0 }

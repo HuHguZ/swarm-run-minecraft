@@ -4,7 +4,7 @@ import * as damage from '../pvp/damage-model'
 import type { SwarmTask, SwarmMember, SharedEnemy, SwarmPosition } from './types'
 import type { PvpPlan } from './plan-frame'
 import { fledAt, markFled } from './board'
-import { distance, cellKey, ratio, count } from './common'
+import { distance, cellKey, ratio, count, copy } from './common'
 import { visibleForce, memberFight, attackBeforeBuild, assessSwarmFight } from './fight'
 import { lineRank } from './doctrine'
 import { racesForLoot, behindRace, killMeans, MELEE_CAP } from './race'
@@ -32,7 +32,7 @@ export function assignFighters(S: PvpPlan): void {
     return sp > .15 && (v.x * dx + v.z * dz) / (sp * d) > .5 }
   const { board, team, enemies, plan, options, aggressive, doctrine, center, forward, lineDuty, spots, put, assault, regroup, losing, prey, hunting, untouchable, loads, meanStrength, sectorOf, ringAt, shoveOf, gatherers, diggers, ladderers, campers, hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, targetCost, archer, threatReach } = S
   const clues = enemies.length ? [] : board.lastKnownEnemies()
-  const duties = board.tasks()
+  const duties = board.tasksView()
   const previousById = new Map(duties.map(task => [task.id, task]))
   const searches: { clue: typeof clues[number]; ageBlocks: number; radius: number; scouts: number }[] = []
   for (const clue of clues) {
@@ -142,8 +142,9 @@ export function assignFighters(S: PvpPlan): void {
       // (арена 40: прятался → не видно → лут → снова виден → прятался, каждые 3–7 с).
       if (!S.endgame && was?.kind === 'flee' && was.position && clues.some(c => S.now - c.seenAt < 6000 && distance(c.position, m.position) < 22)) { put(m, 'flee', was.data || {}, was.position); continue }
       const improvement = improvementOf(m)
-      // Врага не видели (или забыли) — недобор снаряжения добирать лутом (сундуки наверху тоже); видели — охота (Codex 15.10).
-      // Слабее типичного врага раунда (память снаряжения, race.ts) — лут; раньше — метка «переигран» на 30 с (21.10: по миру).
+      // Врага не видели (или забыли) — сперва ценные оставшиеся сундуки (самоусиление, передача своим, отказ врагу),
+      // вместо бесцельного прочёсывания по старой отметке.
+      if (!S.endgame && options.lootOffer && pricedLoot(S, m, undefined, undefined, true)) continue
       if (!S.endgame && (weak(m) || improvement > 0 && (!clues.length || behindRace(S, m)))) { put(m, 'loot', { improvement, reason: 'лут: врага не видно' }); continue }
       // Врага не видели вовсе — прочёсывать, без прокопа: «охота» на своё место копала под себя (ночь 15.10: 1686 прокопов
       // в пустом раунде, ~100 ботов провалились под арену).
@@ -247,9 +248,15 @@ export function assignFighters(S: PvpPlan): void {
     }
     // Гонка вооружений (race.ts): слабее типичного врага и враг не рядом — лут, а не бой (голым на любого видимого
     // врага шли 9 из 10: 30 задач лута за раунд 15×15 против 1300 походов к врагу, 21.10).
+    // Если только что убегал (fledAt) — не возвращаться в лут, пока свежий враг в пределах threatReach + 6 (убирает маятник flee ↔ loot).
     if (!aggressive && !deadly && !S.endgame && !(foe === prey && hunting(m)) && !assault) {
-      const race = racesForLoot(S, m)
-      if (race.loot) { put(m, 'loot', { improvement: improvementOf(m), race: true, reason: `лут: слабее их (${Math.round(race.mine)} против ${Math.round(race.theirs!)})` }); continue }
+      const fled = !!fledAt.get(board)?.has(m.id)
+      const safeForLoot = !fled || !enemies.some(e => S.now - e.seenAt <= 3000 && distance(e.position, m.position) <= threatReach(e) + 6)
+      const race = safeForLoot ? racesForLoot(S, m) : { loot: false, mine: 0, theirs: null }
+      if (race.loot) {
+        if (fled) fledAt.get(board)?.delete(m.id)
+        put(m, 'loot', { improvement: improvementOf(m), race: true, reason: `лут: слабее их (${Math.round(race.mine)} против ${Math.round(race.theirs!)})` }); continue
+      }
     }
     // Смена линий: ранг не на смене уходит в тыл и из контакта — иначе старый фронт так и стоит в бою (лаборатория 13.10).
     let line: { line: number; rotation: number } | undefined
@@ -287,6 +294,8 @@ export function assignFighters(S: PvpPlan): void {
       }
     }
     if (!nearby && !aggressive && !finishing && !deadly && !(m.role === 'miner-builder' && options.lootZones?.length && attackBeforeBuild(m, foe, board.now())) && engageValue < reserveValue) {
+      // Вместо простоя в резерве — забрать оставшиеся ценные сундуки (самоусиление, передача своим, отказ врагу).
+      if (!holdUpper && !S.endgame && options.lootOffer && pricedLoot(S, m, foe, undefined, true)) continue
       // Резерв не сдаёт занятую высоту, если ближний верхний лут дешевле перехода и этот переход уводит от него.
       if (line) put(m, 'goto', { reserve: true, sentry: true, ...line }, spots.get(m.id))
       else put(m, m.role === 'miner-builder' ? 'scout' : 'goto', { reserve: true, sentry: true }, holdUpper ? m.position : at)
@@ -344,13 +353,16 @@ export function assignFighters(S: PvpPlan): void {
 
 export function commitPlan(S: PvpPlan): Map<string, SwarmTask> {
   const { board, plan } = S
-  const previous = board.tasks().filter(t => t.id.startsWith('pvp:'))
+  const previous = board.tasksView().filter(t => t.id.startsWith('pvp:'))
   for (const old of previous) if (![...plan.values()].some(t => t.id === old.id)) board.cancel(old.id)
   for (const [id, task] of plan) {
     const old = previous.find(t => t.id === task.id)
-    const unchanged = old?.claim && old.kind === task.kind && ['digAvoid', 'swarmStand'].every(key => JSON.stringify(old.data?.[key]) === JSON.stringify(task.data?.[key])) && (!task.data?.dig || JSON.stringify(old.data?.stands) === JSON.stringify(task.data.stands)) && ['target', 'ally', 'cover', 'coverWall', 'coverShield', 'doctrine', 'role', 'committed', 'search', 'searchSeenAt', 'searchEnemy', 'reserve', 'line', 'rotation', 'panic', 'hold', 'ambush', 'fountain', 'stage', 'regroup', 'hide', 'kite', 'perch', 'rearm', 'gather', 'slot', 'dig', 'undermine', 'camp', 'ladder', 'shove', 'push', 'assault', 'finishing', 'smash', 'axe'].every(key => old.data?.[key] === task.data?.[key])
+    const unchanged = old?.claim && old.kind === task.kind &&
+      ['digAvoid', 'swarmStand', 'antidote', 'origin'].every(key => JSON.stringify(old.data?.[key]) === JSON.stringify(task.data?.[key])) &&
+      (!task.data?.dig || JSON.stringify(old.data?.stands) === JSON.stringify(task.data.stands)) &&
+      ['target', 'ally', 'cover', 'coverWall', 'coverShield', 'doctrine', 'role', 'committed', 'search', 'searchSeenAt', 'searchEnemy', 'reserve', 'line', 'rotation', 'panic', 'hold', 'ambush', 'fountain', 'stage', 'regroup', 'hide', 'kite', 'perch', 'rearm', 'gather', 'slot', 'dig', 'undermine', 'camp', 'ladder', 'shove', 'push', 'assault', 'finishing', 'smash', 'axe', 'ramBox', 'ramWall', 'antidoteCover', 'direction', 'buildKind', 'block'].every(key => old.data?.[key] === task.data?.[key])
     if (unchanged && old.data?.perchShot === task.data?.perchShot &&
-        (!task.data?.stablePost || old.position && task.position && distance(old.position, task.position) < 1)) { plan.set(id, old); continue }
+        (!task.data?.stablePost || old.position && task.position && distance(old.position, task.position) < 1)) { plan.set(id, copy(old)); continue }
     if (old?.status === 'done') board.cancel(old.id)
     plan.set(id, board.upsert(task))
   }

@@ -508,20 +508,97 @@ function missingHarvestTool (bot, block, mcData) {
     fixLine(craftPlan(bot, mcData, kind))
 }
 
-function bestWeapon (bot) {
+// Vanilla 1.21.11 melee weapon stats: [baseDamage (incl. player base 1), attackSpeed].
+const MELEE_STATS: Record<string, [number, number]> = {
+  netherite_sword: [8, 1.6], diamond_sword: [7, 1.6], iron_sword: [6, 1.6],
+  stone_sword: [5, 1.6], copper_sword: [5, 1.6], golden_sword: [4, 1.6], wooden_sword: [4, 1.6],
+  netherite_axe: [10, 1.0], diamond_axe: [9, 1.0], iron_axe: [9, 0.9],
+  stone_axe: [9, 0.8], copper_axe: [9, 0.8], golden_axe: [7, 1.0], wooden_axe: [7, 0.8],
+  trident: [9, 1.1],
+  mace: [6, 0.6],
+  netherite_spear: [5, 1 / 1.15], diamond_spear: [4, 1 / 1.05], iron_spear: [3, 1 / 0.95],
+  stone_spear: [2, 1 / 0.75], copper_spear: [2, 1 / 0.85], golden_spear: [1, 1 / 0.95], wooden_spear: [1, 1 / 0.65]
+}
+
+function weaponEnchants (bot, item): Record<string, number> {
+  const out: Record<string, number> = {}
+  if (!item) return out
+  try {
+    const comp = item.componentMap?.get?.('enchantments') ||
+      (Array.isArray(item.components) ? item.components.find(c => c?.type === 'enchantments') : null)
+    const d = comp && comp.data
+    const list = (d && (d.enchantments || (Array.isArray(d) ? d : null))) || null
+    if (Array.isArray(list)) {
+      const reg = bot?.registry?.enchantments
+      for (const x of list) {
+        if (!x) continue
+        const id = x.id ?? x.enchantment
+        const n = typeof id === 'number'
+          ? (reg?.[id]?.name || '')
+          : String(id || '').replace(/^minecraft:/, '')
+        const lvl = Number(x.level ?? x.lvl ?? 1)
+        if (n && lvl > 0) out[n] = Math.max(out[n] || 0, lvl)
+      }
+    }
+  } catch {}
+  try {
+    if (item.ench && typeof item.ench === 'object') {
+      for (const [k, v] of Object.entries(item.ench)) {
+        const n = String(k).replace(/^minecraft:/, '')
+        const lvl = Number(v)
+        if (n && lvl > 0) out[n] = Math.max(out[n] || 0, lvl)
+      }
+    }
+  } catch {}
+  try {
+    if (!Object.keys(out).length && Array.isArray(item.enchants)) {
+      for (const e of item.enchants) {
+        const n = String(e?.name || '').replace(/^minecraft:/, '')
+        const lvl = Number(e?.lvl ?? e?.level ?? 0)
+        if (n && lvl > 0) out[n] = Math.max(out[n] || 0, lvl)
+      }
+    }
+  } catch {}
+  return out
+}
+
+// Enchantment-aware melee DPS + combat utility score (1.21.11).
+function weaponScore (bot, item): number {
+  if (!item || !item.name) return 0
+  const stats = MELEE_STATS[item.name]
+  if (!stats) return 0
+  const [baseDmg, speed] = stats
+  const ench = weaponEnchants(bot, item)
+  const sharp = ench.sharpness || 0
+  const sharpDmg = sharp > 0 ? 0.5 * sharp + 0.5 : 0
+  const dps = (baseDmg + sharpDmg) * speed
+  const fire = (ench.fire_aspect || 0) * 1.5
+  const kb = (ench.knockback || 0) * 0.3
+  const spec = (ench.sweeping_edge || 0) * 0.2 + (ench.density || 0) * 0.4 + (ench.breach || 0) * 0.4 +
+    (ench.lunge || 0) * 0.3 + (ench.impaling || 0) * 0.2 + (ench.unbreaking || 0) * 0.05 + (ench.mending ? 0.05 : 0)
+  return dps + fire + kb + spec
+}
+
+function bestWeapon (bot, pred?: (item: any) => boolean) {
   const carried = bot.inventory.items()
   // Window.items() includes the hotbar but stops just before the offhand slot.
   const off = bot.inventory.slots?.[45]
   const items = off ? carried.concat(off) : carried
-  for (const tier of WEAPON_TIERS) {
-    const sword = items.find(i => i.name === `${tier}_sword`)
-    if (sword) return sword
+  let best = null
+  let bestSc = 0
+  let bestLeft = -1
+  for (const item of items) {
+    if (!item || (pred && !pred(item))) continue
+    const sc = weaponScore(bot, item)
+    if (sc <= 0) continue
+    const left = usesLeft(item)
+    if (!best || sc > bestSc + 1e-6 || (Math.abs(sc - bestSc) <= 1e-6 && left > bestLeft)) {
+      best = item
+      bestSc = sc
+      bestLeft = left
+    }
   }
-  for (const tier of WEAPON_TIERS) {
-    const axe = items.find(i => i.name === `${tier}_axe`)
-    if (axe) return axe
-  }
-  return items.find(i => /^(mace|trident)$|_spear$/.test(i.name)) || null
+  return best
 }
 
 // ---------------------------------------------------------------- inventory
@@ -620,6 +697,7 @@ export {
   equipBestTool,
   conserveTool,
   missingHarvestTool,
+  weaponScore,
   bestWeapon,
   itemNamed,
   itemMatching,

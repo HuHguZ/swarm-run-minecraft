@@ -211,6 +211,14 @@ export function swarmTurn (sw: SwarmDriverCtx) {
         return false
       }
     }
+    // Первая смена shove (вкл или выкл) на цели срабатывает сразу, чтобы не держать устаревшую стойку;
+    // повторное мигание туда-сюда по той же цели в том же раунде в пределах 2.5 с гасится, убирая шторм обрывов goto/fight.
+    const shoveFlipDamped = () => {
+      const flip = b.swarmShoveFlip
+      if (flip && flip.round === sw.generation && flip.target === task.data?.target && now() - flip.at < 2500) return true
+      b.swarmShoveFlip = { round: sw.generation, target: task.data?.target, at: now() }
+      return false
+    }
     if (move && move.round === sw.generation && move.target === task.data?.target && b.last === move.intent &&
         b.last?.m === 'goto' && b.last.pending !== false && running.kind === 'fight' && task.kind === 'fight' &&
         !targetChanged && phase(running, null, false) === phase(task, null, false)) {
@@ -225,6 +233,10 @@ export function swarmTurn (sw: SwarmDriverCtx) {
         return false
       }
       if (guardKey(running) !== guardKey(task)) {
+        if (!!running.data?.shove !== !!task.data?.shove && shoveFlipDamped()) {
+          b.swarmTask = task
+          return false
+        }
         stopForTask(b, running, task, before, after, !foe ? 'подход: цели нет на доске' : !next ? 'подход: уже с нужной стороны' : next.reason !== move.reason ? `подход: ${move.reason} → ${next.reason}` : `подход: точка ушла на ${distance(next.at, move.at).toFixed(1)} бл.`)
         return true
       }
@@ -260,12 +272,25 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       b.swarmTask = task
       return false
     }
+    // Повторное мигание сброса (shove) вкл/выкл на той же цели в пределах 2.5 с — не рвать идущий подход или бой.
+    if (running.kind === 'fight' && task.kind === 'fight' && !targetChanged && !task.data?.commanded &&
+        b.last?.pending !== false && /^(goto|fight)$/.test(b.last?.m || '') &&
+        phase(running, null, false) === phase(task, null, false) && !!running.data?.shove !== !!task.data?.shove &&
+        shoveFlipDamped()) {
+      b.swarmTask = task
+      return false
+    }
     // Идёт рукопашная и цель в досягаемости — не рвём её сменой цели, толчка или клетки: бой роя 24.10 — 33 из 35 боёв
     // «прервано» пересчётом плана, попаданий 14 на 35 боёв. Обрывает только отход, щит или копка.
     if (running.kind === 'fight' && task.kind === 'fight' && !task.data?.commanded && b.last?.m === 'fight' && b.last.pending !== false &&
         !/retreat|dig:/.test(after) && after.split('|')[1] === before.split('|')[1]) {
-      const foe = context.board?.enemies().find(e => e.id === running.data?.target), m = pos[b.name]?.p
-      if (foe && m && now() - foe.seenAt < 1500 && distance(foe.position, m) <= 4.5) return false
+      const foes = context.board?.enemies() || [], foe = foes.find(e => e.id === running.data?.target), m = pos[b.name]?.p
+      if (foe && m && now() - foe.seenAt < 2500) {
+        const oldGap = distance(foe.position, m)
+        if (oldGap <= 6) return false
+        const next = targetChanged ? foes.find(e => e.id === task.data?.target) : null
+        if (next && oldGap <= distance(next.position, m) + 8 && !(distance(next.position, m) <= 3.5 && oldGap > 8)) return false
+      }
     }
     // Бой с ним идёт, а план зовёт к той же цели походом (open/cork/shield) — враг в 6 бл., бой не рвать: сильный бот за 40 с
     // 8 раз менял fight ↔ goto, по удару за бой, и умер (игра пользователя 25.10).
@@ -295,6 +320,33 @@ export function swarmTurn (sw: SwarmDriverCtx) {
       // Поход к цели, а новая — рядом с последним местом прежней (≤ четверти пути, поворот ≤ 14°): путь лежит туда же — не рвать
       // (cl28i 28.10: на сближении цель команды z → d — 17 походов оборваны за секунду, 26 за раунд). Ход ниже возьмёт новую цель.
       if (running.kind === 'goto' && old && next && me && distance(old.position, next.position) <= distance(next.position, me) / 4) return false
+    }
+    // Не стоять с киркой и не пробегать мимо близкого врага при работе/луте/переходе/обмене:
+    // phase() возвращает '' и для fight, и для loot/scout/goto — поэтому переключение в бой или появление
+    // близкой угрозы/урона должно обрывать mine/dig_to/swarm_work/chest_take/assist/craft и небоевой goto.
+    // Не самопрерывать heal→heal и buildKind (scout→scout), чтобы не перезапускать один и тот же goto.
+    const act = b.last
+    if (act?.pending !== false && act?.m && !b.swarmTurnOwner?.cancelled) {
+      const mNow = pos[b.name], meNow = mNow?.p
+      const chestPlace = act.m === 'swarm_work' && act.p?.chestLid && act.p?.kind === 'place'
+      const workAct = /^(mine|dig_to|swarm_work|chest_take|assist|craft|blocks_around)$/.test(act.m) && !chestPlace
+      const nonFightWalk = act.m === 'goto' && running.kind !== 'loot' && running.kind !== 'heal' && !running.data?.buildKind &&
+        !/^(flee|recover|heal)$/.test(task.kind) && !task.data?.buildKind &&
+        (running.kind !== 'fight' || !!running.data?.search || !!running.data?.reserve || !!running.data?.gather || !!b.grabbing)
+      if (meNow && (workAct || nonFightWalk) && !(running.data?.dig && running.data?.undermine) && !coverMode(running)) {
+        const freshFoes = (context.board?.enemies() || []).filter(e => now() - e.seenAt < 1500 && !e.nametag && !e.glowing)
+        const seenFoes = freshFoes.filter(e => !e.sources?.length || e.sources.includes(b.name))
+        const hurtNow = (mNow.hurtTick > 0 && Number.isFinite(mNow.tick) && mNow.tick - mNow.hurtTick <= 20) ||
+          (Number.isFinite(b.plannedHp) && Number.isFinite(mNow.hp) && mNow.hp < b.plannedHp - .5)
+        const nearThreat = seenFoes.some(e => contactWith(meNow, e) || distance(e.position, meNow) <= (hurtNow ? 10 : 6))
+        const escalated = running.kind !== 'fight' && task.kind === 'fight' &&
+          freshFoes.some(e => inReach(e, distance(e.position, meNow)))
+        const canReact = workAct || running.kind === 'goto' && !teamManeuver(running.data)
+        if (escalated || (nearThreat && canReact && running.kind !== 'loot')) {
+          stopForTask(b, running, task, before, after, escalated ? 'враг в досягаемости — в бой' : hurtNow ? 'получил урон при работе/переходе' : 'близкий враг при работе/переходе')
+          return true
+        }
+      }
     }
     if (after === before && !targetChanged) return false
     stopForTask(b, running, task, before, after)
@@ -352,15 +404,6 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     }
     if (sw.knownChests?.get(sw.teamOf(b))?.size && await chestLidTurn(sw, tc)) return
     if (!currentTurn(sw, b, round)) return
-    if (!/^(flee|recover|heal)$/.test(task.kind) && !task.data?.commanded && !task.data?.finishing && chestAtHand(b) && await loot(b, board, true)) return
-    if (!currentTurn(sw, b, round)) return
-    const onslaught = sw.onslaught(b)
-    if (onslaught && task.kind !== 'flee' && task.kind !== 'heal' && !task.data?.commanded && !task.data?.dig && !task.data?.ladder && await grab(b, board)) return
-    if (!currentTurn(sw, b, round)) return
-    if (task.kind === 'flee') {
-      await turnFlee(tc)
-      return
-    }
     const nearest = [...enemies].sort((a, c) => distance(a.position, m.p) - distance(c.position, m.p))[0]
     const repeated = member.role === 'miner-builder' && repeatedTrail(trailReports, b, nearest, round, now(), board.enemyTtlMs)
     const gap = nearest ? distance(nearest.position, m.p) : Infinity
@@ -370,6 +413,15 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // нельзя: резерв, часовой и стройка в 6 бл. от человека сидели на шифте у него под мечом по 30 с (стенд бота-противника
     // 22.10). Вооружённый часовой и ждущий сбора — в бой с ним (стройка и копка у цели — их дело); копка тайника и обмен — не здесь.
     const exposed = inReach(nearest, gap)
+    if (!contact && !(exposed && task.kind === 'fight') && !/^(flee|recover|heal)$/.test(task.kind) && !task.data?.commanded && !task.data?.finishing && chestAtHand(b) && await loot(b, board, true)) return
+    if (!currentTurn(sw, b, round)) return
+    const onslaught = sw.onslaught(b)
+    if (onslaught && !contact && task.kind !== 'flee' && task.kind !== 'heal' && !task.data?.commanded && !task.data?.dig && !task.data?.ladder && await grab(b, board)) return
+    if (!currentTurn(sw, b, round)) return
+    if (task.kind === 'flee') {
+      await turnFlee(tc)
+      return
+    }
     // Вода (пользователь 14.10: «из-за воды тупят — против течения стоят»; «круто, если воду будут убирать блоками или
     // вёдрами, если мешает»): в воде и не в схватке — убрать источник рядом ведром или блоком, нечего — выплыть.
     // С этого места уже пробовал (убрал или нечем) — снова только с другого места (повтор по причине, retry.ts), а не через 4 с.
@@ -443,7 +495,7 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     // Тайники в толще (поток «тайники», swarm-driver/caches.ts): копатель, выбранный числами (plan-jobs.cacheJobs: копка
     // дороже боя/лута/охоты), копает, если не в схватке и задача — не бой и не приём строя. false — обычный ход дальше.
     // Боец тоже может копать тайник, когда враг дальше 16 бл. — цену против боя считает cacheJobs, отказ — сам cacheTurn.
-    if (!contact && !exposed && !['flee', 'recover', 'heal'].includes(task.kind) && !task.data?.commanded && !task.data?.finishing && !task.data?.fountain && !task.data?.ambush && !task.data?.hold && task.data?.line === undefined && !task.data?.bait && !task.data?.cordon && !task.data?.buildKind && !task.data?.dig && !task.data?.ladder && await sw.cacheTurn(b, board)) return
+    if (!contact && !exposed && !(task.kind === 'fight' && gap < 16) && !['flee', 'recover', 'heal'].includes(task.kind) && !task.data?.commanded && !task.data?.finishing && !task.data?.fountain && !task.data?.ambush && !task.data?.hold && task.data?.line === undefined && !task.data?.bait && !task.data?.cordon && !task.data?.buildKind && !task.data?.dig && !task.data?.ladder && await sw.cacheTurn(b, board)) return
     if (!currentTurn(sw, b, round)) return
     // Манёвр приёма (линия, фонтан, засада, кольцо, приманка, оцепление, стройка) важнее ролевых привычек: обмен, сундуки,
     // поиск позиции, маяки и укрытия его не перебивают (разбор 13.10: строитель кокона уходил класть маяк, часовой без лука
@@ -503,11 +555,15 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     if (!currentTurn(sw, b, round)) return
     const attackFirst = sw.arms && (sw.hideouts?.some(h => h.tier > 0) || sw.chestTops?.some(h => h.tier > 0)) &&
       attackBeforeBuild(member, enemies.find(e => e.id === task.data?.target), now())
+    const seenNear = !!nearest && now() - nearest.seenAt < 1500 && !nearest.nametag && !nearest.glowing &&
+      (!nearest.sources?.length || nearest.sources.includes(b.name))
+    const closeFight = task.kind === 'fight' && (exposed || !!nearest && now() - nearest.seenAt < 1500 && gap <= 12 && nearest.position.y <= m.p.y + 2) ||
+      seenNear && gap <= 6
     // Натиск: строителю не до вышек и маяков — бой (14.10: «бегают вокруг меня»).
-    if (!maneuver && !contact && (member.role === 'ranged' && bow || member.role === 'miner-builder' && !onslaught && !attackFirst || task.data?.sentry && bow) && await positionStep(b, context, member.role === 'miner-builder' ? 'build' : 'ranged')) return
+    if (!maneuver && !contact && !closeFight && (member.role === 'ranged' && bow || member.role === 'miner-builder' && !onslaught && !attackFirst || task.data?.sentry && bow) && await positionStep(b, context, member.role === 'miner-builder' ? 'build' : 'ranged')) return
     if (!currentTurn(sw, b, round)) return
     if (!maneuver && !contact && (task.data?.sentry || b.swarmPosition?.purpose === 'recover') && b.swarmPosition && distance(m.p, b.swarmPosition.at) < 1.5) { if (exposed && armed) { await engage(); return } await b.c.call('swarm_hold', { sneak: b.swarmPosition?.cover > .5, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 3 }); return }
-    if (!maneuver && member.role === 'miner-builder' && !onslaught && !contact && !sw.blocked(b, `work:${b.name}`, buildStock(m.inv))) {
+    if (!maneuver && member.role === 'miner-builder' && !onslaught && !contact && !closeFight && !sw.blocked(b, `work:${b.name}`, buildStock(m.inv))) {
       if (nearest && nearest.position.y > m.p.y + 2 && await mineStep(b, context, nearest)) return
       if (!currentTurn(sw, b, round)) return
       if (!attackFirst && b.swarmPosition?.purpose === 'build' && b.swarmPosition.highGround >= 3 && distance(m.p, b.swarmPosition.at) < 2 && await buildStep(b, context, { kind: 'outpost', origin: b.swarmPosition.at })) return
@@ -533,8 +589,12 @@ export function swarmTurn (sw: SwarmDriverCtx) {
     }
     const foe = enemies.find(e => e.id === task.data?.target)
     tc.foe = foe
-    // Копатель в контакте (план держит своего до 3 бл., контакт — 3.5) — бой, а не шаг в клетку ямы (Codex 15.10).
+    // Копатель в контакте и переход/поиск с лично видимым близким врагом: не пробегать мимо под ударами.
     if (exposed && armed && task.kind === 'goto' && !task.data?.search && !maneuver) { await engage(); return }
+    if (seenNear && (contact || gap <= 6) && !maneuver && /^(goto|scout)$/.test(task.kind) && nearest) {
+      if (armed && (!task.data?.weak || contact || !assessSwarmFight(member, enemies, context.members).unsafe)) { await engage(); return }
+      if (contact) { await b.c.call('flee', { from: [nearest.id], timeoutSeconds: 3, arena }); return }
+    }
     if ((task.kind === 'goto' || task.data?.search) && !(task.data?.dig && contact)) {
       await runDoctrine(turnGoto)
       return

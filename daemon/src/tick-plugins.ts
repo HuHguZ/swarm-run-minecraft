@@ -215,6 +215,11 @@ function createScope (bot, clock) {
   scope.wall = { now: () => wall.now(), setTimeout: (fn, ms, ...args: any[]) => schedule(fn, ms, false, args, wall) }
   scope.Date = class extends Date { static now () { return clock.now() } }
   scope.writePacket = (...args: any[]) => { if (!scope.closed) bot._client.write(...args) }
+  // Raise default EventEmitter limit (10) on bot & protocol client: concurrent combat/perception/navigation
+  // subsystems legitimately attach 15-25 listeners per bot; 40 prevents false MaxListenersExceededWarning spam
+  // while still catching true unbounded leaks.
+  if (typeof bot.setMaxListeners === 'function' && (bot.getMaxListeners?.() ?? 10) < 40) bot.setMaxListeners(40)
+  if (typeof bot._client?.setMaxListeners === 'function' && (bot._client.getMaxListeners?.() ?? 10) < 40) bot._client.setMaxListeners(40)
   bot.once('end', () => {
     scope.closed = true
     for (const cleanup of ([...cleanups] as any)) cleanup()
@@ -349,11 +354,22 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
       if (diggingItem !== item && (diggingItem?.type !== item?.type || diggingItem?.metadata !== item?.metadata ||
         !require('node:util').isDeepStrictEqual([diggingItem?.nbt, diggingItem?.components, diggingItem?.removedComponents], [item?.nbt, item?.components, item?.removedComponents]))) {
         if (process.env.ND_DIG_TRACE === '1') console.log('[dig-abort-item]', JSON.stringify({ from: diggingItem && [diggingItem.name, diggingItem.count, diggingItem.slot, diggingItem.components, diggingItem.nbt], to: item && [item.name, item.count, item.slot, item.components, item.nbt] }))
-        // ND_DIG_RESTART=1 (ow 27.10): тот же предмет с новыми компонентами (урон кирки за прошлый блок пришёл, когда копка
-        // следующего уже началась) или подобранный в пустую руку — ваниль (MultiPlayerGameMode.continueDestroyBlock: не
-        // sameDestroyTarget → startDestroyBlock) начинает этот блок заново, а не бросает копку: прогресс 0, START снова.
-        // Обрыв копки рвал каждый второй блок штрека/лестницы/колодца («Digging aborted»). Другой предмет в руке — обрыв, как был.
-        if (process.env.ND_DIG_RESTART === '1' && (!diggingItem || diggingItem.type === item?.type)) {
+        // ND_DIG_RESTART (default on unless '0'): same-tool durability delta (damage component arriving from the
+        // previous block while the next dig has already started) restarts digging (vanilla startDestroyBlock)
+        // instead of aborting. Explicit ND_DIG_RESTART='1' also keeps empty-hand pickup restart for speedrun.
+        const nonDamage = c => Array.isArray(c) ? c.filter(x => x?.type !== 'damage') : []
+        const durabilityOnly = !!diggingItem && !!item &&
+          diggingItem.type === item.type &&
+          diggingItem.metadata === item.metadata &&
+          diggingItem.count === item.count &&
+          require('node:util').isDeepStrictEqual(
+            [diggingItem.nbt, nonDamage(diggingItem.components), diggingItem.removedComponents],
+            [item.nbt, nonDamage(item.components), item.removedComponents]
+          )
+        const restart = process.env.ND_DIG_RESTART === '1'
+          ? (!diggingItem || diggingItem.type === item?.type)
+          : (process.env.ND_DIG_RESTART !== '0' && durabilityOnly)
+        if (restart) {
           diggingItem = item; progress = 0; creditedAt = Date.now(); previousDigTime = bot.digTime(block)
           bot._client.write('block_dig', { status: 0, location: block.position, face: bot.targetDigFace })
           waitTimeout = setTimeout(advanceDigging, 50)

@@ -31,7 +31,7 @@ export function perchFor(S: PvpPlan, m: SwarmMember): SwarmPosition | null {
   const { enemies, options, perched } = S
   const worn = (Array.isArray(m.armor) ? m.armor : Object.values(m.armor || {})).includes('elytra')
   if (!options.perches?.length || !(worn || count(m.inventory, 'elytra') > 0) || count(m.inventory, 'firework_rocket') < 5) return null
-  const rejected = S.board.facts().filter(f => f.source === m.id && f.id.startsWith('perch-failed:'))
+  const rejected = S.board.factsView().filter(f => f.source === m.id && f.id.startsWith('perch-failed:'))
   let best = -1, bestScore = -Infinity
   for (const [i, p] of options.perches.entries()) {
     // Отбежал от взлёта — гребень не исчез: отказ тела виден и плану, отдельно для каждого бота.

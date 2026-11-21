@@ -21,7 +21,8 @@ function fire (g: ClutchGuard, plan, snapshot, decision) {
   const eye = snapshot.offset(0, eyeHeight(g), 0)
   const point = faceAim(bot, plan.ref, plan.face, { eye, range: 4.5, avoid: others })
   const item = available(g)
-  if (!item || !replaceable(cell) || !blockReference(rb) || !point || intersects(plan.cell, snapshot) || occupied(plan.cell, others)) return
+  const isCobweb = item?.name === 'cobweb'
+  if (!item || !!plan.cobweb !== isCobweb || !replaceable(cell) || !blockReference(rb) || !point || (!isCobweb && (intersects(plan.cell, snapshot) || occupied(plan.cell, others)))) return
   // ND_BLZ_DRINK_HOLD: посреди глотка FR клатч на малом падении (≤ 4 бл. — урона ≤ 1) не ставит: выбор слота глоток заглушает, и блок
   // ставился рукой с зельем — сервер начинал глоток заново (de01-s19-1: held 25, muted 9 — FR не выпита). Большое падение — ставить,
   // слот — мимо обёртки глотка.
@@ -30,7 +31,7 @@ function fire (g: ClutchGuard, plan, snapshot, decision) {
   const def = bot.registry.blocksByName[item.name]
   if (!def) return
   const virtualBlock = makeBlock(plan.cell, def.defaultState)
-  if (!virtualBlock || !virtualBlock.shapes?.some(sh => sh.every((v, i) => v === (i < 3 ? 0 : 1)))) return
+  if (!virtualBlock || (!isCobweb && !virtualBlock.shapes?.some(sh => sh.every((v, i) => v === (i < 3 ? 0 : 1))))) return
   const k = key(plan.cell)
   const record = { cell: plan.cell, refKey: key(plan.ref), oldStateId: cell.stateId, stateId: def.defaultState, sentAt: now(), slot: item.slot, reserved: true }
   // move is emitted after position/position_look; this look goes before place.
@@ -59,6 +60,7 @@ function fire (g: ClutchGuard, plan, snapshot, decision) {
     if (!st.flight) st.flight = { hp: bot.health, fall: plan.fall, peak: st.peak, started: now(), cells: [] }
     st.flight.cells.push(record)
     st.flight.fall = plan.fall
+    if (isCobweb) st.flight.cobweb = true
     emit(g, 'placed', { cell: plan.cell, ref: plan.ref, face: plan.face, fall: plan.fall, expectedBlocks: plan.chain.length, landTick: plan.landTick })
     const previous = st.steering?.previous || controls(g)
     for (const [k, v] of (Object.entries(plan.control) as [string, any][])) bot.setControlState?.(k, v)

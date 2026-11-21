@@ -5,7 +5,7 @@
 // Прогноз и вода — clutch/guard-forecast.ts, щелчки — clutch/guard-fire.ts, тик — clutch/guard-step.ts, подписки —
 // clutch/guard.ts.
 import * as gameClock from '../game-clock'
-import { IDLE, FILLER, LAST, key, selectBlock } from './blocks'
+import { IDLE, FILLER, isFiller, LAST, key, selectBlock } from './blocks'
 import { create } from './plan'
 
 export interface ClutchGuard {
@@ -30,6 +30,7 @@ export interface ClutchGuard {
   scheduled: any
   preparing: boolean
   lastPrepare: number
+  lastNoBarSig: string | null
   barAt: number
   movement: any
 }
@@ -47,8 +48,8 @@ function openGuard (session, opts): ClutchGuard {
   const reservations = []
   const stats = { placed: 0, confirmed: 0, denied: 0, timeout: 0, landed: 0, saved: 0, no_face: 0, stale: 0, water_plans: 0, water_saved: 0, water_failed: 0, soft_plans: 0, soft_saved: 0, soft_failed: 0, ladders: 0 }
   const st: any = { stats, pending, api, peak: null, blocks: 0, t: 0, stopped: false, flight: null, path: [], lastDecision: null }
-  const scheduled = null; const preparing = false; const lastPrepare = -Infinity; const barAt = -Infinity; const movement = null
-  return { session, opts, bot, Vec3, PlayerState, faceAim, hand, now, simulate, makeBlock, api, world, pending, blocked, spent, reservations, stats, st, scheduled, preparing, lastPrepare, barAt, movement }
+  const scheduled = null; const preparing = false; const lastPrepare = -Infinity; const lastNoBarSig = null; const barAt = -Infinity; const movement = null
+  return { session, opts, bot, Vec3, PlayerState, faceAim, hand, now, simulate, makeBlock, api, world, pending, blocked, spent, reservations, stats, st, scheduled, preparing, lastPrepare, lastNoBarSig, barAt, movement }
 }
 
 const eyeHeight = (g: ClutchGuard) => { const { opts, bot } = g; return typeof opts.eyeHeight === 'function' ? opts.eyeHeight(bot) : (opts.eyeHeight ?? (bot.getControlState?.('sneak') ? 1.27 : 1.62)) }
@@ -106,20 +107,62 @@ function prepare (g: ClutchGuard) {
   if (opts.prepare === false || g.preparing || now() - g.lastPrepare < 1000 || bot.currentWindow || hand.on && hand.on()) return
   g.lastPrepare = now()
   const sel = selectBlock(bot.inventory.slots, opts.reserve ?? 0)
-  if (sel && !LAST.test(sel.name)) return
-  const it = bot.inventory.items().find(i => FILLER.test(i.name) && !LAST.test(i.name) && i.slot < 36) ||
-    (sel ? null : bot.inventory.items().find(i => FILLER.test(i.name) && i.slot < 36) || bot.inventory.items().find(i => i.name === 'cobweb' && i.slot < 36))
-  if (!it || typeof bot.moveSlotItem !== 'function') return
+  if (sel && !LAST.test(sel.name)) { g.lastNoBarSig = null; return }
+  const it = bot.inventory.items().find(i => isFiller(i.name) && !LAST.test(i.name) && i.slot < 36) ||
+    (sel ? null : bot.inventory.items().find(i => isFiller(i.name) && i.slot < 36) || bot.inventory.items().find(i => i.name === 'cobweb' && i.slot < 36))
+  if (!it || typeof bot.moveSlotItem !== 'function') { g.lastNoBarSig = null; return }
+  const heldSlot = (bot.quickBarSlot ?? 0) + 36
   let dest = -1
-  for (let i = 36; i <= 44; i++) if (!bot.inventory.slots[i] && i !== bot.quickBarSlot + 36) { dest = i; break }
+  for (let i = 36; i <= 44; i++) if (!bot.inventory.slots[i] && i !== heldSlot) { dest = i; break }
   // S1f: хотбар полон — блоки для клатча обменять со слотом наименее нужного (не оружие/инструмент/ведро/щит/еда/жемчуг/зелья…).
   // «no_bar_slot» в 10 из 30 прогонов Ада вслепую, а «клатч молчит: no_blocks» при полном рюкзаке блоков — смерти в лаве (s1f-H2-2:
   // за прогон блоков почти не потрачено, в хотбаре их не было). ND_CLUTCH_SWAP=0 — прежнее.
   if (dest < 0 && process.env.ND_CLUTCH_SWAP !== '0') {
     const KEEP = /_(sword|axe|pickaxe|shovel|hoe|helmet|chestplate|leggings|boots)$|bucket|shield|bow$|crossbow|arrow|ender_pearl|ender_eye|flint_and_steel|fire_charge|potion|^cooked_|bread|golden_(apple|carrot)|_bed$|blaze_rod|blaze_powder|totem|crafting_table|^stick$/
-    for (let i = 36; i <= 44; i++) { const s = bot.inventory.slots[i]; if (s && i !== bot.quickBarSlot + 36 && !KEEP.test(s.name) && !FILLER.test(s.name)) { dest = i; break } }
+    // Pass 1: non-KEEP, non-clutch hotbar item (preserves legacy swap priority).
+    for (let i = 36; i <= 44; i++) {
+      const s = bot.inventory.slots[i]
+      if (s && i !== heldSlot && !KEEP.test(s.name) && !isFiller(s.name) && s.name !== 'cobweb') { dest = i; break }
+    }
+    // Pass 1b: if upgrading hotbar obsidian (LAST) with a normal filler from backpack, swap directly in place.
+    if (dest < 0 && sel && LAST.test(sel.name) && !LAST.test(it.name) && sel.slot !== heldSlot) {
+      dest = sel.slot
+    }
+    // Pass 2: items that work from backpack or are low-priority on hotbar (arrows, loose armor, shovels, hoes, sticks, crafting_table).
+    if (dest < 0) {
+      const LOW_HOTBAR = /_(helmet|chestplate|leggings|boots|shovel|hoe)$|arrow|^stick$|crafting_table/
+      for (let i = 36; i <= 44; i++) {
+        const s = bot.inventory.slots[i]
+        if (s && i !== heldSlot && LOW_HOTBAR.test(s.name) && !isFiller(s.name) && s.name !== 'cobweb') { dest = i; break }
+      }
+    }
+    // Pass 3: duplicate stack on hotbar (same item name already in another hotbar slot); evict the smallest non-held duplicate.
+    if (dest < 0) {
+      const counts = new Map<string, number>()
+      for (let i = 36; i <= 44; i++) {
+        const s = bot.inventory.slots[i]
+        if (s?.name) counts.set(s.name, (counts.get(s.name) || 0) + 1)
+      }
+      let bestCount = Infinity
+      for (let i = 36; i <= 44; i++) {
+        const s = bot.inventory.slots[i]
+        if (!s || i === heldSlot || isFiller(s.name) || s.name === 'cobweb') continue
+        if ((counts.get(s.name) || 0) >= 2 && (s.count ?? 1) < bestCount) {
+          bestCount = s.count ?? 1
+          dest = i
+        }
+      }
+    }
   }
-  if (dest < 0) { emit(g, 'no_bar_slot'); return }
+  if (dest < 0) {
+    const barSig = `${heldSlot}|${it.name}|` + Array.from({ length: 9 }, (_, k) => bot.inventory.slots[36 + k]?.name ?? '').join(',')
+    if (g.lastNoBarSig !== barSig) {
+      g.lastNoBarSig = barSig
+      emit(g, 'no_bar_slot')
+    }
+    return
+  }
+  g.lastNoBarSig = null
   g.preparing = true
   Promise.resolve(bot.moveSlotItem(it.slot, dest)).catch(e => emit(g, 'to_bar_failed', { error: e.message })).finally(() => { g.preparing = false; g.barAt = now() })
 }

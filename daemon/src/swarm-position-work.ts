@@ -239,13 +239,15 @@ async function swarmHold(session, ctl, p: any = {}) {
     if (p.webSmash && g.active) {
       // Из рюкзака: ещё 250 мс после надевания (shieldWear), затем 5 тиков подъёма и тик на пакет.
       const shieldTicks = shieldMode ? (bot.inventory?.slots?.[45]?.name === 'shield' ? 6 : 11 + Math.ceil((bot.player?.ping || 0) / 50)) : Infinity
-      web = await (require('./mace/web') as typeof import('./mace/web')).webSmash(bot, p.webSmash, { ctl: g.local, shieldTicks })
+      const webWork = (require('./mace/web') as typeof import('./mace/web')).webSmash(bot, p.webSmash, { ctl: g.local, shieldTicks })
         .catch(error => ({ placed: false, why: error.message }))
-      if (!shieldMode) return g.out({ web })
+      web = await Promise.race([webWork, g.interrupted])
+      if (!shieldMode) return g.out({ ...(web ? { web } : {}) })
     }
     if (shieldMode && g.active) {
       shield = (require('./combat') as typeof import('./combat')).makeShield(session, g.local, { shield: 'always' })
-      const worn = p.whileWebbed ? await Promise.race([shield.wear(), g.interrupted]) : await shield.wear()
+      const worn = await Promise.race([shield.wear().catch(() => false), g.interrupted])
+      if (!g.active) return finish()
       if (!worn) { const why = shield.report()?.why; shield.close(); shield = null; if (p.requireShield || p.whileDraw) { g.stop('no_shield'); return finish({ shieldWhy: why }) } }
     }
     if (g.active) { bot.clearControlStates(); bot.setControlState('sneak', !shieldMode && p.sneak !== false) }
@@ -281,11 +283,13 @@ async function swarmHold(session, ctl, p: any = {}) {
         const outward = face ? face.minus(me) : null
         const visible = (Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity &&
           (e.type === 'player' || e.username) && !(p.allies || []).includes(e.username) &&
-          (!p.whileWebbed || e.username === p.whileDraw) && (!p.enemies?.length || p.enemies.includes(e.username) || p.enemies.includes(e.id)) && seesPlayer(bot, e))
+          (!(p.whileWebbed || p.coverAlly) || e.username === p.whileDraw) && (!p.enemies?.length || p.enemies.includes(e.username) || p.enemies.includes(e.id)) && seesPlayer(bot, e))
         // Position is read only after strict LOS. No opponent health or inventory enters this skill.
         // В кольце — только враг снаружи (с моей стороны кольца): повернуться к тому, кто за спиной, — открыть спину кольца.
-        const enemy = visible.filter(e => !outward || outward.x * (e.position.x - me.x) + outward.z * (e.position.z - me.z) > 0)
-          .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
+        const enemy = p.coverAlly
+          ? visible.find(e => e.username === p.whileDraw)
+          : visible.filter(e => !outward || outward.x * (e.position.x - me.x) + outward.z * (e.position.z - me.z) > 0)
+            .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
         if (p.coverAlly) {
           const ally = bot.players?.[p.coverAlly]?.entity
           if (enemy?.username === p.whileDraw) shooterAt = point(enemy.position)

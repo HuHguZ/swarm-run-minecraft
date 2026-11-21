@@ -43,40 +43,57 @@ export function waterAhead (world: { blockAt: (p: any) => any }, support: any, d
 }
 
 // Скорость: заплыв по поверхности ~2 бл/с; мост — ~0.4 с на блок (бег 1 бл. + присед + поставка), 2.5 бл/с, и тело
-// не в воде (бить и щититься можно, утопленники не достают). Мост не дороже — если блоков хватает на всю воду.
+// не в воде (бить и щититься можно, утопленники не достают). Частичный мост сравнивается по цене с полным заплывом:
+// остаток ≤ 2 бл. перепрыгивается на берег по сухому; остаток ≥ 3 бл. требует спуска в воду (штраф перехода) и заплыва.
 export const SWIM_BPS = 2.0
 export const BRIDGE_S_PER_BLOCK = 0.4
+export const JUMP_GAP_MAX = 2
+export const WET_TRANSITION_S = 0.8
 export function bridgeWorth ({ water, shore, blocks }: { water: number; shore: boolean; blocks: number }) {
-  return water > 0 && shore && blocks >= water && water * BRIDGE_S_PER_BLOCK <= water / SWIM_BPS + 0.3
+  if (water <= 0 || !shore || blocks <= 0) return false
+  const swimTime = water / SWIM_BPS
+  const placed = Math.min(blocks, water)
+  const rem = water - placed
+  if (rem === 0) return placed * BRIDGE_S_PER_BLOCK <= swimTime + 0.3
+  if (rem <= JUMP_GAP_MAX) return placed * BRIDGE_S_PER_BLOCK + 0.45 + 0.1 * rem <= swimTime + 0.3
+  return placed * BRIDGE_S_PER_BLOCK + WET_TRANSITION_S + rem / SWIM_BPS <= swimTime
 }
 
 // Сам мост: до maxBlocks блоков по оси yaw, пока впереди вода. Возвращает { placed, ms, why }.
-export async function waterBridge (bot, ctl, yaw: number, { maxBlocks = 24, sleep = (ms: number) => gameClock.sleep(ms) }: any = {}) {
+export async function waterBridge (bot, ctl, yaw: number, { maxBlocks = 24, sleep }: any = {}) {
   const { placeBlockAt, pickFiller } = require('./build')
   const dir = axisOf(yaw)
   const t0 = gameClock.now()
   let placed = 0
   const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
   const look = () => bot.look(Math.atan2(-dir.x, -dir.z), 0.9, true).catch(() => {})
+  const stepWait = () => sleep ? sleep(50) : (typeof bot.waitForTicks === 'function' ? bot.waitForTicks(1) : gameClock.sleep(50))
   try {
     while (!ctl?.aborted && placed < maxBlocks) {
+      if (bot.entity?.isInWater) return { placed, ms: gameClock.now() - t0, why: 'в воде' }
       const feet = bot.entity.position
       const support = new Vec3(Math.floor(feet.x), Math.floor(feet.y) - 1, Math.floor(feet.z))
       const step = bridgeStep(bot, support, dir)
       if (step.kind !== 'place') return { placed, ms: gameClock.now() - t0, why: step.kind === 'land' ? 'берег' : step.kind === 'blocked' ? 'стена' : 'не вода' }
-      if (!pickFiller(bot)) return { placed, ms: gameClock.now() - t0, why: 'нет блоков' }
+      if (!pickFiller(bot, { steady: true })) return { placed, ms: gameClock.now() - t0, why: 'нет блоков' }
       // К краю: бег, у края (глазами за гранью опоры) — присед; присед клампит тело на блоке.
       const edge = (v) => dir.x ? (dir.x > 0 ? support.x + 1 - v.x : v.x - support.x) : (dir.z > 0 ? support.z + 1 - v.z : v.z - support.z)
+      const speedAlong = () => {
+        const vel = bot.entity.velocity
+        return vel ? Math.max(0, dir.x * vel.x + dir.z * vel.z) : 0
+      }
       const t1 = gameClock.now()
       await look()
       set('forward', true)
-      while (!ctl?.aborted && edge(bot.entity.position) > -0.05 && gameClock.now() - t1 < 1500) {
+      while (!ctl?.aborted && !bot.entity?.isInWater && edge(bot.entity.position) > -0.05 && gameClock.now() - t1 < 1500) {
         const left = edge(bot.entity.position)
-        set('sneak', left < 0.45); set('sprint', left >= 0.45 && (bot.food ?? 20) > 6)
-        await sleep(50)
+        const margin = Math.max(0.45, 0.35 + speedAlong() * 2.5)
+        set('sneak', left < margin); set('sprint', left >= margin && (bot.food ?? 20) > 6)
+        await stepWait()
       }
       set('forward', false); set('sprint', false); set('sneak', true)
-      const r = await placeBlockAt(bot, step.cell, { honest: true, timeoutMs: 600, ctl })
+      if (bot.entity?.isInWater) return { placed, ms: gameClock.now() - t0, why: 'в воде' }
+      const r = await placeBlockAt(bot, step.cell, { steady: true, honest: true, exactAim: true, timeoutMs: 600, ctl })
       if (!r.ok && !r.already) return { placed, ms: gameClock.now() - t0, why: 'не поставил: ' + (r.reason || '?') }
       placed++
       set('sneak', false)

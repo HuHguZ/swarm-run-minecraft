@@ -2,23 +2,53 @@
 // фонтан.
 import type { SharedEnemy, SwarmMember, SwarmPosition } from './types'
 import type { PvpPlan } from './plan-frame'
+import { fledAt } from './board'
 import { distance, cellKey, hasShield, buildBlock } from './common'
 import { memberFight, attackBeforeBuild } from './fight'
 import { inContact } from './retreat'
 
-export function pricedLoot(S: PvpPlan, m: SwarmMember, foe?: SharedEnemy, fight?: ReturnType<typeof memberFight>): boolean {
+export function pricedLoot(S: PvpPlan, m: SwarmMember, foe?: SharedEnemy, fight?: ReturnType<typeof memberFight>, allowTeamLoot = false): boolean {
   const improvement = S.improvementOf(m)
-  const fighting = S.board.tasks().some(t => t.assignedTo === m.id && t.kind === 'fight')
-  if (S.plan.has(m.id) || improvement <= 0 || inContact(m, S.enemies, fighting, S.aggressive)) return false
+  const prev = S.board.taskView(`pvp:${m.id}`)
+  const fighting = prev?.kind === 'fight'
+  if (S.plan.has(m.id) || S.hunting?.(m) || inContact(m, S.enemies, fighting, S.aggressive)) return false
+  const teamLooters = [...S.plan.values()].filter(t => t.kind === 'loot').length
+  const allyNeed = !S.endgame ? S.team.reduce((best, a) => {
+    if (a.id === m.id) return best
+    const duty = S.plan.get(a.id)?.kind
+    if (duty === 'loot' || duty === 'flee' || duty === 'recover') return best
+    return Math.max(best, S.improvementOf(a))
+  }, 0) : 0
+  if (improvement <= 0 && (!allowTeamLoot || S.endgame || teamLooters >= Math.max(1, Math.ceil(S.team.length / 4)))) return false
   const offer = S.options.lootOffer?.(m)
   if (!offer || offer.tier <= 0 || !Number.isFinite(offer.seconds) || offer.seconds < 0) return false
+  const denialValue = !S.endgame && offer.tier >= 3 ? .5 * (offer.tier - 2) : 0
+  const allyValue = !S.endgame && allyNeed > 0 ? Math.min(2.5, allyNeed * .25) * Math.min(1, offer.tier / 2) : 0
+  const effectiveValue = improvement > 0 ? improvement : allyValue + denialValue
+  if (effectiveValue <= 0) return false
   foe ??= [...S.enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
   fight ??= foe && memberFight(m, foe)
   // Последний бой: окупиться должно фактическое время похода, и место сбора должно лежать вне досягаемости врага.
   if (S.endgame && (!foe || !fight || distance(offer.position, foe.position) <= S.threatReach(foe) || offer.seconds >= fight.attackSeconds)) return false
-  const lootPrice = offer.seconds / (1 + offer.tier) / improvement
+  // Командный/отказной лут (когда сам уже одет) не уводит от близкого врага.
+  if (improvement <= 0 && foe && distance(m.position, foe.position) <= S.threatReach(foe) + 6) return false
+  // Во всех фазах учитываем опасность перехвата у цели лута и гистерезис бегства (убирает маятник loot ↔ flee).
+  const fled = !!fledAt.get(S.board)?.has(m.id)
+  if (!S.endgame && S.enemies.length) {
+    const weakSelf = S.weak(m)
+    for (const e of S.enemies) {
+      if (S.now - e.seenAt > 3000) continue
+      const reach = S.threatReach(e)
+      const eFight = e === foe && fight ? fight : memberFight(m, e)
+      const risky = weakSelf || S.outclassed(m, e) || eFight.survival <= eFight.attackSeconds
+      if ((risky || fled) && distance(offer.position, e.position) <= (fled ? reach + 6 : reach)) return false
+      if ((S.aggressive && risky || fled) && distance(m.position, e.position) <= (fled ? reach + 6 : reach)) return false
+    }
+  }
+  const lootPrice = offer.seconds / (1 + offer.tier) / effectiveValue
   const fightPrice = fight ? distance(m.position, foe!.position) / 5.6 + fight.attackSeconds * (1 + fight.attackSeconds / Math.max(.05, fight.survival)) : Infinity
   if (lootPrice >= fightPrice) return false
+  if (fled) fledAt.get(S.board)?.delete(m.id)
   if (!S.endgame && foe && S.assault?.target === foe.id && S.assault.voters.includes(m.id) && m.inventory?.bow && !S.weak(m)) {
     const shot = S.options.assaultShotBeforeLoot?.(m, foe, offer, improvement, S.enemies)
     if (shot) {
@@ -27,7 +57,8 @@ export function pricedLoot(S: PvpPlan, m: SwarmMember, foe?: SharedEnemy, fight?
       return true
     }
   }
-  S.put(m, 'loot', { improvement, weak: S.weak(m), lootTier: offer.tier, lootSeconds: offer.seconds, ...(S.endgame ? { rearm: true } : {}), reason: `верхний лут: ярус ${offer.tier}, путь и сбор ≈${Math.ceil(offer.seconds)}с` }, offer.position)
+  const tag = improvement > 0 ? `ярус ${offer.tier}` : allyValue > 0 ? `для команды (ярус ${offer.tier})` : `отказ врагу (ярус ${offer.tier})`
+  S.put(m, 'loot', { improvement: effectiveValue, weak: S.weak(m), lootTier: offer.tier, lootSeconds: offer.seconds, ...(S.endgame ? { rearm: true } : {}), reason: `верхний лут: ${tag}, путь и сбор ≈${Math.ceil(offer.seconds)}с` }, offer.position)
   return true
 }
 
@@ -78,13 +109,13 @@ export function pvpBuilders(S: PvpPlan): void {
       // Одна стройка на команду: все строители кладут один чертёж (раньше у каждого был свой центр от живой позиции
       // цели, и второй строитель натыкался на чужие клетки — лаборатория 13.10, загон: стену клал один).
       const id = 'build-site:' + doctrine, axisId = 'build-axis:' + doctrine
-      let site = board.facts().find(f => f.id === id), siteAxis = board.facts().find(f => f.id === axisId)
+      let site = board.factView(id), siteAxis = board.factView(axisId)
       // Цель уже за стенкой загона (по оси стенки дальше 1.5 бл.) — стенка бесполезна и переносится, даже начатая.
       const passed = doctrine === 'hunt' && !!site && !!siteAxis && (primary.position.x - site.position.x - .5) * (siteAxis.position.x - site.position.x) + (primary.position.z - site.position.z - .5) * (siteAxis.position.z - site.position.z) > 1.5
       const gone = !site || (doctrine === 'cocoon'
         ? Math.floor(primary.position.x) !== site.position.x || Math.floor(primary.position.z) !== site.position.z || Math.abs(primary.position.y - site.position.y) > 1
         : passed || distance(primary.position, site.position) > 10 && (() => {
-          const cells = board.tasks().filter(t => t.kind === 'build' && t.data?.blueprint === `cutoff:${cellKey(site!.position)}`)
+          const cells = board.tasksView().filter(t => t.kind === 'build' && t.data?.blueprint === `cutoff:${cellKey(site!.position)}`)
           // Дать занятому кладчику закончить попытку. Одна разметка после отмены не удерживает сменщика.
           if (cells.some(t => t.status === 'claimed')) return false
           const partial = cells.some(t => t.status === 'done') && cells.some(t => t.status === 'pending')
@@ -97,7 +128,7 @@ export function pvpBuilders(S: PvpPlan): void {
       if (gone && standing) {
         board.recordFact(builders[0].id, now, { id, kind: 'mark', position: fresh }, 30000)
         board.recordFact(builders[0].id, now, { id: axisId, kind: 'mark', position: { x: fresh.x + axis.x, y: fresh.y, z: fresh.z + axis.z } }, 30000)
-        site = board.facts().find(f => f.id === id); siteAxis = board.facts().find(f => f.id === axisId)
+        site = board.factView(id); siteAxis = board.factView(axisId)
       } else if (gone) site = undefined
       // Стенка — поперёк оси, заложенной вместе с местом (не от живого направления строя: оно прыгает за целью).
       const along = site && siteAxis ? { x: siteAxis.position.x - site.position.x, z: siteAxis.position.z - site.position.z } : forward
@@ -107,7 +138,7 @@ export function pvpBuilders(S: PvpPlan): void {
       // цель ушла через щель, пока свои её били) и стоят у выходов — у обеих щелей и по бокам. Замкнут — бьют сквозь щели.
       const inside = site && Math.floor(primary.position.x) === site.position.x && Math.floor(primary.position.z) === site.position.z && Math.abs(primary.position.y - site.position.y) <= 1
       if (doctrine === 'cocoon' && site && inside) {
-        const cells = board.tasks().filter(t => t.kind === 'build' && t.data?.blueprint === `cocoon:${cellKey(site.position)}`)
+        const cells = board.tasksView().filter(t => t.kind === 'build' && t.data?.blueprint === `cocoon:${cellKey(site.position)}`)
         const sealed = cells.length > 0 && cells.every(t => t.status === 'done')
         if (!sealed) untouchable.add(primary.id)
         const [dx, dz] = ({ east: [1, 0], west: [-1, 0], south: [0, 1], north: [0, -1] } as Record<string, number[]>)[direction]
@@ -130,23 +161,23 @@ export function falseWeakness(S: PvpPlan): void {
   if (primary && committed && doctrine === 'false-weakness') {
     // Якорь и ось приёма — на доске с первого плана: середина строя уезжает вперёд за атакующими, и «глубина кармана»
     // от неё срабатывала раньше времени (лаборатория 14.10).
-    let anchor = board.facts().find(f => f.id === 'feint-anchor'), axis = board.facts().find(f => f.id === 'feint-axis')
+    let anchor = board.factView('feint-anchor'), axis = board.factView('feint-axis')
     if (!anchor || !axis) {
       board.recordFact(team[0].id, now, { id: 'feint-anchor', kind: 'mark', position: { ...center } }, 30000)
       board.recordFact(team[0].id, now, { id: 'feint-axis', kind: 'mark', position: { x: center.x + forward.x, y: center.y, z: center.z + forward.z } }, 30000)
-      anchor = board.facts().find(f => f.id === 'feint-anchor'); axis = board.facts().find(f => f.id === 'feint-axis')
+      anchor = board.factView('feint-anchor'); axis = board.factView('feint-axis')
     }
     const a = anchor?.position ?? center, ax = axis ? { x: axis.position.x - a.x, y: 0, z: axis.position.z - a.z } : forward
     const lat = { x: -ax.z, z: ax.x }, latOf = (p: SwarmPosition) => (p.x - a.x) * lat.x + (p.z - a.z) * lat.z
     const free = available.filter(m => !plan.has(m.id))
     const bait = free.filter(m => m.role !== 'healer' && m.role !== 'flank').sort((p, q) => p.strength - q.strength)[0] ?? free.filter(m => m.role !== 'healer').sort((p, q) => p.strength - q.strength)[0]
-    if (bait) put(bait, 'goto', { bait: true, target: primary.id, enemyPosition: primary.position })
     // Засада с двух сторон: по одному флангу на сторону ждут впереди-сбоку «кармана», пока цель гонится за приманкой,
     // и бьют с боков и со спины, когда она прошла их линию (лаборатория 13.10: засады не было вовсе — фланги стояли в строю).
     const flanks = free.filter(m => m !== bait && m.role === 'flank').sort((p, q) => latOf(p.position) - latOf(q.position))
     const depth = (primary.position.x - a.x) * ax.x + (primary.position.z - a.z) * ax.z
     const pair: [SwarmMember, number][] = flanks.length >= 2 ? [[flanks[0], -1], [flanks[flanks.length - 1], 1]] : []
     const sprung = depth <= 3.5 || pair.some(([m]) => distance(m.position, primary.position) <= 4.5)
+    if (bait && !sprung) put(bait, 'goto', { bait: true, target: primary.id, enemyPosition: primary.position })
     for (const [m, sign] of pair) {
       const ambush = { x: a.x + ax.x * 3 + lat.x * sign * 5, y: m.position.y, z: a.z + ax.z * 3 + lat.z * sign * 5 }
       const data = { ambush: sign < 0 ? 'left' : 'right', target: primary.id, enemyPosition: primary.position }
@@ -165,8 +196,8 @@ export function falseWeakness(S: PvpPlan): void {
 export function falseRetreat(S: PvpPlan): void {
   const { board, team, doctrine, primary, committed, now, center, forward, available, plan, put } = S
   if (primary && committed && doctrine === 'false-retreat') {
-    let rally = board.facts().find(f => f.id === 'feigned-rally')
-    if (!rally) { board.recordFact(team[0].id, now, { id: 'feigned-rally', kind: 'mark', position: { x: center.x - forward.x * 8, y: center.y, z: center.z - forward.z * 8 } }, 30000); rally = board.facts().find(f => f.id === 'feigned-rally') }
+    let rally = board.factView('feigned-rally')
+    if (!rally) { board.recordFact(team[0].id, now, { id: 'feigned-rally', kind: 'mark', position: { x: center.x - forward.x * 8, y: center.y, z: center.z - forward.z * 8 } }, 30000); rally = board.factView('feigned-rally') }
     if (rally && now - rally.seenAt < 8000) for (const m of available) if (!plan.has(m.id)) put(m, 'goto', { bait: true, feigned: true, target: primary.id, enemyPosition: primary.position }, rally.position)
   }
 }
@@ -178,11 +209,11 @@ export function fountain(S: PvpPlan): void {
   if (doctrine === 'fountain' && primary && S.committed && now - primary.seenAt <= 1000) {
     const v = primary.velocity || { x: 0, y: 0, z: 0 }, speed = Math.hypot(v.x, v.z)
     const charging = speed * 20 > 2.5 && v.x * (center.x - primary.position.x) + v.z * (center.z - primary.position.z) > 0
-    let anchor = board.facts().find(f => f.id === 'fountain-anchor'), heading = board.facts().find(f => f.id === 'fountain-axis')
+    let anchor = board.factView('fountain-anchor'), heading = board.factView('fountain-axis')
     if ((!anchor || !heading) && charging) {
       board.recordFact(team[0].id, now, { id: 'fountain-anchor', kind: 'mark', position: { ...center } }, 12000)
       board.recordFact(team[0].id, now, { id: 'fountain-axis', kind: 'mark', position: { x: center.x + v.x / speed, y: center.y, z: center.z + v.z / speed } }, 12000)
-      anchor = board.facts().find(f => f.id === 'fountain-anchor'); heading = board.facts().find(f => f.id === 'fountain-axis')
+      anchor = board.factView('fountain-anchor'); heading = board.factView('fountain-axis')
     }
     // Идёт к нам, но ещё не рывком — коридор раскрывается заранее по линии «он — середина строя» (лаборатория 13.10: до
     // рывка строй бежал ему навстречу). Стоит на месте — обычный бой вразброс, без раскрытия.
@@ -201,13 +232,14 @@ export function fountain(S: PvpPlan): void {
         const cork = school.length >= 3 ? school.slice().sort((p, q) => Number(hasShield(q)) - Number(hasShield(p)) || q.health * q.strength - p.health * p.strength)[0] : undefined
         if (cork) put(cork, 'goto', { fountain: 'cork', ...(hasShield(cork) ? { hold: 'shield', face: { x: primary.position.x, y: primary.position.y + 1.6, z: primary.position.z } } : {}), range: .6, target: primary.id, enemyPosition: primary.position },
           { x: a.x + ax.x * 7, y: cork.position.y, z: a.z + ax.z * 7 })
-        // Каждый уходит на свою сторону коридора и на шаг дальше, чем стоит: коридор — не уже 5 бл. от оси.
+        // Каждый уходит на свою сторону коридора на фиксированную полосу (не уже 5 бл. от оси), без бесконечного сползания наружу.
         const s = (m: SwarmMember) => (m.position.x - a.x) * lateral.x + (m.position.z - a.z) * lateral.z
         const ranks = new Map<number, number>()
         for (const [i, m] of school.filter(m => m !== cork).sort((p, q) => Math.abs(s(p)) - Math.abs(s(q))).entries()) {
           const sign = s(m) > .3 ? 1 : s(m) < -.3 ? -1 : i % 2 ? 1 : -1
           const rank = ranks.get(sign) || 0; ranks.set(sign, rank + 1)
-          const out = sign * Math.max(Math.abs(s(m)) + 1.5, 5 + rank * 1.5)
+          const lane = 5 + rank * 1.5
+          const out = sign * Math.max(Math.abs(s(m)), lane)
           const along = Math.max(-6, Math.min(2, (m.position.x - a.x) * ax.x + (m.position.z - a.z) * ax.z))
           put(m, 'goto', { fountain: 'open', range: .5, target: primary.id, enemyPosition: primary.position }, { x: a.x + ax.x * along + lateral.x * out, y: m.position.y, z: a.z + ax.z * along + lateral.z * out })
         }
