@@ -91,6 +91,7 @@ function connect (this: Session, { bootstrapPaused }: any = {}): Promise<any> {
           // Рюкзак после окон сверяется с сервером (invsync.js): иначе верстак,
           // кирка и прочее «пропадают» у клиента, оставаясь у сервера.
           try { (require('../invsync') as typeof import('../invsync')).install(bot) } catch {}
+          ;(require('../chest-lid') as typeof import('../chest-lid')).watchChestLids(bot)
           // Сколько секунд куча после смерти реально тикала (lootclock.js).
           try { (require('../lootclock') as typeof import('../lootclock')).install(this) } catch {}
           // Кровать-точка возрождения: сервер сбросил — забыть (bedtime.js).

@@ -19,6 +19,26 @@ function scene() {
   return { board, own, team, see, at: (at: number) => { time = at } }
 }
 
+test('a first name or glowing outline shares only position until a body actually sees its equipment', () => {
+  for (const cue of [{ nametag: true }, { glowing: true }]) {
+    const f = scene()
+    const hidden = { id: 'h', position: p, visible: false, ...cue }
+    for (const key of ['equipment', 'threat', 'hpEstimate', 'hitProof']) Object.defineProperty(hidden, key, {
+      get() { throw new Error('read hidden ' + key) }
+    })
+    assert.equal(f.board.observe('g', 1000, hidden), true)
+    const indirect = f.board.enemies()[0]
+    assert.equal(indirect[Object.keys(cue)[0]], true)
+    assert.deepEqual(indirect.position, p)
+    for (const key of ['equipment', 'threat', 'hpEstimate', 'hitProof']) assert.equal(indirect[key], undefined)
+    // Two allied clients can report on the same game tick; the eye that saw the player can confirm equipment.
+    f.see('watch0', {weapon: 'bow', armor: ['iron_boots']}, {threat: 'bow', hpEstimate: 18})
+    const direct = f.board.enemies()[0]
+    assert.ok(!direct.nametag && !direct.glowing)
+    assert.equal(direct.equipment?.weapon, 'bow'); assert.equal(direct.threat, 'bow'); assert.equal(direct.hpEstimate, 18)
+  }
+})
+
 test('eleven clear naked reports survive a1ms newer unknown observer and avoid the captured phantom-P4 flee', () => {
   const f = scene()
   for (const m of f.team.slice(0, 11)) f.see(m.id, naked)

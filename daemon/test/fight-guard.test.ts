@@ -13,6 +13,7 @@ import { createHpEstimate } from '../src/pvp/hp-estimate'
 import { bestWeapon } from '../src/items'
 import { getPhysics } from '../src/tick-plugins'
 import { canHit } from '../src/pick'
+import { planPvp, SwarmBoard, type SwarmMember } from '../src/swarm'
 
 const scope = { target: 'Champ', roundScope: 'blue:1', fightId: 'fight-1' }
 const guard = { digAvoid: [{ x: 1, y: 63, z: 0, feetY: 64 }], swarmStand: { x: 2.5, y: 64, z: .5 } }
@@ -146,7 +147,17 @@ test('ordered shove yields to existing pressure after a failed flank without rev
 test('a filled ordered shove destination does not suppress ready sword strikes', async () => {
   const f = fixture()
   const position = new Vec3(588.3000000119209, 120, 594.3000000119209)
-  const to = position.offset(6, 0, 0)
+  const armor = ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots']
+  const team: SwarmMember[] = ['A', 'B'].map((id, i) => ({ id, team: 'blue', role: 'fighter', health: 20, strength: 30,
+    armor, inventory: { iron_sword: 1 }, weapon: 'iron_sword', position: position.offset(-2, 0, i) }))
+  const board = new SwarmBoard('blue', () => 1000)
+  board.setMembers(team)
+  board.observe('A', 1000, { id: scope.target, position, visible: true, equipment: { armor, weapon: 'iron_sword' } })
+  // The public blueprint describes the original drop. Only the fighter can see the block subsequently placed over it.
+  const order = planPvp(board, team, { doctrine: 'wave', aggressive: true, quorum: 1,
+    edgeOf: () => ({ x: 1, z: 0, drop: Infinity, at: 6 }) }).get('A')
+  assert.equal(order.kind, 'fight'); assert.equal(order.data?.shove, true)
+  const to = order.data.shoveAt
   assert.equal((await f.ask({ shoveAt: to })).detail.accepted, true)
   const stands = [
     new Vec3(590.4987511337886, 120, 596.7043423878877),
@@ -154,7 +165,7 @@ test('a filled ordered shove destination does not suppress ready sword strikes',
     new Vec3(591.4542369272621, 120, 594.8341720002194),
     new Vec3(588.7606398882841, 120, 595.6095116161658)
   ]
-  function step(me: Vec3, other: (p: Vec3) => string | undefined = () => undefined, canHit = true, foe = position) {
+  function step(me: Vec3, other: (p: Vec3) => string | undefined = () => undefined, canHit = true, foe = position, nearFoe = [], opts: any = {}) {
     const bot = {
       entity: { position: me, yaw: 0, width: .6, height: 1.8 }, physics: { playerHalfWidth: Math.fround(.6) / 2 },
       blockAt(at: Vec3) {
@@ -165,9 +176,12 @@ test('a filled ordered shove destination does not suppress ready sword strikes',
           shapes: name === 'sandstone' ? [[0, 0, 0, 1, 1, 1]] : [] }
       }
     }
-    const ctx: any = { bot, entity: { position: foe, username: scope.target }, session: f.session, opts: {}, st: {},
-      prof: { player: true }, pushAt: Infinity, backAt: Infinity, nearMe: [], nearFoe: [], duo: { foes: () => [] }, ready: () => false }
-    const turn: any = { now: 1000, me, d: me.distanceTo(foe), r: 2.5, theirR: 2.7, cooldownLeft: 0, canHit, inSight: true }
+    const ctx: any = Object.assign(opts.live || {}, { bot, entity: { position: foe, username: scope.target }, session: f.session, opts: {}, st: {},
+      prof: { player: true }, pushAt: Infinity, backAt: Infinity, nearMe: [], nearFoe, duo: { foes: () => [] }, ready: () => false })
+    ctx.lastStand = opts.lastStand
+    if (opts.estimatedHp) { ctx.calc = { entity: ctx.entity }; ctx.foeEst = () => ({ hi: opts.estimatedHp }) }
+    const turn: any = { now: opts.now ?? 1000, me, d: me.distanceTo(foe), r: 2.5, theirR: 2.7, cooldownLeft: 0, canHit, inSight: true,
+      pressing: opts.pressing, axeTap: opts.axeTap, meleeDmg: opts.damage }
     edgeTurn(ctx, turn)
     return turn
   }
@@ -181,7 +195,39 @@ test('a filled ordered shove destination does not suppress ready sword strikes',
     assert.equal(turn.canHit, false, name)
     assert.equal(turn.pushing, true)
   }
-  assert.equal(step(position.offset(-2, 0, 0)).edgeHit, 'sprint')
+  const aligned = position.offset(-2, 0, 0)
+  assert.equal(step(aligned).edgeHit, null, 'the same visibly repaired landing invalidates an aligned sprint order')
+  assert.equal(step(aligned).canHit, true, 'keep the normal ready sword attack')
+  const hole = (p: Vec3) => p.x === 594 && p.y === 119 && p.z === 594 ? 'air' : undefined
+  const live: any = {}
+  assert.equal(step(aligned, hole, true, position, [], { live }).edgeHit, 'sprint')
+  live.hitKind = 'sprint' // hitKindTurn can retain the previous decision while the weapon is charging.
+  assert.equal(step(aligned, undefined, false, position, [], { live, now: 1250 }).edgeHit, null)
+  assert.equal(live.hitKind, null, 'retire the old forced sprint before the sword is ready again')
+  let probes = 0
+  const restored = step(aligned, p => { if (p.x >= 593) probes++; return undefined }, true, position, [], { live, now: 1300 })
+  assert.equal(restored.edgeHit, null); assert.equal(probes, 0, 'reuse the same visible floor during this terrain frame')
+  for (const landing of ['sandstone', 'air']) {
+    const turn = step(aligned, p => p.x === 591 && p.y >= 120 && p.y <= 122 ? 'sandstone' :
+      p.x === 594 && p.y === 119 ? landing : undefined)
+    assert.equal(turn.edgeHit, 'sprint', 'a hidden landing cannot invalidate the previous report')
+  }
+  const beside = new Vec3(588, 119, 596), local = [{ pos: beside, kind: 'лава', depth: 1 }]
+  const lava = (p: Vec3) => p.equals(beside) ? 'lava' : undefined
+  const diversion = step(aligned, lava, true, position, local)
+  assert.equal(diversion.edgeHit, null); assert.ok(diversion.strafe)
+  assert.equal(diversion.canHit, false, 'circle toward the witnessed lava instead of knocking him onto the repaired floor')
+  for (const opts of [{ pressing: true }, { lastStand: true }, { axeTap: true }, { estimatedHp: 2, damage: 4 }]) {
+    assert.equal(step(aligned, lava, true, position, local, opts).canHit, true, 'keep ordinary pressure, shield break and finishing blows')
+  }
+  const nearer = new Vec3(590, 119, 594)
+  assert.equal(step(aligned, p => p.equals(nearer) ? 'lava' : undefined, true, position,
+    [{ pos: nearer, kind: 'лава', depth: 1 }]).edgeHit, 'sprint', 'a real visible lava cell before the repaired landing still pays for a sprint')
+  for (const block of ['lava', 'sandstone']) {
+    const screened = step(aligned, p => p.z === 595 && p.x <= 589 && p.y >= 120 && p.y <= 122 ? 'sandstone' :
+      p.equals(beside) ? block : undefined, true, position, block === 'lava' ? local : [])
+    assert.equal(screened.edgeHit, null); assert.equal(screened.canHit, true); assert.ok(!screened.strafe)
+  }
   assert.equal(step(stands[0], undefined, false).canHit, false)
   assert.equal(step(stands[0], undefined, true, position.offset(0, 1, 0)).canHit, false)
   assert.equal(f.session.current, f.current); assert.equal(f.ctl.aborted, false)
@@ -240,7 +286,8 @@ test('an ordered shove cannot buy a useless bare hit on the supported arena floo
     meleeIntentTurn(ctx, turn)
     edgeTurn(ctx, turn)
     assert.equal(turn.canHit, true)
-    assert.equal(turn.edgeHit, mode === 'no order' ? null : 'sprint')
+    // The first replay is airborne. Only the second is standing on the same visible floor as the reported landing.
+    assert.equal(turn.edgeHit, mode === 'DX A1' || mode === 'edge' ? 'sprint' : null)
     assert.equal(ctx.push?.now ?? null, mode === 'edge' ? 'sprint' : null)
     const result = await strikeTurn(ctx, turn)
     if (mode === 'DX A1' || mode === 'DX A2' || mode === 'pickup' || mode === 'raise') {

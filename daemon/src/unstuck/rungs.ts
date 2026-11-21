@@ -3,7 +3,37 @@
 import * as gameClock from '../game-clock'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import { axisTo, solid, at, overlapsBody, waterB, lavaB, sleepReal } from './diagnose'
-import { groundNear, hold, breakToward, digVisible, aborted, swimTo } from './tools'
+import { groundNear, hold, breakToward, digVisible, visiblePoint, aborted, swimTo } from './tools'
+
+// A* can reach the side of the first ladder node without putting the feet in its cell.
+// Enter the visible column on foot, then return the original vertical goal to the pathfinder.
+async function enterLadder (ctx, from) {
+  const { bot, ctl } = ctx, feet = from.floored(), arena = ctx.session?.gotoArena
+  const maxTicks = Math.min(12, Math.floor(((ctx.deadline ?? Infinity) - (ctx.now ?? gameClock.now)()) / 50))
+  if (maxTicks < 1 || aborted(ctx) || !bot.entity.onGround || at(bot, feet)?.name === 'ladder') return false
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const cell = feet.offset(dx, 0, dz), above = cell.offset(0, 1, 0)
+    if (at(bot, cell)?.name !== 'ladder' || at(bot, above)?.name !== 'ladder' ||
+        !visiblePoint(bot, cell) || !visiblePoint(bot, above)) continue
+    const { PlayerState, controls, clone, simulator, worldOf, withinArena } = require('../navigation/parkour/model') as typeof import('../navigation/parkour/model')
+    const { bodyClear, supportAt, groundedHazardClear } = require('../navigation/geometry') as typeof import('../navigation/geometry')
+    const target = cell.offset(.5, 0, .5), step = { yaw: Math.atan2(from.x - target.x, from.z - target.z), control: controls({ forward: true }) }
+    const state = new PlayerState(bot, step.control), simulate = simulator(bot), world = worldOf(bot)
+    const states = [], inside = st => st.onGround && st.pos.floored().equals(cell) && at(bot, cell)?.name === 'ladder'
+    for (let i = 0; i < maxTicks; i++) {
+      const previous = state.pos.clone()
+      state.yaw = step.yaw; simulate(state, world)
+      if (!state.onGround || !withinArena(bot, state.pos, arena, previous) || !bodyClear(bot, state.pos, { from: previous }) ||
+          !supportAt(bot, state.pos, .04) || !groundedHazardClear(bot, state.pos, state.vel.y, true)) break
+      states.push(clone(state))
+      if (!inside(state)) continue
+      const { executePlan } = require('../navigation/parkour/execute') as typeof import('../navigation/parkour/execute')
+      const result = await executePlan(bot, ctl, { target, steps: states.map(() => step), states, ticks: states.length, arena }, inside)
+      return result.ok
+    }
+  }
+  return false
+}
 
 export const RUNGS = {
   // Флаг копки pathfinder'а без копки (смерть посреди копки, чанк ушёл): сбросить.
@@ -156,20 +186,25 @@ export const RUNGS = {
     const p0 = bot.entity.position.clone()
     const dx = toward.x - p0.x; const dz = toward.z - p0.z
     const dist = Math.hypot(dx, dz)
-    if (dist < 14) return { applied: false, why: 'цель близко' }
+    if (dist < 14) {
+      if (ctx.goal?.y > p0.y + 1.25 && await enterLadder(ctx, p0)) return { applied: true, why: 'вошёл на видимую лестницу' }
+      return { applied: false, why: 'цель близко' }
+    }
     const left = () => Math.hypot(toward.x - bot.entity.position.x, toward.z - bot.entity.position.z)
     const len = Math.min(22, dist * 0.6)
     const tried = []
     const tw = gameClock.now()
     for (const deg of [0, 35, -35, 70, -70]) {
-      if (aborted(ctx) || gameClock.now() - tw > 25000 || (ctx.deadline && (ctx.now ? ctx.now() : gameClock.now()) > ctx.deadline - 8000)) break
+      const remaining = (ctx.deadline ?? Infinity) - (ctx.now ?? gameClock.now)()
+      const budget = Math.min(15000, remaining, 25000 - (gameClock.now() - tw))
+      if (aborted(ctx) || budget <= 0 || remaining < 8000) break
       const a = deg * Math.PI / 180
       const ux = (dx * Math.cos(a) - dz * Math.sin(a)) / dist; const uz = (dx * Math.sin(a) + dz * Math.cos(a)) / dist
       const wx = Math.floor(p0.x + ux * len); const wz = Math.floor(p0.z + uz * len)
       const sub = new goals.GoalNearXZ(wx, wz, 3)
       let t = null
       try {
-        await Promise.race([gotoGoal(bot, sub), new Promise<any>((_r, reject) => { t = gameClock.setTimeout(() => reject(new Error('промежуточная: 15 с')), 15000) })])
+        await Promise.race([gotoGoal(bot, sub), new Promise<any>((_r, reject) => { t = gameClock.setTimeout(() => reject(new Error('истёк срок промежуточной цели')), budget) })])
       } catch (err) { tried.push(`${deg}°: ${String(err.message).slice(0, 40)}`) } finally { gameClock.clearTimeout(t); try { bot.pathfinder.setGoal(null) } catch {} }
       if (dist - left() >= 6) return { applied: true, why: `промежуточная ${wx},${wz} (${deg}°): ближе на ${Math.round(dist - left())}` }
       if (bot.entity.position.distanceTo(p0) < 1) tried.push(`${deg}°: ни шага`)

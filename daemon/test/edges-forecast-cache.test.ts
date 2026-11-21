@@ -54,6 +54,21 @@ test('distinct cells, including negative coordinates, keep distinct exact Block 
   assert.equal(seen[0], seen[4])
 })
 
+test('forecast cells stay distinct across local key boundaries near the world border', () => {
+  const origin = new Vec3(29_999_000.25, 0, -29_999_000.5)
+  const points = [[0, 0, 0], [-512, -512, -512], [511, 511, 511], [512, -512, -512],
+    [-512, 512, -512], [-512, -512, 512], [-513, 511, 511], [511, 511, -513]]
+    .map(([x, y, z]) => origin.offset(x, y, z))
+  const reads = []
+  const world = edges.worldOf({ blockAt (p) { reads.push(p); return p.floored() } })
+  const blocks = points.map(p => world.getBlock(p))
+  for (let i = points.length - 1; i >= 0; i--) {
+    assert.deepEqual(blocks[i], points[i].floored())
+    assert.equal(world.getBlock(points[i].offset(.1, .1, .1)), blocks[i])
+  }
+  assert.deepEqual(reads, points)
+})
+
 test('an unknown block is reused only within this forecast and is re-read after a chunk arrives', () => {
   let loaded = false
   let reads = 0

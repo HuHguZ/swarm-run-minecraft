@@ -5,13 +5,15 @@ import * as read from '../read'
 import * as pick from '../pick'
 import * as spear from '../spear'
 import * as throwMod from '../throw'
-import { healthOf, stepSafe } from './body'
+import { healthOf, reachFrom, stepSafe, yawTo } from './body'
 import { runLength } from '../flee'
 import { bodyClear, supportAt } from '../navigation/geometry'
+import { controls, PlayerState, simulator, withinArena } from '../navigation/parkour/model'
+import { observedCollision } from './search'
 import { owner as controlOwner } from '../reflex-lock'
 import { foodAnimals, foodIgnitionAllowed } from './food-fire'
 import { findItem, potionOf, potionRole } from './potions'
-import { FAR, HIT_REACH, TICK_MS } from './rules'
+import { FAR, HIT_REACH, THEIR_REACH, TICK_MS } from './rules'
 import { strikeWait } from './strike-order'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 import { archerCover, steerArcherCover } from './archer-cover'
@@ -95,11 +97,12 @@ export async function flyerTurn (ctx: DuelCtx, turn: TurnFrame) {
 export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, clear, guard, holdWeapon, leadFn, pathTo, pvpSkills, ready, rest, routeInputs, set, spearChargeFar, strafeStep, used } = ctx
   const { aimedCb, arrowItem, bowItem, bowShield, cbShield, d, hp, meInWeb, noMelee, r, seesBody, theyBow, theyUp } = turn
-  if ((d > FAR || theyBow && d > 4) && !(noMelee && bowItem && arrowItem)) {
+  const rangedAim = theyBow || !!aimedCb
+  if ((d > FAR || rangedAim && d > 4) && !(noMelee && bowItem && arrowItem)) {
     if (guard) await guard.raise(!!(cbShield || bowShield))
     if (ctx.perch) { clear(); await ctx.sleep(TICK_MS); return NEXT }
-    // Под натянутым луком сначала рвём линию огня, потом разгоняем оружие.
-    if (theyBow && seesBody && !meInWeb) {
+    // Заряженный арбалет может выстрелить без нового натяжения. Летящий снаряд требует немедленного уворота.
+    if (rangedAim && seesBody && !turn.bolt && !meInWeb) {
       const eye = ctx.entity.position.offset(0, pick.eyeHeight(bot, ctx.entity), 0)
       const cover = archerCover(bot, eye, { arena: ctx.AR, advance: true })
       if (ctx.pathing) { pathTo(false); ctx.pathing = false }
@@ -134,7 +137,6 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
         await ctx.sleep(TICK_MS); return NEXT
       }
     }
-    if (!theyUp && !ctx.perch && !ctx.fort && !meInWeb && (await spearChargeFar(r, d))) return NEXT
     const f = keyDir(bot, 'forward')
     if (aimedCb && seesBody && d < 40) {
       if (ctx.pathing) { pathTo(false); ctx.pathing = false }
@@ -149,6 +151,7 @@ export async function farApproachTurn (ctx: DuelCtx, turn: TurnFrame) {
       await ctx.sleep(TICK_MS)
       return NEXT
     }
+    if (!theyUp && !ctx.perch && !ctx.fort && !meInWeb && (await spearChargeFar(r, d))) return NEXT
     if (shooter && seesBody && stepSafe(bot, f) && d < 30) {
       if (ctx.pathing) { pathTo(false); ctx.pathing = false }
       strafeStep()
@@ -265,6 +268,43 @@ export async function debuffTurn (ctx: DuelCtx, turn: TurnFrame) {
   }
 }
 
+// Спиной к стене можно скользнуть вбок, продолжая смотреть на мечника. С обрыва тот же ввод уводит вниз.
+function spearWallExit (bot, foe, velocity, arena, previousSide): 'left' | 'right' | null {
+  if (!bot.entity.onGround || !bot.physics?.simulatePlayer) return null
+  const seen = observedCollision(bot), cache = new Map()
+  const world = { getBlock(p) {
+    const k = p.floored().toString()
+    if (!cache.has(k)) cache.set(k, seen.blockAt(p))
+    return cache.get(k)
+  } }
+  const geometry = { ...seen, blockAt: world.getBlock }, simulate = simulator(bot)
+  const unknown = { name: 'unknown', shapes: [[0, 0, 0, 1, 1.5, 1]] }
+  const clearance = { ...seen, blockAt: p => world.getBlock(p) || { ...unknown, position: p } }
+  const sides = previousSide === 'right' ? ['right', 'left'] as const : ['left', 'right'] as const
+  for (const side of sides) {
+    const st = new PlayerState(bot, controls({ back: true, [side]: true }))
+    let braking = false
+    // Шаг должен вывести за досягаемость и оставить пол для торможения после смены действий.
+    for (let tick = 1; tick <= 24; tick++) {
+      const target = foe.position.offset(velocity.x * tick, 0, velocity.z * tick)
+      const previous = st.pos.clone()
+      if (tick > 1 && !braking) st.yaw = yawTo(previous, target)
+      simulate(st, world)
+      if (!st.onGround || !withinArena(geometry, st.pos, arena, previous) ||
+          !bodyClear(clearance, st.pos, { from: previous }) || !supportAt(geometry, st.pos, .04)) break
+      const r = reachFrom(st.pos.offset(0, pick.eyeHeight(bot), 0), { position: target, width: foe.width, height: foe.height })
+      if (braking) {
+        if (r < THEIR_REACH) break
+        if (Math.hypot(st.vel.x, st.vel.z) < .003) return side
+      } else {
+        if (r >= THEIR_REACH) { braking = true; st.control = controls() }
+        else if (tick >= 12) break
+      }
+    }
+  }
+  return null
+}
+
 // Копьё: укол, разгон, дистанция.
 export async function spearTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, ctl, foe, gate, guard, holdItem, holdWeapon, maceNow, mf, ready, rest, routeInputs, set, st, strafeStep, used, vision } = ctx
@@ -362,22 +402,31 @@ export async function spearTurn (ctx: DuelCtx, turn: TurnFrame) {
     const wantR = sReady < 250 ? 3.8 : 4.2
     const fwdS = r > wantR && stepSafe(bot, keyDir(bot, 'forward'))
     const backS = r < 3.4 && stepSafe(bot, keyDir(bot, 'back'))
+    let exitSide: 'left' | 'right' | null = null
     // Он ближе 3.4, а отойти некуда (угол, стена, край) и укол не готов — мечом, а не стоять с копьём под его мечом (игра
     // пользователя 25.10: «в углу мечом забиваю — не бьют в ответ»).
     if (r < 3.4 && !backS && !(sj.ok && sReady === 0) && bestWeapon(bot)) {
-      ctx.spearOffUntil = now + 3000
-      await holdWeapon()
-      used('копьё в сторону: зажат, отойти некуда — мечом')
-      return NEXT
+      if (seesBody && vision.visible(ctx.entity)) exitSide = spearWallExit(bot, ctx.entity, vS, ctx.AR, ctx.strafeKey)
+      if (!exitSide) {
+        ctx.spearOffUntil = now + 3000
+        ctx.clear()
+        await holdWeapon()
+        used('копьё в сторону: зажат, отойти некуда — мечом')
+        return NEXT
+      }
     }
-    strafeStep()
+    if (exitSide) ctx.strafeKey = exitSide
+    else strafeStep()
     set('forward', fwdS)
-    set('back', backS && !fwdS)
-    set('left', ctx.strafeKey === 'left' && stepSafe(bot, keyDir(bot, 'left')))
-    set('right', ctx.strafeKey === 'right' && stepSafe(bot, keyDir(bot, 'right')))
+    set('back', !!exitSide || backS && !fwdS)
+    set('left', exitSide ? exitSide === 'left' : ctx.strafeKey === 'left' && stepSafe(bot, keyDir(bot, 'left')))
+    set('right', exitSide ? exitSide === 'right' : ctx.strafeKey === 'right' && stepSafe(bot, keyDir(bot, 'right')))
     set('sprint', fwdS && r > 5 && (bot.food ?? 20) > 6)
     set('jump', false)
-    if (ready('spearNote')) { rest('spearNote', 5000); used('копьё: держу его на 3.4–4.5, дальше его меча') }
+    if (ready('spearNote')) {
+      rest('spearNote', 5000)
+      used(exitSide ? 'копьё: отхожу вдоль стены за досягаемость меча' : 'копьё: держу его на 3.4–4.5, дальше его меча')
+    }
     await ctx.sleep(TICK_MS)
     return NEXT
   }

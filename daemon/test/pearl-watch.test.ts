@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
+import { EventEmitter } from 'node:events'
 const registry = (require('prismarine-registry') as typeof import('prismarine-registry'))('1.21.11')
 const Block: any = (require('prismarine-block') as typeof import('prismarine-block'))(registry)
 
@@ -42,6 +43,8 @@ test('only a visible hostile pearl is reported, with its thrower guessed from th
   assert.ok(seen[0].eta > 0 && seen[0].at.y >= 1 && seen[0].at.y < 2.6, JSON.stringify(seen[0]))
   const ally: any = { ...bot, _ndSwarmAllies: ['Red'], entities: { 10: { ...pearl, id: 10 } } }
   assert.equal(enemyPearls(ally).length, 0, 'a teammate pearl is not an ambush target')
+  const hidden = { ...bot, players: { Red: { entity: { ...foe, _ndVisible: false } } }, entities: { 11: { ...pearl, id: 11 } } }
+  assert.deepEqual(enemyPearls(hidden), [], 'an unseen nearby player cannot identify an unowned pearl')
 })
 
 test('visible native pearl birth owns the arrival position and its original server deadline', () => {
@@ -68,4 +71,63 @@ test('stasis trap: a near-vertical pearl is held by a 3-deep bubble column; a 45
   assert.equal(pearlStasis(entry, { x: .02, y: -.6, z: 0 }, 3).caught, true)
   assert.equal(pearlStasis(entry, { x: .02, y: -.6, z: 0 }, 1).caught, false, 'one water block cannot stop it before the sand')
   assert.equal(pearlStasis(entry, { x: .7, y: -.7, z: 0 }, 3).why, 'left_column')
+})
+
+test('a pearl hitting a wind charge teleports to the start of that tick only over a visible drop', () => {
+  const { pearlWindIntercept } = require('../src/combat/pearl-wind')
+  const p = new Vec3(.5, 121.52, .5), v = new Vec3(0, 0, 1.5)
+  let pos = p.clone(), speed = v.clone()
+  for (let i = 0; i < 18; i++) { speed = speed.offset(0, -.03, 0).scaled(.99); pos = pos.plus(speed) }
+  const pearl = { id: 9, name: 'ender_pearl', width: .25, height: .25, position: pos }
+  const foe: any = { id: 2, username: 'Red', type: 'player', position: p.offset(0, -1.52, 0), onGround: true }
+  const sky = { name: 'air', boundingBox: 'empty', shapes: [] }
+  const bot: any = Object.assign(new EventEmitter(), { username: 'Blue', entity: { id: 1, position: new Vec3(5.5, 120, 34.1), onGround: true, velocity: new Vec3(0, 0, 0) },
+    ndClock: { age: 500n, ticks: 0, serverTicks: 0 }, blockAt: () => sky, entities: { 2: foe, 9: pearl },
+    _ndThrown: new Map([[9, { name: pearl.name, p, v, gameTick: 482, owner: 2, own: false }]]), players: { Red: { entity: foe, gamemode: 0 } } })
+  const plan = () => pearlWindIntercept(bot, 113, [foe], new WeakSet())
+  const hit = plan()
+  assert.ok(hit, 'two native trajectories cross over an open drop')
+  assert.equal(hit.pearl, pearl)
+  assert.ok(hit.at.y < 113)
+  assert.equal(pearlWindIntercept(bot, 60, [foe], new WeakSet()), null, 'no imminent fall boundary')
+  bot.entities[9] = { ...pearl, position: pos.offset(5, 0, 0) }
+  assert.equal(plan(), null, 'visible course changed')
+  bot.entities[9] = pearl
+  bot._ndThrown.get(9).owner = 0
+  assert.equal(plan(), null, 'a guessed owner cannot commit a charge')
+  bot._ndThrown.get(9).owner = 2
+  bot._ndThrown.get(9).gameTick = 484
+  bot.entity.position = new Vec3(7.25, 120, 31.75)
+  let frame = p.clone(), vel = v.clone()
+  for (let i = 0; i < 16; i++) { vel = vel.offset(0, -.03, 0).scaled(.99); frame = frame.plus(vel) }
+  pearl.position = frame
+  foe._ndVisible = true
+  foe._ndObservationNow = () => 5000
+  foe._ndPositionReceipts = [4950, 5000].map(t => ({ ...foe.position, t, kind: 'rel_entity_move', grounded: true }))
+  const drop = plan()
+  assert.ok(drop && drop.at.y > 113 && drop.at.y < 114, 'interception can start above the plane')
+  bot.blockAt = q => q.y === 112 && q.z >= 30 ? { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : sky
+  assert.equal(plan(), null, 'a shelf under the teleport catches the player above the death boundary')
+})
+
+test('a known wall beyond an unseen cell cannot supply a pearl arrival', () => {
+  const { pearlLanding } = require('../src/combat/pearl-watch')
+  const world = { blockAt(q) { return q.x === 1 ? null : floor.blockAt(new Vec3(q.x, q.x === 2 ? 0 : 2, q.z)) } }
+  assert.equal(pearlLanding(world, new Vec3(.9, 2, .5), new Vec3(1.5, 0, 0)), null)
+})
+
+test('a water column damps a pearl before it reaches the floor', () => {
+  const { pearlLanding } = require('../src/combat/pearl-watch')
+  const p = new Vec3(.5, 2.5, .5), v = new Vec3(1, -.4, 0)
+  const water = { name: 'water', boundingBox: 'empty', shapes: [] }
+  const world = { blockAt(q) { return q.y > 0 ? water : floor.blockAt(q) } }
+  const hit = pearlLanding(world, p, v)
+  let pos = p.clone(), velocity = v.clone(), tick = 0
+  do {
+    tick++; velocity = velocity.offset(0, -.03, 0).scaled(.8)
+    if (pos.y + velocity.y <= 1) break
+    pos = pos.plus(velocity)
+  } while (tick < 120)
+  assert.equal(hit?.tick, tick)
+  assert.ok(hit.at.distanceTo(pos) < 1e-8)
 })

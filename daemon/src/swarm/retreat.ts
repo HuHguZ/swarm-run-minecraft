@@ -9,12 +9,13 @@
 // новый бег не начинается, пока он рядом (8 бл.); никого ближе 16 бл. — оторвался; группа стала больше — дошёл до
 // своих; рана зажила до 60 %.
 import type { SwarmMember, SharedEnemy } from './types'
+import type { SwarmBoard } from './board'
 import type { SwarmFightRisk } from './fight'
 import { distance, ratio } from './common'
 
 export type RetreatWhy = 'залп' | 'рана' | 'пустой размен' | 'нас меньше' | 'один'
 // turned — догнали: стоит и дерётся, пока догнавший рядом. foes — от кого начат (повод «по силе» проверяется по ним).
-export type Retreat = { why: RetreatWhy; group: number; foes: string[]; turned?: boolean }
+export type Retreat = { why: RetreatWhy; group: number; foes: string[]; turned?: string }
 type Risk = Pick<SwarmFightRisk, 'unsafe' | 'lethal' | 'killSeconds' | 'survivalSeconds' | 'ready' | 'duelKillSeconds' | 'duelSurvivalSeconds'> & { burst?: boolean }
 
 const CONTACT = 4 // бл.: враг ближе — схватка
@@ -35,10 +36,28 @@ export function inContact(m: SwarmMember, enemies: SharedEnemy[], fighting: bool
 export const caughtBy = (m: SwarmMember, enemies: SharedEnemy[]) => nearestGap(m, enemies) <= CAUGHT
 export const alliesNear = (m: SwarmMember, team: SwarmMember[]) => team.some(a => a.id !== m.id && a.health > 0 && distance(a.position, m.position) <= COVER)
 
+// Самооборону разрешает личный свежий контакт. Радио помогает оценить риск, но по нему нельзя решить, что нас уже догнали.
+export function retreatCatcher(board: SwarmBoard, m: SwarmMember, held: Retreat, enemies: SharedEnemy[]) {
+  if (held.why === 'пустой размен') return null
+  let nearest: Pick<SharedEnemy, 'id' | 'position'> | null = null
+  let reach = held.turned ? TURNED : CAUGHT
+  for (const e of enemies) {
+    if (held.turned && e.id !== held.turned || distance(m.position, e.position) > reach) continue
+    const own = board.visualSighting(e.id, m.id)
+    if (!own || board.now() - own.seenAt >= 1000) continue
+    const gap = distance(m.position, own.position)
+    if (gap <= reach) { nearest = own; reach = gap }
+  }
+  return nearest
+}
+
 // Повод начать отход или null — драться.
 export function retreatWhy(m: SwarmMember, risk: Risk, { contact, caught = false, headstart = Infinity, allies = false, futile = false, outnumbered = false, aggressive = false, shelter = true, alone = !allies, behind = true, blast = false }: { contact: boolean; caught?: boolean; headstart?: number; allies?: boolean; futile?: boolean; outnumbered?: boolean; aggressive?: boolean; shelter?: boolean; alone?: boolean; behind?: boolean; blast?: boolean }): RetreatWhy | null {
-  // Натиск (соло-арена против людей): бегут только на хилку и не из схватки.
-  if (aggressive) return !contact && risk.unsafe && ratio(m) < WOUNDED ? 'рана' : null
+  // При внезапном контакте проигрыш всей группы и отставание по снаряжению требуют проверить выход даже в натиске.
+  if (aggressive) {
+    if (contact && risk.unsafe && futile && behind) return 'пустой размен'
+    return !contact && risk.unsafe && ratio(m) < WOUNDED ? 'рана' : null
+  }
   // Взрыв рядом (кристалл, якорь — blast) не догоняет, он взрывается, где стоит: от него — всегда и без форы, при любой оценке
   // боя (DeepSeek, ревью 21.10: ранний выход «безопасно» стоял раньше и глушил эту ветку).
   if (blast) return 'залп'
@@ -90,13 +109,18 @@ export function retreatHolds(held: Retreat, risk: Risk, { score, allies = false,
 // с contact: false). Отход «по силе» (один, пустой размен, нас меньше, залп) кончается, когда изменилась сила — свои
 // подошли, снаряжение, враг ранен или пропал, а не расстояние: оторвавшийся на 16 бл. шёл назад к тому же врагу и у
 // 16 бл. снова бежал (стенд 15×15, 21.10: «бегство → поход» 242 раза за раунд). Вдали отход — это лут и подготовка.
-export function retreatStep(m: SwarmMember, held: Retreat, enemies: SharedEnemy[], { allies = false, group = 1, still = true, blast = false }: { allies?: boolean; group?: number; still?: boolean; blast?: boolean } = {}): 'run' | 'turn' | 'end' {
+export function retreatStep(m: SwarmMember, held: Retreat, enemies: SharedEnemy[], { allies = false, group = 1, still = true, blast = false, catcher }: { allies?: boolean; group?: number; still?: boolean; blast?: boolean; catcher?: string } = {}): 'run' | 'turn' | 'end' {
   const gap = nearestGap(m, enemies)
   // Развернулся: дерётся, пока догнавший рядом; рана при своих рядом — снова за них.
-  if (held.turned) return gap > TURNED ? 'end' : held.why === 'рана' && allies ? 'run' : 'turn'
+  if (held.turned) {
+    if (!catcher || blast) return 'end'
+    if (held.why !== 'рана' || !allies) return 'turn'
+    delete held.turned
+    return 'run'
+  }
   if (held.why === 'рана' ? ratio(m) >= HEALED || gap > SAFE && !still : held.why === 'залп' ? !still || gap > SAFE && ratio(m) >= .9 : !still) return 'end'
   // Взрыв вплотную — не «догнал»: от него прочь, а не в бой (DeepSeek, ревью 21.10).
-  if (gap <= CAUGHT && !blast && held.why !== 'пустой размен' && !(held.why === 'рана' && allies)) { held.turned = true; return 'turn' }
+  if (catcher && !blast && !(held.why === 'рана' && allies)) { held.turned = catcher; return 'turn' }
   // Дошёл до своих — группа выросла хотя бы на двоих: в свалке группа гуляет на одного каждые полсекунды.
   if (held.why !== 'рана' && held.why !== 'залп' && group >= held.group + 2) return 'end'
   return 'run'

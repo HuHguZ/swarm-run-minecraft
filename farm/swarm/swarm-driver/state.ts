@@ -2,11 +2,11 @@
 // планы и отметки, кулдауны, телеметрия, счётчики раунда. Части меняют его на месте; изменяемые счётчики — поля (sw.generation).
 import { SwarmBoard } from '../../../daemon/src/swarm'
 import type { SwarmDriverCtx } from './common'
-import type { SwarmPosition } from '../../../daemon/src/swarm/types'
+import type { SharedEnemy, SwarmPosition } from '../../../daemon/src/swarm/types'
 
-export type KnownChest = { at: SwarmPosition; report?: { by: string; time: number; items: string[] } }
+export type KnownChest = { at: SwarmPosition; partner?: SwarmPosition; slots?: number; reportedVisit?: number; report?: { by: string; time: number; items: string[] } }
 
-export function createDriverState ({ bots, pos, alive, arena, home, hostile, humanNames, log, arms = false, aggressive = false, hideouts = [], chestTops = [], perches = [], drops = () => [], announce = null, sandSpot = null, edgeOf = null, digSites = null, surfaceY = null, ladderSites = [], now = () => Date.now() }: any): SwarmDriverCtx {
+export function createDriverState ({ bots, pos, alive, arena, home, hostile, humanNames, recentHuntAlarm, log, arms = false, aggressive = false, hideouts = [], chestTops = [], perches = [], drops = () => [], publicKills = () => [], announce = null, sandSpot = null, edgeOf = null, digSites = null, surfaceY = null, ladderSites = [], now = () => Date.now() }: any): SwarmDriverCtx {
   const boards = new Map<string, SwarmBoard>()
   // Ямы-ловушки раунда (dig): вскрытые клетки пола; край у врага — и обрыв модели, и своя дыра в 3.5 бл. от него.
   const holes: any[] = []
@@ -19,7 +19,7 @@ export function createDriverState ({ bots, pos, alive, arena, home, hostile, hum
   const transfers = new Map<string, any>()
   const planned = new Map<string, Map<string, any>>()
   const plannedAt = new Map<string, number>()
-  const plannedFoes = new Map<string, Set<string>>()
+  const plannedFoes = new Map<string, Map<string, SharedEnemy>>()
   // Кто сколько наших убил в прошлых раундах матча (lifecycle.reset): команда → враг → число.
   const pastKills = new Map<string, Record<string, number>>()
   const visited = new Map<string, Map<string, number>>()
@@ -30,7 +30,7 @@ export function createDriverState ({ bots, pos, alive, arena, home, hostile, hum
   let saidAt = 0
   // Поставленное своими за раунд не копается никогда: чертёж истекает, а кокон, стенка и укрытие стоят (лаборатория 13.10:
   // строитель, потеряв цель из виду, разобрал свой же кокон как «ближайший камень»).
-  const placed = new Map<string, any[]>()
+  const placed = new Map<string, Map<string, SwarmPosition>>()
   // Обход мест с сундуками (натиск): лут-задача, а сундуков не видно — к ближнему месту колизея с сундуками (камеры,
   // галереи, лаборатория, оружейная, комнаты), где свои не были 45 с и до врага не меньше 16 бл.; случайное прочёсывание
   // уводило голых прямо к человеку (14.10: «бегут к игроку без вещей»).
@@ -53,6 +53,8 @@ export function createDriverState ({ bots, pos, alive, arena, home, hostile, hum
   const knownChests = new Map<string, Map<string, KnownChest>>() // Только свои наблюдения и сообщения союзников.
   // Оценка «не вытяну» — симуляция боя на 600 тиков; на каждый ответ статуса (40 тел — ~160/с) её не пересчитывать: 250 мс.
   const unsafeCache = new Map<string, { at: number; v: boolean }>()
-  return { bots, pos, alive, arena, home, hostile, humanNames, log, arms, aggressive, hideouts, chestTops, perches, drops, announce, sandSpot, edgeOf, digSites, surfaceY, ladderSites, now,
+  // Tactical availability uses a teammate's own position. Public elimination still comes from the referee.
+  const canAct = name => alive(name) && !(pos[name]?.p?.y < arena?.killY)
+  return { bots, pos, alive: canAct, arena, home, hostile, humanNames, recentHuntAlarm, log, arms, aggressive, hideouts, chestTops, perches, drops, publicKills, announce, sandSpot, edgeOf, digSites, surfaceY, ladderSites, now,
     boards, holes, walls, ladderRoutes, boxed, boxTries, blueprints, transfers, planned, plannedAt, plannedFoes, pastKills, visited, cooldown, telemetry, generation, positionQueries, saidAt, placed, toured, tourBad, blockedRoutes, fullFor, knownChests, unsafeCache }
 }

@@ -280,6 +280,8 @@ function upSlots () { const st = readState(); return farmIds.filter(i => Object.
 function randomSeed () { return BigInt.asIntN(64, BigInt('0x' + crypto.randomBytes(8).toString('hex'))).toString() }
 
 function prepareSlot (s, { seed, fresh, world }: any) {
+  // Capacity belongs to the slot. Capture it before a missing jar causes the template properties to be copied.
+  const savedCapacity = Number(propGet(props(s.dir), 'max-players'))
   if (!fs.existsSync(path.join(s.dir, JAR))) {
     fs.mkdirSync(s.dir, { recursive: true })
     for (const f of [JAR, 'eula.txt', 'bukkit.yml', 'spigot.yml', 'commands.yml', 'help.yml', 'permissions.yml', 'server.properties']) {
@@ -322,7 +324,7 @@ function prepareSlot (s, { seed, fresh, world }: any) {
     'broadcast-rcon-to-ops': 'false',
     'level-seed': seed,
     motd: `NeuroDown farm ${s.i}`,
-    'max-players': Number(process.env.FARM_MAX_PLAYERS) || 6,
+    'max-players': Number(process.env.FARM_MAX_PLAYERS) || (Number.isInteger(savedCapacity) && savedCapacity > 0 ? savedCapacity : 6),
     // FARM_VIEW_DISTANCE (12.10, арена: Колизей 160×160 — с края до края дальше 8 чанков, боты не видели игрока).
     'view-distance': Number(process.env.FARM_VIEW_DISTANCE) || 8,
     'simulation-distance': 8,

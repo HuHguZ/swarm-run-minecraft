@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { strike, runMeleeCombo, debuffOpening, splashMedic } from '../src/swarm/combos/ideas'
+import { assist } from '../src/pvp/team-assist'
 
 const potion = (kind: string, slot = 37) => ({ name: 'splash_potion', type: 500, slot, count: 1,
   componentMap: new Map([['potion_contents', { data: { potionId: kind } }]]) })
@@ -19,8 +20,8 @@ function fixture(items: any[] = [{ name: 'iron_sword', slot: 36, type: 1 }]) {
   bot.entity = { id: 1, position: new Vec3(0, 64, 0), velocity: new Vec3(0, 0, 0), metadata: [], onGround: true }
   bot.entities = {}; bot.heldItem = items[0]
   bot.inventory = { slots: [], items: () => items }
-  bot.blockAt = p => ({ name: wall ? 'stone' : 'air', boundingBox: wall ? 'block' : 'empty', position: p,
-    shapes: wall ? [[0, 0, 0, 1, 1, 1]] : [] })
+  bot.blockAt = p => ({ name: wall || p.y < 64 ? 'stone' : 'air', boundingBox: wall || p.y < 64 ? 'block' : 'empty', position: p,
+    shapes: wall || p.y < 64 ? [[0, 0, 0, 1, 1, 1]] : [] })
   bot.world = { raycast(from, direction, length) {
     const t = direction.y < 0 ? (64 - from.y) / direction.y : Infinity
     return t >= 0 && t <= length ? { intersect: from.plus(direction.scaled(t)), position: from.plus(direction.scaled(t)).floored() } : null
@@ -200,8 +201,10 @@ test('group medic refuses an enemy intercepting the launch before the separated 
 })
 test('group medic protects an enemy hitbox below the splash even when its feet are outside the sphere', async () => {
   const f = fixture([potion('strong_healing')])
+  const floor = f.bot.blockAt
+  f.bot.blockAt = p => p.x <= 5 ? floor(p) : { name: 'air', boundingBox: 'empty', position: p, shapes: [] }
   const allies = [{ position: new Vec3(5, 64, 0), health: 10 }, { position: new Vec3(5.5, 64, 0), health: 8 }]
-  const enemy = foe(9.2); enemy.position.y = 61.5
+  const enemy = foe(9.2); enemy.position.y = 62
   const timer = setInterval(() => f.bot.emit('physicsTick'), 2)
   try {
     const r = await splashMedic(f.bot, allies, [enemy])
@@ -219,6 +222,55 @@ test('group medic throws one healing potion for two injured allies after enemy s
   } finally { clearInterval(timer) }
 })
 
+for (const mode of ['pair', 'wide', 'self', 'regeneration', 'enemy', 'intercept', 'invisible', 'wall', 'expired', 'reconnect', 'cancelled', 'replaced']) test('assigned medic through assist: ' + mode, async () => {
+  const item = potion(mode === 'regeneration' ? 'regeneration' : 'strong_healing')
+  const f = fixture([{ name: 'iron_sword', slot: 36, type: 1 }, item]), { bot } = f
+  bot.ndClock = { id: 'medic-clock', ticks: 100 }
+  bot.health = mode === 'self' ? 8 : 20
+  const ctl = { aborted: false }
+  const patient = Object.assign(foe(3), { id: 4, username: 'A' })
+  if (mode === 'intercept' || mode === 'invisible') patient.position.x = 5.4
+  const friend = Object.assign(foe(3), { id: 5, username: 'B', position: patient.position.offset(0, 0, 3) })
+  bot._ndSwarmAllies = ['A', 'B']
+  bot.players = { A: { entity: patient }, B: { entity: friend } }
+  for (const e of [patient, friend]) bot.entities[e.id] = e
+  const reports: any = { A: { hp: 7, untilTick: 110 } }
+  if (mode === 'pair') reports.B = { hp: 6, untilTick: 110 }
+  if (mode === 'wide') {
+    friend.position.z = 5
+    reports.A.hp = 16
+    reports.B = { hp: 16, untilTick: 110 }
+  }
+  if (mode === 'self') reports.A.hp = 17
+  bot.equip = async it => {
+    bot.heldItem = it
+    if (it !== item) return
+    if (mode === 'enemy') bot.entities[2] = foe(2)
+    if (mode === 'intercept' || mode === 'invisible') {
+      bot._ndSwarmAllies.push('screen')
+      bot.entities[6] = Object.assign(foe(.65), { id: 6, username: 'screen', metadata: [mode === 'invisible' ? 0x20 : 0] })
+    }
+    if (mode === 'wall') f.wall()
+    if (mode === 'expired') bot.ndClock.ticks = 111
+    if (mode === 'reconnect') bot.ndClock = { id: 'next-clock', ticks: 0 }
+    if (mode === 'cancelled') ctl.aborted = true
+    if (mode === 'replaced') bot.players.A.entity = foe(12)
+  }
+  const timer = setInterval(() => bot.emit('physicsTick'), 2)
+  try {
+    const r: any = await assist({ require: () => bot }, { mode: 'heal', ally: 'A', reports, clockId: 'medic-clock' }, ctl)
+    assert.equal(r.ok, ['pair', 'wide', 'self', 'regeneration', 'invisible'].includes(mode), r.why)
+    if (mode === 'enemy') assert.equal(r.threat, 'enemy')
+    if (mode === 'self') assert.ok(r.land.x > .5 && r.land.x < 2.5)
+    assert.equal(f.uses.length, r.ok ? 1 : 0)
+    if (mode === 'pair' || mode === 'wide') {
+      assert.ok(Math.abs(r.land.z - friend.position.z / 2) < .7)
+      for (const e of [patient, friend]) assert.ok(e.position.distanceTo(r.land) < 3)
+    }
+    if (!ctl.aborted) assert.equal(bot.heldItem.name, 'iron_sword')
+  } finally { clearInterval(timer) }
+})
+
 test('group medic cancels when a new visible enemy enters the cluster during potion equip', async () => {
   const f = fixture([potion('strong_healing')]), enemy = foe(2.25)
   enemy.position.z = 1.5; f.bot.heldItem = null
@@ -228,6 +280,72 @@ test('group medic cancels when a new visible enemy enters the cluster during pot
   try {
     assert.equal((await splashMedic(f.bot, allies, [])).thrown, false)
     assert.equal(f.uses.length, 0)
+  } finally { clearInterval(timer) }
+})
+
+for (const change of ['shift', 'running-pair', 'approaching', 'departing', 'hidden', 'wall', 'cancel']) test('ring medic resolves the release frame: ' + change, async () => {
+  const item = potion('strong_healing'), { bot, uses } = fixture([item])
+  const registry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
+  const Block = (require('prismarine-block') as typeof import('prismarine-block'))('1.21.11')
+  const ctl = { aborted: false }
+  let shutter = false
+  bot.blockAt = p => {
+    const solid = p.y < 64 || shutter && Math.floor(p.x) === 2
+    const b = Block.fromStateId(registry.blocksByName[solid ? 'stone' : 'air'].defaultState, 0)
+    b.position = p.floored()
+    return b
+  }
+  const pair = [-1, 1].map((z, i) => Object.assign(foe(2.8), { id: 3 + i, username: ['A', 'B'][i], position: new Vec3(2.8, 64, z), onGround: true }))
+  const enemy = foe(4.8)
+  const runner = change === 'approaching' || change === 'departing' || change === 'hidden'
+  const dz = change === 'departing' ? .28 : -.28
+  enemy.position.z = 5.2 - dz
+  const mark = (e, t) => {
+    e._ndObservationNow = () => t
+    e._ndPositionReceipts = [e._ndPositionReceipts?.[1], { ...e.position, t, grounded: true, kind: 'rel_entity_move' }]
+  }
+  if (runner) {
+    for (const e of pair) e.position.x = 4.8
+    enemy.onGround = true
+    if (change === 'hidden') {
+      enemy.metadata = [0x20]
+      Object.defineProperty(enemy, '_ndPositionReceipts', { get() { throw new Error('unseen movement') } })
+    } else mark(enemy, 100)
+    bot.entities[enemy.id] = enemy
+  }
+  if (change === 'running-pair') for (const e of pair) mark(e, 100)
+  bot.health = 20
+  bot.players = Object.fromEntries(pair.map(e => [e.username, { entity: e }]))
+  for (const e of pair) bot.entities[e.id] = e
+  bot._ndSwarmAllies = pair.map(e => e.username)
+  bot.ndClock = { id: 'medic', ticks: 35 }
+  const reports = Object.fromEntries(pair.map(e => [e.username, { hp: runner ? 19 : 7, untilTick: 60 }]))
+  bot.once('physicsTick', () => {
+    if (runner) {
+      enemy.position.z += dz
+      if (change !== 'hidden') mark(enemy, 150)
+    } else for (const e of pair) {
+      e.position.x += change === 'running-pair' ? .16 : 2
+      if (change === 'running-pair') mark(e, 150)
+    }
+    shutter = change === 'wall'
+  })
+  if (change === 'cancel') bot.look = async () => { ctl.aborted = true }
+  const timer = setInterval(() => bot.emit('physicsTick'), 2)
+  try {
+    const r: any = await assist({ require: () => bot }, { mode: 'heal', ally: 'A', reports, clockId: 'medic' }, ctl)
+    assert.equal(r.ok, ['shift', 'running-pair', 'departing', 'hidden'].includes(change), JSON.stringify(r))
+    assert.equal(uses.length, Number(r.ok))
+    if (change === 'approaching') assert.equal(r.threat, 'enemy')
+    if (r.ok) {
+      const { landing, KINDS } = require('../src/throw') as typeof import('../src/throw')
+      const origin = (require('../src/pick') as typeof import('../src/pick')).eyeOf(bot).offset(0, -.1, 0)
+      const flight = landing(bot, origin, bot.entity.yaw, bot.entity.pitch, KINDS.splash_potion, null, false, true)!
+      const dx = change === 'running-pair' ? .16 * flight.ticks : 0
+      assert.ok(Math.abs(r.land.x - pair[0].position.x - dx) < .5 && Math.abs(r.land.z) < .5, JSON.stringify(r.land))
+      assert.ok(pair.every(e => e.position.offset(dx, 0, 0).distanceTo(r.land) < 1.4))
+      if (change === 'departing') assert.ok(enemy.position.offset(0, 0, dz * flight.ticks).distanceTo(r.land) > 7)
+    }
   } finally { clearInterval(timer) }
 })
 

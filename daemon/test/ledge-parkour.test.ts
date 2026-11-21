@@ -82,6 +82,103 @@ test('a three-block underlip descent uses the real crouching body instead of a g
   }
 })
 
+test('ledge_to executes the crouched return beneath a three-block roof lip, including its corner', async () => {
+  const p = source()
+  for (const corner of [false, true]) {
+    const s = scene({ drop: 3, corner })
+    const roof = s.bot.entity.position.clone()
+    s.bot.world = { getBlock: s.world.getBlock, raycast: require('prismarine-world/src/worldsync').prototype.raycast }
+    s.cells.set('6,17,2', 'smooth_sandstone')
+    s.bot.entity.position = new Vec3(6.5, 18, 2.5)
+    assert.ok(p.visibleLanding(s.bot, s.target))
+    await require('../src/swarm-position').swarmPositions(s.bot, { purpose: 'escape', radius: 4, methods: ['walk'] })
+    s.bot.entity.position = roof
+    drive(s.bot, s.world, p)
+    const result = await p.ledgeTo({ require: () => s.bot }, { aborted: false, onAbort: [] }, {
+      at: s.target, maxFallDamage: 0, arena: { x: 2, z: 2, r: 6, killY: 14 }
+    })
+    assert.equal(result.ok, true, result.why)
+    assert.equal(s.bot.health, 20)
+    assert.ok(result.samples.some(s => !s.onGround && s.control.sneak && s.pos.x > 4.3))
+    assert.ok(s.bot.entity.onGround && s.bot.entity.position.distanceTo(s.target) < .25)
+    assert.equal(s.bot.physics.playerHeight, 1.8)
+  }
+})
+
+test('ledge_to centers on a personally scouted team1 gallery slab after native ground friction changes its stopping point', async () => {
+  const p = require('../src/navigation/parkour'), { swarmPositions } = require('../src/swarm-position')
+  const layout = require('../arena/colosseum-arms').generate('team1')
+  const grid = require('../arena/colosseum').model({ R: 24, bays: 40, ceilH: 64, masts: 0 }).g
+  for (const [x, y, z, name] of [...layout.field, ...layout.set]) grid.set(x, y, z, name === 'air' ? '' : name.replace(/\{.*$/, ''))
+  const at = new Vec3(615.5, 150.5, 543.5), support = at.floored()
+  const arena = { x: 600.5, z: 600.5, r: 80, killY: 113 }
+  for (const mode of ['center', 'support lost', 'new owner']) {
+    const s = scene(), blocks = new Map<string, any>(), ctl = { aborted: false, onAbort: [] as Array<() => void> }
+    let gone = false, newOwner = false, staleClears = 0, flight = false, centering = false
+    s.world.getBlock = pos => {
+      const q = pos.floored(), key = q.toString()
+      if (blocks.has(key)) return blocks.get(key)
+      const name = gone && q.equals(support) ? 'air' : grid.get(q.x - 600, q.y - 120, q.z - 600) || 'air'
+      const [base, props] = name.split('[')
+      let block = Block.fromStateId(registry.blocksByName[base].defaultState)
+      if (props) block = Block.fromProperties(base, { ...block.getProperties(), ...Object.fromEntries(props.slice(0, -1).split(',').map(s => s.split('='))) })
+      block.position = q; blocks.set(key, block)
+      return block
+    }
+    s.bot.world = { getBlock: s.world.getBlock, raycast: require('prismarine-world/src/worldsync').prototype.raycast }
+    s.bot.entity.position = at.offset(0, 0, 1)
+    await swarmPositions(s.bot, { purpose: 'escape', radius: 5, methods: ['walk'] })
+    s.bot.entity.position = new Vec3(615.5, 153.5, 541.5)
+    drive(s.bot, s.world, p, () => {
+      if (s.bot._ndParkourForecast) { flight = true; return }
+      // The last flight tick releases its marker. Change the world on the next, grounded step.
+      if (!flight || !s.bot.entity.onGround || s.bot.entity.position.y !== at.y) return
+      if (!centering) { centering = true; return }
+      if (mode === 'support lost' && !gone) {
+        const before = s.bot.blockAt(support)
+        gone = true; blocks.delete(support.toString())
+        s.bot.emit('blockUpdate', before, s.bot.blockAt(support))
+      } else if (mode === 'new owner' && !newOwner) {
+        ctl.aborted = true
+        for (const stop of [...ctl.onAbort]) stop()
+        newOwner = true; s.bot.setControlState('right', true)
+      }
+    })
+    const clear = s.bot.clearControlStates
+    s.bot.clearControlStates = () => { if (newOwner) staleClears++; clear() }
+    const result = await p.ledgeTo({ require: () => s.bot }, ctl, { at, maxFallDamage: 0, arena })
+    assert.ok(centering)
+    assert.equal(result.ok, mode === 'center', result.why)
+    assert.equal(ctl.onAbort.length, 0)
+    if (mode === 'center') {
+      assert.ok(result.centeringTicks > 0 && result.centeringTicks <= 30)
+      assert.ok(result.landed && s.bot.entity.onGround && s.bot.entity.position.distanceTo(at) < .12)
+      assert.equal(s.bot.health, 20)
+    } else if (mode === 'support lost') {
+      assert.ok(gone); assert.equal(result.why, 'landing_support_lost')
+    } else {
+      assert.ok(newOwner); assert.equal(result.why, 'interrupted'); assert.equal(staleClears, 0)
+    }
+  }
+})
+
+test('a new obstruction across the crouched route stops the pilot on its original roof', async () => {
+  const p = source(), s = scene({ drop: 3 })
+  drive(s.bot, s.world, p, tick => {
+    if (tick !== 1) return
+    const at = new Vec3(4, 20, 2), before = s.bot.blockAt(at)
+    s.cells.set('4,20,2', 'smooth_sandstone')
+    s.bot.emit('blockUpdate', before, s.bot.blockAt(at))
+  })
+  const result = await p.ledgeTo({ require: () => s.bot }, { aborted: false }, {
+    at: s.target, maxFallDamage: 0, arena: { x: 2, z: 2, r: 6, killY: 14 }
+  })
+  assert.equal(result.why, 'trajectory_changed')
+  assert.equal(result.ticks, 2)
+  for (let i = 0; i < 12; i++) await s.bot.waitForTicks(1)
+  assert.ok(s.bot.entity.onGround && s.bot.entity.position.y === 21)
+})
+
 test('crouching collision dimensions belong to each native state and stay crouched while standing is blocked', () => {
   const p = source(), s = scene()
   const slab = Block.fromProperties('stone_slab', { type: 'top', waterlogged: false }); slab.position = new Vec3(3, 22, 2)
@@ -180,6 +277,73 @@ test('invalid target coordinates are refused before changing movement controls',
   const p = source(), s = scene()
   const result = await p.ledgeTo({ require: () => s.bot }, { aborted: false }, { at: { x: NaN, y: 17, z: 2.5 } })
   assert.equal(result.why, 'invalid_ledge_request')
+})
+
+for (const removed of ['landing', 'beside it', 'behind a screen'] as const) test(`a descent onto an exposed one-block shelf reacts to removal of ${removed}`, async () => {
+  const p = source(), s = scene(), bot = s.bot
+  bot.entity.position = new Vec3(3.3, 21, 1.5)
+  const at = new Vec3(5.5, 19, 2.5), support = at.offset(0, -1, 0).floored(), other = support.offset(0, 0, 1)
+  s.cells.set([support.x, support.y, support.z].join(','), 'smooth_sandstone')
+  s.cells.set([other.x, other.y, other.z].join(','), 'smooth_sandstone')
+  bot.world = { getBlock: s.world.getBlock, raycast: require('prismarine-world/src/worldsync').prototype.raycast }
+  assert.equal(p.visibleLanding(bot, at), true)
+  const arena = { x: 3, z: 2, r: 9, killY: 13 }
+  let cut = false
+  drive(bot, s.world, p, () => {
+    if (cut) return
+    cut = true
+    assert.ok(bot.entity.onGround, 'support changed while the pilot could still stop on the roof')
+    const cell = removed === 'beside it' ? other : support, before = bot.blockAt(cell)
+    const screen: string[] = []
+    if (removed === 'behind a screen') {
+      for (let y = 18; y <= 23; y++) { const key = [4, y, 2].join(','); s.cells.set(key, 'sandstone'); screen.push(key) }
+      assert.ok(!p.visibleLanding(bot, at))
+    }
+    s.cells.delete([cell.x, cell.y, cell.z].join(','))
+    bot.emit('blockUpdate', before, bot.blockAt(cell))
+    if (screen.length) {
+      s.cells.set([cell.x, cell.y, cell.z].join(','), before.name)
+      bot.emit('blockUpdate', null, before)
+      for (const key of screen) s.cells.delete(key)
+    }
+  })
+  const result = await p.ledgeTo({ require: () => bot }, { aborted: false, onAbort: [] }, { at, arena })
+  assert.ok(cut)
+  if (removed === 'landing') {
+    assert.equal(result.why, 'landing_support_lost')
+    assert.equal(result.ticks, 1)
+    for (let i = 0; i < 12; i++) await bot.waitForTicks(1)
+    assert.equal(bot.entity.onGround, true)
+    assert.equal(bot.entity.position.y, 21)
+  } else {
+    assert.equal(result.ok, true, result.why); assert.ok(bot.entity.position.distanceTo(at) < .25)
+  }
+})
+
+test('ledge_to refuses an unseen shelf under the roof before forecasting or taking movement controls', async () => {
+  const p = source(), s = scene()
+  s.bot.world = { getBlock: s.world.getBlock, raycast: require('prismarine-world/src/worldsync').prototype.raycast }
+  assert.equal(p.visibleLanding(s.bot, s.target), false)
+  const result = await p.ledgeTo({ require: () => s.bot }, { aborted: false }, { at: s.target, maxFallDamage: 1 })
+  assert.equal(result.why, 'landing_not_observed')
+  assert.equal(result.ticks, 0)
+})
+
+for (const respawn of [false, true]) test(`an exterior shelf personally scouted before returning to the roof (respawn=${respawn})`, async () => {
+  const p = source(), s = scene(), roof = s.bot.entity.position.clone()
+  s.bot.world = { getBlock: s.world.getBlock, raycast: require('prismarine-world/src/worldsync').prototype.raycast }
+  s.cells.set('6,16,2', 'smooth_sandstone')
+  s.bot.entity.position = new Vec3(6.5, 17, 2.5)
+  assert.equal(p.visibleLanding(s.bot, s.target), true)
+  await require('../src/swarm-position').swarmPositions(s.bot, { purpose: 'escape', radius: 4, methods: ['walk'] })
+  if (respawn) s.bot.emit('respawn')
+  s.bot.entity.position = roof
+  assert.equal(p.visibleLanding(s.bot, s.target), false)
+  drive(s.bot, s.world, p)
+  const result = await p.ledgeTo({ require: () => s.bot }, { aborted: false }, { at: s.target, maxFallDamage: 1 })
+  if (respawn) { assert.equal(result.why, 'landing_not_observed'); assert.equal(result.ticks, 0); return }
+  assert.equal(result.ok, true, result.why)
+  assert.ok(s.bot.entity.onGround && s.bot.entity.position.distanceTo(s.target) < .25)
 })
 
 test('an arena forecast rechecks actual velocity before applying the next input', async () => {

@@ -71,6 +71,27 @@ test('edge support follows actual 1.21.11 shapes, including narrow centers and f
   assert.equal(support(bot, new Vec3(.5, 1.5, .5)).drop, 0)
   assert.ok(support(bot, new Vec3(.05, 1.5, .05)).drop > 3, 'the corners of the cell are air, not fence support')
 })
+test('visible lower slabs supply stand positions above unknown terrain and keep the fence clearance boundary', () => {
+  const { bodyClear, standPositions }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
+  const { bot } = worldOf([[0, 0, 0, 'stone_slab', { type: 'bottom', waterlogged: false }],
+    [1, 0, 0, 'stone_slab', { type: 'bottom', waterlogged: false }], [2, 0, 0, 'stone_slab', { type: 'bottom', waterlogged: false }],
+    [3, 0, 0, 'stone_slab', { type: 'bottom', waterlogged: false }], [3, 2, 0, 'stone'], [6, -1, 0, 'oak_fence']])
+  const shapes = Object.values(bot.registry.blockCollisionShapes.shapes) as number[][][]
+  assert.equal(Math.max(...shapes.flatMap(shape => shape.map(box => box[4]))), 1.5)
+  const observed = { ...bot, blockAt: (p: Vec3) => p.y < 0 || p.x === 2 && p.y === 1 ? null : bot.blockAt(p) }
+  const stands = [0, 1, 2, 3].map(x => {
+    const feet = new Vec3(x + .5, .5, .5)
+    return standPositions(observed, feet, { rise: 0, drop: 0 }).some(pt => pt.equals(feet))
+  })
+  assert.deepEqual(stands, [true, true, false, false], 'clear slabs, unseen body space, and an overhead block')
+  const clearAt = (y: number, world = observed) => bodyClear(world, new Vec3(6.5, y, .5))
+  assert.equal(clearAt(.49), false, 'the unseen lower cell could contain a tall fence')
+  assert.equal(clearAt(.49, bot), false, 'the actual fence crosses the sole')
+  assert.equal(clearAt(.5, bot), true, 'contact at the top of the fence is a legal stand')
+  assert.equal(bodyClear(observed, new Vec3(6.5, .5, .5), { from: new Vec3(7.5, .25, .5) }), true,
+    'a lower previous pose does not enlarge the destination body')
+})
+
 test('geometry selects shape tops and tests the entire player body against rotated states', () => {
   const { supportAt, bodyClear, standPositions }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
   for (const [name, properties, height] of [
@@ -467,6 +488,44 @@ test('native search CPU budget excludes time yielded to the physical clock', asy
     const plan = await planJumpAsync(bot, { aborted: false }, new Vec3(2.5, 2, .5), { planningMs: 20 })
     assert.ok(plan)
   } finally { clearImmediate(callback) }
+})
+
+test('a descheduled forecast slice retains its bounded search only while the launch is still current',
+  { skip: typeof process.threadCpuUsage !== 'function' }, async t => {
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const target = new Vec3(2.5, 2, .5), realNow = performance.now.bind(performance)
+  let elapsed = 0
+  t.mock.method(performance, 'now', () => realNow() + elapsed)
+  const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 1, 0, 'stone']])
+  const simulate = bot.physics.simulatePlayer
+  let interrupt: (() => void) | undefined
+  bot.physics.simulatePlayer = function (...args) {
+    const once = interrupt; interrupt = undefined
+    once?.()
+    return simulate.apply(this, args)
+  }
+  const run = async (duringFrame, options = {}, ctl = { aborted: false }) => {
+    interrupt = duringFrame
+    const diagnostics = { profiles: 0, frames: 0, why: undefined }
+    const plan = await planJumpAsync(bot, ctl, target, { planningMs: 100, diagnostics, ...options })
+    return { plan, diagnostics }
+  }
+  for (let request = 0; request < 2; request++) {
+    const r = await run(() => { elapsed += 110 })
+    assert.ok(r.plan, 'each request can recover one scheduling pause')
+  }
+  assert.equal((await run(() => { elapsed += 250 })).diagnostics.why, 'planning_budget',
+    'compensation from the preceding requests cannot extend this deadline')
+  const busy = await run(() => {
+    const stamp = process.threadCpuUsage()
+    let used = process.threadCpuUsage(stamp)
+    while (used.user + used.system < 50000) used = process.threadCpuUsage(stamp)
+  }, { planningMs: 25 })
+  assert.equal(busy.diagnostics.why, 'planning_budget', '50 ms of actual thread work consumes the 25 ms budget')
+  const cancelled = { aborted: false }
+  assert.equal((await run(() => { elapsed += 110; cancelled.aborted = true }, {}, cancelled)).diagnostics.why, 'interrupted')
+  assert.equal((await run(() => { elapsed += 110 }, { maxFrames: 0 })).diagnostics.why, 'planning_budget')
+  assert.equal((await run(() => { elapsed += 110; bot.entity.position.x += 1 })).diagnostics.why, 'forecast_start_changed')
 })
 test('a route edge refused only by its frame budget is retried once with a larger budget', async () => {
   const { route }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')

@@ -1,14 +1,20 @@
 export const WIND_BID_REPLY_TICKS = 2
 export const WIND_BID_RELEASE_MS = (WIND_BID_REPLY_TICKS + 2) * 50
+export const windFlightLeaseMs = (ticks: number) => (ticks + 2) * 100
 export interface WindBid {
   target: string
   entity: number
   tick: number
   ticks: number
   prefix?: number
+  pearl?: number
+  standby?: true
 }
 export type WindBidFinish = (shot?: Pick<WindBid, 'tick' | 'ticks'>) => void
-export type WindRadio = (bid: WindBid, signal?: AbortSignal) => Promise<WindBidFinish | undefined>
+export interface WindRadio {
+  (bid: WindBid, signal?: AbortSignal): Promise<WindBidFinish | undefined>
+  canBid?(): boolean
+}
 
 const orders = new WeakMap<object, {
   id: string

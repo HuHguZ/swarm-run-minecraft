@@ -95,124 +95,135 @@ function fixture(lan = 0) {
 }
 const plain = value => JSON.parse(JSON.stringify(value))
 
-test('a Colosseum restart waits for live and dead old connections to leave Paper and skips offline bodies', async () => {
-  const f = fixture(), actors = [f.own(31, 0, 101), f.own(31, 1, 102), f.own(31, 2, 103)]
-  for (const a of actors) f.peers.set(a.ws, '127.0.0.1:25631')
-  f.dead.add(actors[1].ws); f.offline.add(actors[2].ws)
-  const roster = await f.fleet.discover(31), probes: string[] = []
-  const count = await f.fleet.leaveForRestore(31, roster, async (_i, command) => {
-    probes.push(command)
-    assert.ok(actors.every(a => f.offline.has(a.ws)), 'all quit receipts must precede the group query')
-    if (probes.length === 1) throw new Error('write ECONNABORTED')
-    if (probes.length === 2) return 'There are 40 of a max of 80 players online: Tester, ...'
-    if (probes.length === 3) return 'There are 2 of a max of 80 players online: Tester, Tester'
-    if (probes.length === 4) return `There are 2 of a max of 80 players online: Tester, ${actors[0].name}`
-    return 'There are 1 of a max of 80 players online: Tester'
-  })
-  assert.equal(count, 2); assert.deepEqual(probes, ['list', 'list', 'list', 'list', 'list'])
-  assert.deepEqual(f.calls.filter(c => c.method === 'disconnect').map(c => c.port), actors.slice(0, 2).map(a => a.ws))
-})
-
-test('an unrecoverable departure check restores previously online bots without joining an offline one', async () => {
-  const f = fixture(), actors = [f.own(31, 0, 101), f.own(31, 1, 102)]
-  for (const a of actors) f.peers.set(a.ws, '127.0.0.1:25631')
-  f.offline.add(actors[1].ws)
-  await assert.rejects(f.fleet.leaveForRestore(31, actors, async () => { throw new Error('rcon auth failed') }), /rcon auth failed/)
-  assert.deepEqual(f.calls.filter(c => c.method === 'connect').map(c => c.port), [actors[0].ws])
-  assert.deepEqual([...f.offline], [actors[1].ws])
-})
-
-test('two round clones run with all owned bodies offline and restore the complete roster, including a former spectator', async () => {
-  const f = fixture(), actors = Array.from({ length: 40 }, (_, k) => f.own(31, k, 100 + k))
-  for (const a of actors) f.peers.set(a.ws, '127.0.0.1:25631')
-  f.dead.add(actors[2].ws); f.offline.add(actors[1].ws)
-  for (let round = 2; round <= 3; round++) {
-    const logs: string[] = []
-    const joined = await f.fleet.restoreRoundRoster(31, actors, async (_i, cmd) => {
-      assert.equal(cmd, 'list')
-      return 'There are 1 of a max of 80 players online: Tester'
-    }, async () => {
-      assert.ok(actors.every(a => f.offline.has(a.ws)), 'old clients must be out for the whole clone and refill')
-    }, message => logs.push(message))
-    assert.deepEqual([...joined].sort(), actors.map(a => a.name).sort())
-    assert.equal(f.offline.size, 0)
-    assert.ok(logs.at(0)?.endsWith(round === 2 ? '(39)' : '(40)'))
-    assert.match(logs.at(-1)!, /40\/40/)
+const home = { x: 600.5, y: 124, z: 600.5 }
+function parkingScene (n: number, lan = 0) {
+  const f = fixture(lan), bots = Array.from({ length: n }, (_, k) => f.own(31, k, 100 + k))
+  const worlds = new Map(bots.map(b => [b.name, 'overworld'])), modes = new Map(bots.map(b => [b.name, 0]))
+  const commands: string[] = [], reports: string[] = []
+  for (const b of bots) f.peers.set(b.ws, '127.0.0.1:25631')
+  const active = n => !f.offline.has(bots.find(b => b.name === n)!.ws)
+  const paper = async (_i, command: string) => {
+    commands.push(command)
+    if (command === 'list') {
+      const present = ['Tester', ...bots.map(b => b.name).filter(active)]
+      return `There are ${present.length} of a max of 80 players online: ${present.join(', ')}`
+    }
+    if (command === 'execute as @a run data get entity @s playerGameType') return ['Tester has the following entity data: 0',
+      ...bots.filter(b => active(b.name)).map(b => `${b.name} has the following entity data: ${modes.get(b.name)}`)].join('')
+    const query = /^execute if entity @a\[name=(\w+)\]$/.exec(command)
+    if (query) return active(query[1]) ? 'Test passed. Count: 1' : 'Test failed'
+    const mode = /^gamemode spectator (\w+)$/.exec(command)
+    const move = /^execute as (\w+) if entity @s\[gamemode=spectator\] in minecraft:(the_nether|overworld) run tp @s (.+)$/.exec(command)
+    const info = /^execute as (\w+) at @s if dimension minecraft:(the_nether|overworld) run data get entity @s playerGameType$/.exec(command)
+    const name = (mode || move || info)?.[1]
+    assert.ok(name && worlds.has(name), `unexpected command or human target: ${command}`)
+    if (!active(name)) return 'No player was found'
+    if (mode) { modes.set(name, 3); return 'Nothing changed. The player already has that game mode' }
+    if (move) {
+      assert.equal(modes.get(name), 3)
+      assert.equal(move[3], move[2] === 'the_nether' ? '0.5 128 0.5' : '600.5 124 600.5')
+      worlds.set(name, move[2])
+      return `Teleported ${name} to ${move[3].split(' ').join(', ')}`
+    }
+    return worlds.get(name) === info![2] ? `${name} has the following entity data: ${modes.get(name)}` : 'Test failed'
   }
-  assert.equal(f.calls.filter(c => c.method === 'disconnect').length, 79)
-  assert.equal(f.calls.filter(c => c.method === 'connect').length, 80)
+  const run = (rebuild: () => Promise<void>, rcon = paper) => f.fleet.restoreRoundRoster(31, bots, rcon, rebuild, m => reports.push(m), home)
+  return { ...f, bots, worlds, modes, commands, reports, run, paper }
+}
+
+test('two Colosseum clones keep forty game sessions and a human online; only the initially absent bot needs a login', async () => {
+  const f = parkingScene(40), absent = f.bots[1]
+  f.dead.add(f.bots[2].ws); f.offline.add(absent.ws)
+  for (let k = 0; k < 2; k++) {
+    const joined = await f.run(async () => {
+      for (const b of f.bots) if (!f.offline.has(b.ws)) {
+        assert.equal(f.worlds.get(b.name), 'the_nether'); assert.equal(f.modes.get(b.name), 3)
+      }
+      assert.equal(f.offline.size, k ? 0 : 1, 'parking keeps every existing game socket online')
+    })
+    assert.equal(joined.size, 40)
+    assert.ok(f.bots.every(b => f.worlds.get(b.name) === 'overworld' && !f.offline.has(b.ws)))
+  }
+  assert.deepEqual(f.calls.filter(c => c.method === 'connect').map(c => c.port), [absent.ws])
+  assert.equal(f.calls.filter(c => c.method === 'disconnect').length, 0)
+  assert.ok(f.commands.every(c => !c.includes('Tester') && !c.includes('@a')))
 })
 
-test('a bot lost to OOM does not block the other 39 once Paper confirms its absence', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const f = fixture(), actors = [{ name: 'NeuroFarm31', ws: 8831 }, ...Array.from({ length: 39 }, (_, k) => f.own(31, k, 100 + k))]
-  for (const actor of actors) f.peers.set(actor.ws, '127.0.0.1:25631')
-  const missing = actors.at(-1)!
-  f.stalled.add(missing.ws)
-  let queried = 0, cloned = false
-  const restoring = f.fleet.restoreRoundRoster(31, actors, async () => {
-    queried++
-    assert.ok(actors.slice(0, -1).every(a => f.offline.has(a.ws)))
-    // A valid list can still contain the body when its control socket is gone.
-    return queried === 1 ? `There are 1 of a max of 80 players online: ${missing.name}` : 'There are 0 of a max of 80 players online:'
-  }, async () => { assert.equal(queried, 2); cloned = true }, () => {})
-  await new Promise(resolve => setImmediate(resolve))
-  t.mock.timers.tick(20000)
-  const joined = await restoring
-  assert.ok(cloned)
-  assert.deepEqual([...joined].sort(), actors.slice(0, -1).map(a => a.name).sort())
-  assert.equal(f.calls.some(c => c.port === missing.ws), false)
+test('a shortened list of forty bots and one human accepts complete named dimension data and falls back on truncated RCON', async () => {
+  for (const truncateData of [false, true]) {
+    const f = parkingScene(40)
+    let queries = 0, clones = 0
+    const joined = await f.run(async () => { clones++; assert.ok(f.bots.every(b => f.worlds.get(b.name) === 'the_nether')) }, async (i, command) => {
+      if (command === 'list') return 'There are 41 of a max of 80 players online: Tester, ' + f.bots.slice(0, 13).map(b => b.name).join(', ') + ', ...'
+      if (truncateData && command === 'execute as @a run data get entity @s playerGameType') return 'Tester has the following entity data: 0NeuroFa'
+      if (command.startsWith('execute if entity')) queries++
+      return f.paper(i, command)
+    })
+    assert.equal(clones, 1); assert.equal(joined.size, 40)
+    assert.equal(queries, truncateData ? 120 : 0)
+  }
 })
 
-test('an unreachable roster cannot trigger a clone if no controllable fighter remains', async () => {
-  const f = fixture(), a = f.own()
-  f.unreachable.add(a.ws)
+test('the server must attest to the named spectator in the Nether; a positive teleport string is insufficient', async () => {
+  const f = parkingScene(2)
+  const name = f.bots[1].name
   let cloned = false
-  await assert.rejects(f.fleet.restoreRoundRoster(31, [a], async () => 'There are 0 of a max of 80 players online:',
-    async () => { cloned = true }, () => {}))
+  await assert.rejects(f.run(async () => { cloned = true }, async (i, cmd) => {
+    if (cmd.includes(`as ${name} if entity`) && cmd.includes('minecraft:the_nether')) return `Teleported ${name} to 0.5, 128, 0.5`
+    return f.paper(i, cmd)
+  }), /не подтвердил парковку/)
   assert.equal(cloned, false)
+  assert.ok(f.bots.every(b => f.worlds.get(b.name) === 'overworld'))
 })
 
-test('a lost quit receipt permits a partial round only after Paper confirms everyone has left', async () => {
-  const f = fixture(), actors = [f.own(31, 0, 101), f.own(31, 1, 102)]
-  for (const a of actors) f.peers.set(a.ws, '127.0.0.1:25631')
-  f.lostQuit.add(actors[1].ws)
-  let queried = 0, cloned = false
-  const joined = await f.fleet.restoreRoundRoster(31, actors, async () =>
-    ++queried === 1 ? `There are 1 of a max of 80 players online: ${actors[1].name}` : 'There are 0 of a max of 80 players online:',
-  async () => { assert.equal(queried, 2); cloned = true }, () => {})
-  assert.ok(cloned)
-  assert.deepEqual([...joined], [actors[0].name])
-  assert.equal(f.calls.some(c => c.port === actors[1].ws && c.method === 'connect'), false)
+test('a lost teleport reply is verified, and even a failed clone returns all parked fighters before surfacing its error', async () => {
+  const f = parkingScene(3)
+  await assert.rejects(f.run(async () => {
+    assert.ok(f.bots.every(b => f.worlds.get(b.name) === 'the_nether'))
+    throw new Error('clone failed')
+  }, async (i, cmd) => {
+    const reply = await f.paper(i, cmd)
+    if (cmd.includes('in minecraft:the_nether run tp')) throw new Error('rcon closed')
+    return reply
+  }), /clone failed/)
+  assert.ok(f.bots.every(b => f.worlds.get(b.name) === 'overworld'))
+  for (const b of f.bots) assert.deepEqual(f.calls.filter(c => c.port === b.ws).map(c => c.method), ['peek', 'stop'])
 })
 
-test('a reachable socket for a different game server still aborts a partial round before anyone leaves', async () => {
-  const f = fixture(), actors = [f.own(31, 0, 101), f.own(31, 1, 102)]
-  f.peers.set(actors[0].ws, '127.0.0.1:25631')
-  f.peers.set(actors[1].ws, '127.0.0.1:25565')
-  let cloned = false
-  await assert.rejects(f.fleet.restoreRoundRoster(31, actors, async () => 'There are 0 of a max of 80 players online:',
-    async () => { cloned = true }, () => {}), /не подтвердил сервер/)
-  assert.equal(cloned, false)
-  assert.ok(f.calls.every(c => c.method === 'peek'))
+test('a failed control socket permits the other thirty-nine only when Paper confirms absence; online unowned bodies block the clone', async () => {
+  const f = parkingScene(40), absent = f.bots.at(-1)!
+  f.unreachable.add(absent.ws)
+  let cloned = 0
+  await assert.rejects(f.run(async () => { cloned++ }), /онлайн без подтверждения/)
+  assert.deepEqual(f.commands, ['list'])
+  f.offline.add(absent.ws)
+  const joined = await f.run(async () => { cloned++ })
+  assert.equal(cloned, 1); assert.equal(joined.size, 39); assert.equal(joined.has(absent.name), false)
+  assert.ok(f.commands.every(c => !c.includes(absent.name + ' ')))
 })
 
-test('a failing clone rejoins the verified sessions before reporting the map error', async () => {
-  const f = fixture(), a = f.own(31, 0, 101)
-  f.peers.set(a.ws, '127.0.0.1:25631')
-  await assert.rejects(f.fleet.restoreRoundRoster(31, [a], async () => 'There are 0 of a max of 80 players online:',
-    async () => { assert.ok(f.offline.has(a.ws)); throw new Error('clone failed') }, () => {}), /clone failed/)
-  assert.equal(f.offline.size, 0)
-})
-
-test('a Colosseum restart refuses an unconfirmed peer and never disconnects LAN clients', async () => {
-  const local = fixture(), a = local.own()
-  local.peers.set(a.ws, '127.0.0.1:25629')
-  await assert.rejects(local.fleet.leaveForRestore(31, [a]), /не подтвердил/)
-  assert.deepEqual(local.calls.map(c => c.method), ['peek'])
-  const lan = fixture(54400)
-  assert.equal(await lan.fleet.leaveForRestore(31, [a]), 0)
+test('a foreign socket, a non-roster name, a LAN or a malformed list cannot move a single player', async () => {
+  const f = parkingScene(2), rebuild = async () => assert.fail('clone must not run')
+  f.peers.set(f.bots[1].ws, 'localhost:25629')
+  await assert.rejects(f.run(rebuild), /не подтвердил сервер/)
+  assert.equal(f.commands.length, 0)
+  f.peers.set(f.bots[1].ws, 'localhost:25631')
+  await assert.rejects(f.run(rebuild, async () => 'There are 2 of a max of 80 players online: Tester, ...'), /список игроков/)
+  f.bots[1].name = 'Tester'
+  await assert.rejects(f.run(rebuild), /состав слота/)
+  const lan = parkingScene(1, 54400)
+  await assert.rejects(lan.run(rebuild))
   assert.deepEqual(lan.calls, [])
+})
+
+test('a connected body with an unconfirmed return prevents the round while every other spectator returns', async () => {
+  const f = parkingScene(3), blocked = f.bots[0].name
+  await assert.rejects(f.run(async () => {}, async (i, cmd) => {
+    if (cmd.includes(`as ${blocked} if entity`) && cmd.includes('minecraft:overworld')) return 'No player was found'
+    return f.paper(i, cmd)
+  }), /не подтвердили возврат/)
+  assert.equal(f.worlds.get(blocked), 'the_nether')
+  assert.ok(f.bots.slice(1).every(b => f.worlds.get(b.name) === 'overworld'))
 })
 
 test('a hidden listener requires a matching loopback owner to discover and mutate a registered bot', async () => {
@@ -261,6 +272,13 @@ test('discovery includes only registered extras and base bodies reporting the re
   f.peers.set(8831, '127.0.0.1:25631'); f.peers.set(8931, '127.0.0.1:25629')
   assert.deepEqual(plain(await f.fleet.discover(31)), [{ name: 'NeuroFarm31', ws: 8831 }, { name: a.name, ws: a.ws }])
   assert.deepEqual(f.calls.map(c => c.method), ['peek', 'peek'], 'identification never connects or changes the foreign body')
+})
+
+test('a partial shutdown targets only named owned extras', async () => {
+  const f = fixture(), kept = f.own(31, 0, 31001), retired = f.own(31, 1, 31002)
+  assert.equal(await f.fleet.down(31, new Set([retired.name, 'HuHguZ'])), 1)
+  assert.deepEqual(plain(f.mutations[0].rows.map(r => r.pid)), [retired.p.pid])
+  assert.ok(f.processes.has(kept.p.pid))
 })
 
 for (const fault of ['pid reused', 'command changed', 'exe changed', 'listener changed', 'duplicate listener', 'wrong slot', 'wrong marker', 'missing process table']) {

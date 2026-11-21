@@ -2,6 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { CacheModel, castRays, pieCounts, rayDirs } from '../src/swarm/cache-model'
 import { cacheJobs } from '../src/swarm/plan-jobs'
+import { SwarmBoard } from '../src/swarm/board'
+import { swarmCaches } from '../../farm/swarm/swarm-driver/caches'
+import { createSwarmDriver } from '../../farm/swarm/swarm-driver'
 
 // Игрушечный «колизей»: пол y −1, поле |x|,|z| < 14, ряды ступенями (кольцо 14..23, высота n − 13), стена 24..26 высотой 16.
 // Сундуки рядов — на ступенях (видны), тайник — в толще (6 соседей сплошные).
@@ -88,6 +91,202 @@ test('«пирог» с наклоном: с трёх мест тайник вы
   assert.ok(top[0].p > 0.05, `вероятность в точке ${top[0].p}`)
   const plan = m.planDig({ x: 10.5, y: 0, z: -10.5 })!
   assert.ok(plan && Math.hypot(plan.to.x - cache.x, plan.to.z - cache.z) <= 6, `ход к ${JSON.stringify(plan?.to)}`)
+})
+
+function scannerReports(extra: P[] = []) {
+  const cache = { x: 18, y: 2, z: -6 }, w = arena(cache)
+  w.all.push(...extra)
+  const ground = w.opaque
+  w.opaque = (x, y, z) => x >= -5 && x <= 4 && y >= 46 && y <= 49 && z >= -5 && z <= 4 ? 1 : ground(x, y, z)
+  for (let i = 0; i < 64; i++) w.all.push({ x: i % 8 - 4, y: 47, z: Math.floor(i / 8) - 4 })
+  const eyes = [{ x: .5, y: 1.62, z: .5 }, { x: 10.5, y: 1.62, z: -10.5 }, { x: -8.5, y: 1.62, z: 9.5 }, { x: .5, y: 5.62, z: 17.5 }]
+  return eyes.map((eye, i) => scan(w, eye, .13 * i + .05))
+}
+
+test('a single unresolved eastern chest never pays the miner for the 64 chests upstairs in separate F3 sectors', t => {
+  const m = new CacheModel(box)
+  for (const s of scannerReports()) m.addScan(s)
+  const me = { x: 10.5, y: 0, z: -10.5 }, plan = m.planDig(me)!
+  const easternMass = [...m.cand].reduce((sum, i) => sum + (m.at(i).x > 1 ? m.prob(i) : 0), 0)
+  assert.equal(m.unknown, 65)
+  assert.ok(easternMass > .05 && easternMass <= 1.00001, `one unresolved eastern chest was priced as ${easternMass}`)
+  assert.ok(plan && plan.gain <= 1.00001 && plan.gain > .05)
+  assert.equal(m.dig(plan.from, plan.to, new Set(plan.exposed)).gain, 0, 'a teammate cannot count the other miner’s reserved discovery again')
+  t.diagnostic(`estimated finds ${plan.gain.toFixed(3)} in ${plan.cost.toFixed(2)} s, ${(60 * plan.rate).toFixed(3)}/min`)
+})
+
+test('one unresolved chest can span multiple remaining cells, and two registered chests can pay for two discoveries', () => {
+  const m = new CacheModel(box), reports = scannerReports()
+  for (const [i, s] of reports.entries()) m.addScan(i ? { ...s, pie: undefined } : s)
+  m.refresh()
+  const eastern = [...m.cand].filter(i => m.at(i).x > 1 && m.prob(i) > 0)
+  assert.ok(eastern.length > 1, 'a single bearing leaves several plausible supports')
+  assert.ok(eastern.reduce((sum, i) => sum + m.prob(i), 0) <= 1.00001)
+  const pair = new CacheModel(box)
+  for (const s of scannerReports([{ x: 19, y: 2, z: -6 }])) pair.addScan(s)
+  pair.refresh()
+  const exposed = pair.dig({ x: 15, y: 2, z: -5 }, { x: 22, y: 2, z: -5 })
+  assert.ok(exposed.gain > 1 && exposed.gain <= 2.00001, `two distinct chests along a single tunnel: ${exposed.gain}`)
+  assert.ok([...pair.cand].every(i => pair.prob(i) <= 1), 'a physical cell holds at most one chest block')
+})
+
+test('a rejected miner leaves the profitable F3 sector to a safe teammate in the twenty-player round', async () => {
+  let now = 1000, report: ReturnType<typeof scannerReports>[number]
+  const orders: { by: string; method: string; p: any }[] = [], logs: string[] = [], pos: any = {}
+  const blue = ['A', 'B', 'Scout', ...Array.from({ length: 17 }, (_, i) => 'Wing' + i)]
+  const red = Array.from({ length: 20 }, (_, i) => 'Red' + i)
+  const bots = [...blue, ...red].map(name => {
+    if (blue.includes(name)) pos[name] = { p: { x: 0, y: 0, z: 0 }, hp: 20, inv: { iron_sword: 1 }, armor: {} }
+    return { name, team: blue.includes(name) ? 'blue' : 'red', c: { async call(method, p) {
+      orders.push({ by: name, method, p })
+      if (method === 'cache_scan') return { detail: name === 'Scout' ? report : {} }
+      if (method === 'goto' && name === 'B') {
+        pos.B.p = { x: p.x, y: p.y, z: p.z }
+        return { status: 'done', detail: { arrived: pos.B.p } }
+      }
+      return { status: 'done', detail: {} }
+    } } }
+  })
+  const arena = { x: 0, y: 0, z: 0, r: 28 }
+  const driver = createSwarmDriver({ arms: true, bots, pos, now: () => now, alive: () => true, arena,
+    home: () => ({ x: 0, y: 0, z: 0 }), hostile: (_, id) => red.includes(id), log: s => logs.push(s) })
+  for (report of scannerReports()) {
+    pos.Scout.p = { ...report.eye, y: report.eye.y - 1.62 }; now += 21000
+    await driver.turn(bots[2]); await new Promise(setImmediate)
+  }
+  assert.equal(orders.filter(o => o.by === 'Scout' && o.method === 'cache_scan').length, 4)
+  pos.A.p = { x: -3.5, y: 0, z: -10.5 }; pos.A.inv.wooden_pickaxe = 1
+  pos.B.p = { x: 10.5, y: 0, z: -10.5 }; pos.B.inv.iron_pickaxe = 1
+  now += 3500
+  driver.observe(bots[2], [{ id: 'Red0', visible: true, position: { x: -11.5, y: 0, z: -10.5 },
+    equipment: { weapon: 'iron_sword', armor: [] } }], now)
+  await driver.turn(bots[1]); await driver.turn(bots[1])
+  assert.ok(logs.some(s => s.includes('B: ищу тайники')), 'B accepts the useful eastern tunnel after A declines')
+  assert.ok(!logs.some(s => s.includes('A: ищу тайники')), 'A has a reported enemy eight blocks away')
+  assert.ok(orders.some(o => o.by === 'B' && o.method === 'dig_to' && o.p.at.x > 14))
+})
+
+test('ordinary team miner receives the F3 reports and only takes the dig over a cheaper alternative', async t => {
+  const reports = scannerReports(), arena = { x: 0, y: 0, z: 0, r: 28 }, calls: string[] = [], logs: string[] = []
+  const me = { x: 10.5, y: 0, z: -10.5 }, pos = { A: { p: me, hp: 20, inv: { iron_pickaxe: 1 } } }
+  let now = 1000, report = reports[0]
+  const board = new SwarmBoard('blue', () => now, 8000)
+  const b = { name: 'A', c: { call: async method => { calls.push(method); return { detail: method === 'cache_scan' ? report : {} } } } }
+  const bots = [b, { ...b, name: 'B' }, { ...b, name: 'C' }]
+  const work = swarmCaches({ arms: true, arena, bots, pos, now: () => now, alive: () => true, teamOf: () => 'blue',
+    generation: 1, boardOf: () => board, lootArena: () => arena, detail: r => r?.detail, go: async () => { calls.push('goto'); return { status: 'interrupted' } },
+    log: s => logs.push(s), placed: new Map(), blocked: () => false, failed() {} } as any)
+  for (report of reports) {
+    pos.A.p = { ...report.eye, y: report.eye.y - 1.62 }; now += 21000
+    work.cacheObserve(b); await new Promise(resolve => setImmediate(resolve))
+  }
+  assert.equal(calls.filter(c => c === 'cache_scan').length, 4)
+  pos.A.p = me; now += 3000
+  board.setMembers(bots.map(bot => ({ id: bot.name, team: 'blue', position: me, health: 20, strength: 1, role: 'miner-builder' })))
+  assert.ok(board.observe('A', now, { id: 'red', position: { ...me, x: me.x + 6 }, visible: true }))
+  assert.equal(await work.cacheTurn(b, board), false, 'one nearby chest cannot justify turning away from the visible close enemy')
+  assert.ok(!calls.includes('dig_to') && !calls.includes('goto'))
+  now += 35000
+  for (const ally of bots.slice(1)) pos[ally.name] = { ...pos.A }
+  const assigned = await Promise.all(bots.map(miner => work.cacheTurn(miner, board)))
+  assert.equal(assigned.filter(Boolean).length, 1, 'three equipped miners share one search, although two are allowed to dig')
+  assert.ok(calls.includes('dig_to') || calls.includes('goto'))
+  t.diagnostic(logs.find(s => s.includes('ищу тайники')))
+})
+
+for (const when of ['before planning', 'after selection', 'during approach']) test('cache miners hand off a single useful tunnel when the selected miner gets a flank: ' + when, async () => {
+  let now = 1000, report: ReturnType<typeof scannerReports>[number], finishWalk: () => void
+  let holdFirst = when === 'during approach'
+  const me = { x: 10.5, y: 0, z: -10.5 }, arena = { x: 0, y: 0, z: 0, r: 28 }
+  const calls: { miner: string; at: P }[] = []
+  const rpc = { call: async method => {
+    assert.equal(method, 'cache_scan')
+    return { detail: report }
+  } }
+  const first: any = { name: 'A', c: rpc }, second = { name: 'B', c: rpc }, scout = { name: 'Scout', c: rpc }
+  const bots = [first, second, scout], board = new SwarmBoard('red', () => now, 8000)
+  const miner = () => ({ p: { ...me }, hp: 20, inv: { iron_pickaxe: 1 } })
+  const pos = { A: miner(), B: miner(), Scout: { p: { ...me }, hp: 20, inv: {} } }
+  const work = swarmCaches({ arms: true, arena, bots, pos, now: () => now, alive: () => true, teamOf: () => 'red',
+    generation: 1, boardOf: () => board, lootArena: () => arena, detail: r => r?.detail || r || {},
+    go: async (b, at) => {
+      calls.push({ miner: b.name, at })
+      if (b === first && holdFirst) await new Promise<void>(resolve => { finishWalk = resolve })
+      return { status: 'interrupted' }
+    }, log() {}, placed: new Map(), blocked: () => false, failed() {} } as any)
+  for (report of scannerReports()) {
+    pos.Scout.p = { ...report.eye, y: report.eye.y - 1.62 }; now += 21000
+    work.cacheObserve(scout); await new Promise(resolve => setImmediate(resolve))
+  }
+  if (when === 'before planning') first.swarmReserved = {}
+  assert.equal(await work.cacheTurn(scout, board), false)
+  let pending
+  if (when === 'during approach') {
+    pending = work.cacheTurn(first, board)
+    assert.deepEqual(calls.map(c => c.miner), ['A'])
+    now += 2200
+  }
+  first.swarmReserved = {} // the ordinary lifecycle skips a fighter owned by an external manoeuvre
+  if (pending) {
+    try {
+      assert.equal(await work.cacheTurn(second, board), false, 'the first approach still owns its front until the RPC yields')
+    } finally { finishWalk!(); await pending }
+  }
+  assert.equal(await work.cacheTurn(second, board), true, 'free hands can take the same front on their next turn')
+  assert.deepEqual(calls.map(c => c.miner), pending ? ['A', 'B'] : ['B'])
+  if (pending) assert.deepEqual(calls[1].at, calls[0].at)
+  assert.equal(await work.cacheTurn(first, board), false)
+  holdFirst = false
+  delete first.swarmReserved
+  Object.assign(second, { swarmReserved: {} })
+  assert.equal(await work.cacheTurn(first, board), true, 'the first miner is available again after the manoeuvre')
+  assert.deepEqual(calls.at(-1).at, calls[0].at)
+})
+
+test('a miner that joined the flank keeps its confirmed last excavation and yields before issuing the next RPC', async () => {
+  const from = { x: 15, y: 2, z: -6 }, to = { ...from, x: 17 }, arena = { x: 0, y: 0, z: 0, r: 28 }
+  const pos = { A: { p: { ...from, x: from.x + .5, z: from.z + .5 }, hp: 20, inv: { iron_pickaxe: 1 } } }
+  const calls: string[] = [], board = new SwarmBoard('red', () => 2100, 8000)
+  const b: any = { name: 'A', c: { call: async method => {
+    calls.push(method); b.swarmReserved = {}
+    return method === 'dig_to' ? { detail: { ok: true, at: to, steps: 2, dug: 4 } } : {}
+  } } }
+  const work = swarmCaches({ arms: true, arena, bots: [b], pos, now: () => 2100, alive: () => true, teamOf: () => 'red',
+    generation: 1, boardOf: () => board, lootArena: () => arena, detail: r => r?.detail, log() {},
+    placed: new Map(), blocked: () => false, failed() {} } as any)
+  const model = work.cacheModelOf(b)
+  model.planDig = () => ({ from, to, gain: 1, cost: 3, cells: 4, rate: 1 / 3, exposed: [] })
+  await work.cacheTurn(b, board)
+  assert.equal(model.stateAt(to.x, to.y, to.z), 1, 'the server confirmed the final foot cell')
+  assert.deepEqual(calls, ['dig_to'])
+})
+
+test('a chest personally uncovered under the field is remembered next round, a covered wall cache is not', async t => {
+  const prev = process.env.ARMS_CACHE_MEMORY
+  process.env.ARMS_CACHE_MEMORY = '0'
+  t.after(() => { if (prev === undefined) delete process.env.ARMS_CACHE_MEMORY; else process.env.ARMS_CACHE_MEMORY = prev })
+  for (const y of [-2, 1]) {
+    const at = { x: 0, y, z: 1 }, from = { x: 0, y: y + 1, z: 0 }
+    const p = { x: .5, y: from.y, z: .5 }, frame = { p, hp: 20, inv: { iron_pickaxe: 1 } }
+    const board = new SwarmBoard('red', () => 2100, 8000)
+    let opens = 0
+    const b = { name: 'A', c: { call: async method => {
+      if (method === 'dig_to') return { detail: { at: from, steps: 1, dug: 1 } }
+      if (method === 'cache_scan') return { detail: { eye: p, n: 0, spin: 0, hits: [], chests: [[at.x, at.y, at.z]] } }
+      if (method === 'swarm_work') return { detail: { done: true } }
+      if (method === 'chest_take') return { detail: ++opens === 1 ? {} : { contents: {}, took: { iron_ingot: 1 } } }
+      return {}
+    } } }
+    const sw = { arms: true, arena: { x: 0, y: 0, z: 0, r: 15 }, bots: [b], pos: { A: frame }, now: () => 2100,
+      alive: () => true, teamOf: () => 'red', generation: 1, boardOf: () => board, detail: r => r?.detail || {},
+      lootArena: () => ({}), log() {}, placed: new Map(), blocked: () => false, failed() {} }
+    const work = swarmCaches(sw as any)
+    work.cacheModelOf(b).planDig = () => ({ from, to: from, gain: 1, cost: 3, cells: 4, rate: 1 / 3, exposed: [] })
+    await work.cacheTurn(b, board)
+    assert.equal(opens, 2)
+    sw.generation++
+    assert.equal(work.cacheModelOf(b).known.has(`0,${y},1`), y === -2)
+  }
 })
 
 test('узор копки без «пирога»: ходы 1×2 открывают ≥ 2.5 невиданных клеток толщи на блок', () => {

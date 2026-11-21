@@ -4,8 +4,16 @@
 import type { RpcContext } from './context'
 import { LAUNCH_BACK } from '../mace/consts'
 import * as gameClock from '../game-clock'
+import { pearlDeadline } from '../combat/pearl-clock'
 
 function aerialMethods ({ session }: RpcContext) {
+  const pearlWindow = (method: 'boost_shot' | 'boost_lance' | 'pearl_trap', p: any) => {
+    if (p.gameTick === undefined) return undefined
+    const deadline = pearlDeadline(session, session.bot, {}, p)
+    const minimumMs = method === 'pearl_trap' ? (require('../combat/pearl-trap') as typeof import('../combat/pearl-trap')).TRAP_HAND_MS :
+      (require('../combat/arrow-boost') as typeof import('../combat/arrow-boost')).pearlBoostMinimum(method, p) * 50
+    return () => !!deadline && deadline.left() >= minimumMs
+  }
   const methods = {
     // Долететь на элитрах и сесть рядом с целью (12.10, арена: «на элитрах не могут залететь ко мне — садиться в любую
     // точку, к игроку, и бить»): клетка посадки — свободная, с полом без лавы/воды в 1.5–3.5 бл. от цели; элитры — на
@@ -264,7 +272,7 @@ function aerialMethods ({ session }: RpcContext) {
     // Засада на жемчуг врага (combat/pearl-ambush): к точке приземления любым способом и взлёт булавой к его появлению.
     pearl_ambush: async (p: any = {}) => session.runIntent('pearl_ambush', ctl => require('../combat/pearl-ambush').pearlAmbush(session, ctl, p), { timeoutMs: 9000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Ловушка или подкоп в точке жемчуга (combat/pearl-trap): лава / паутина в клетку появления или вскрыть блок удара.
-    pearl_trap: async (p: any = {}) => session.runIntent('pearl_trap', ctl => require('../combat/pearl-trap').pearlTrap(session, ctl, p), { timeoutMs: 9000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    pearl_trap: async (p: any = {}) => session.runIntent('pearl_trap', ctl => require('../combat/pearl-trap').pearlTrap(session, ctl, p), { timeoutMs: 9000, interruptOn: ['death', 'kicked', 'disconnected'], params: p, canStart: pearlWindow('pearl_trap', p) }),
     // Испытание (пользователь 24.10: «пусть некоторые боты тестово кидают жемчуг тупо вверх»): бросок прямо вверх с места и
     // бег прочь на runMs — ошибка человека, которую рой должен наказать (засада, ловушка, подкоп).
     pearl_test_up: async (p: any = {}) => session.runIntent('pearl_test_up', async () => {
@@ -288,8 +296,8 @@ function aerialMethods ({ session }: RpcContext) {
     pearl_pop: async (p: any = {}) => session.runIntent('pearl_pop', ctl => require('../combat/pearl-ambush').pearlPop(session, ctl, p), { exclusive: false, timeoutMs: 5000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Разгон стрелой (combat/arrow-boost): boost_lance — стоять с копьём на врага foe и ждать толчка; boost_shot — пустить
     // слабую стрелу «Отдачи» в своего ally, чтобы его бросило к foe (draw — тиков натяжения: второму стрелку больше).
-    boost_lance: async (p: any = {}) => session.runIntent('boost_lance', ctl => require('../combat/arrow-boost').boostLanceRpc(session, ctl, p), { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
-    boost_shot: async (p: any = {}) => session.runIntent('boost_shot', ctl => require('../combat/arrow-boost').boostShotRpc(session, ctl, p), { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    boost_lance: async (p: any = {}) => session.runIntent('boost_lance', ctl => require('../combat/arrow-boost').boostLanceRpc(session, ctl, p), { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p, canStart: pearlWindow('boost_lance', p) }),
+    boost_shot: async (p: any = {}) => session.runIntent('boost_shot', ctl => require('../combat/arrow-boost').boostShotRpc(session, ctl, p), { timeoutMs: 12000, interruptOn: ['death', 'kicked', 'disconnected'], params: p, canStart: pearlWindow('boost_shot', p) }),
     wind_out: async (p: any = {}) => session.runIntent('wind_out', ctl => require('../combat/enemy-wind-execute').enemyWindExecute(session, ctl, p), { exclusive: false, timeoutMs: 5000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     // Прыжок на заряде ветра в точку (wind-leap.ts): to — клетка, куда встать (ноги); dryRun — только план.
     wind_leap: async (p: any = {}) => session.runIntent('wind_leap', async (ctl) => {
@@ -377,8 +385,11 @@ function aerialMethods ({ session }: RpcContext) {
       const wind = require('../mace/hands') as typeof import('../mace/hands')
       wind.install(bot)
       const n = Math.max(1, Math.min(3, p?.times ?? 1))
+      const retreat = !!(p?.arena && p?.toward && !p?.up)
+      const retreatSafe = retreat && (require('../combat/wind-retreat') as typeof import('../combat/wind-retreat')).safeRetreatBurst
       let used = 0
       const y0 = bot.entity.position.y
+      const interrupted = () => ({ used, rise: bot.entity.position.y - y0, landed: false, why: 'wind_landing_interrupted' })
       // Потолок ближе 5 блоков — взлёт упрётся (10.10: «в комнате кидают в потолок, зацикленно»); вперёд — стена ближе 3.
       const feet0 = bot.entity.position.floored()
       for (let dy = 2; dy <= 5; dy++) { const b = bot.blockAt(feet0.offset(0, dy, 0)); if (b && b.boundingBox === 'block') return { used: 0, rise: 0, why: `потолок в ${dy} бл.` } }
@@ -389,33 +400,63 @@ function aerialMethods ({ session }: RpcContext) {
       for (let k = 0; k < n && !ctl.aborted; k++) {
         const wc = bot.inventory.items().find(i => i.name === 'wind_charge')
         if (!wc) break
-        await bot.equip(wc, 'hand')
-        bot.clearControlStates()
         let yaw = bot.entity.yaw
         if (p?.toward) {
           const dx = p.toward.x - bot.entity.position.x; const dz = p.toward.z - bot.entity.position.z
           yaw = Math.atan2(-dx, -dz)
+          if (retreat && (!Math.hypot(dx, dz) || !retreatSafe(bot, yaw, p.arena))) return { used, rise: bot.entity.position.y - y0, why: 'unsafe_wind_landing' }
+        }
+        await bot.equip(wc, 'hand')
+        if (ctl.aborted) break
+        bot.clearControlStates()
+        if (p?.toward) {
           await bot.look(yaw, 0, true)
           if (!p.up) {
             bot.setControlState('sprint', true); bot.setControlState('forward', true)
             await bot.waitForTicks(3)
           } else await bot.waitForTicks(1)
         } else await bot.waitForTicks(1) // Отпустить прежний автопрыжок перед отрывом.
+        if (retreat && ctl.aborted) return interrupted()
         const flat = p?.toward && !p?.up
         if (flat) bot.setControlState('jump', true)
         // Вверх — бросок с земли и сразу прыжок; по ходу — на первом тике спринт-отрыва.
-        const fired = await wind.fireWind(bot, moved => !ctl.aborted &&
-          (wind.selfWindAim(bot, { moved, yaw, back: flat ? LAUNCH_BACK : 0 }) || wind.selfWindAim(bot, { moved })), {
-          hand: 'main', before: () => { bot.setControlState('jump', !flat && bot.entity.onGround); bot.setControlState('forward', false); bot.setControlState('sprint', false) }
+        let unsafeLanding = false
+        const fired = await wind.fireWind(bot, moved => {
+          if (ctl.aborted) return null
+          const seen = retreat ? Object.assign(Object.create(bot), { blockAt: (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot).blockAt }) : bot
+          const shot = wind.selfWindAim(seen, { moved, yaw, back: flat ? LAUNCH_BACK : 0 }) || wind.selfWindAim(seen, { moved })
+          if (retreat && shot && !retreatSafe(bot, yaw, p.arena, shot)) { unsafeLanding = true; return null }
+          return shot
+        }, {
+          hand: 'main', packetAim: retreat, before: () => { if (ctl.aborted) return; bot.setControlState('jump', !flat && bot.entity.onGround); bot.setControlState('forward', false); bot.setControlState('sprint', false) }
         })
+        if (fired.fired) used++
+        if (retreat && ctl.aborted) return interrupted()
         if (fired.fired && !flat) await wind.nextTick(bot)
         bot.setControlState('jump', false)
-        if (!fired.fired) return { used, rise: 0, why: fired.why }
-        used++
+        if (!fired.fired) return { used, rise: 0, why: unsafeLanding ? 'unsafe_wind_landing' : fired.why }
         await bot.waitForTicks(Math.max(0, fired.shot.ticks - (flat ? 0 : 1)))
+        if (retreat && ctl.aborted) return interrupted()
         if (p?.toward) { await bot.look(yaw, 0, true); bot.setControlState('forward', true); bot.setControlState('sprint', true) }
         await bot.waitForTicks(Math.max(0, 10 - fired.shot.ticks))
+        if (retreat) {
+          if (ctl.aborted) return interrupted()
+          bot.clearControlStates()
+          const tw = require('../combat/team-wind') as typeof import('../combat/team-wind')
+          let settled = 0
+          for (let t = 0; t < 80 && !ctl.aborted && settled < 6; t++) {
+            const e = bot.entity
+            if (!tw.windInside(e.position, p.arena)) break
+            const landed = e.onGround && tw.windLanding(bot, { pos: e.position, vel: e.velocity, onGround: true }, e.position)
+            settled = landed ? settled + 1 : 0
+            if (settled < 6) await bot.waitForTicks(1)
+          }
+          if (settled < 6) return interrupted()
+          // Braking may carry the body past a short bounded goal. A second charge must not reverse the retreat.
+          if (-(p.toward.x - bot.entity.position.x) * Math.sin(yaw) - (p.toward.z - bot.entity.position.z) * Math.cos(yaw) <= 0) break
+        }
       }
+      if (retreat && ctl.aborted) return interrupted()
       bot.setControlState('sprint', false); bot.setControlState('forward', false)
       for (let t = 0; t < 40 && !bot.entity.onGround && !ctl.aborted; t++) await bot.waitForTicks(1)
       return { used, rise: Math.round((bot.entity.position.y - y0) * 10) / 10, at: { x: Math.round(bot.entity.position.x), y: Math.round(bot.entity.position.y), z: Math.round(bot.entity.position.z) } }

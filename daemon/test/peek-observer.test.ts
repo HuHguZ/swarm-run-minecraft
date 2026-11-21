@@ -4,6 +4,8 @@ import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 import { EventBus } from '../src/events'
 import { Session } from '../src/session'
+import { EventEmitter } from 'node:events'
+import * as clock from '../src/game-clock'
 
 function fixture () {
   const bus = new EventBus()
@@ -19,6 +21,40 @@ function fixture () {
   const methods: Record<string, any> = observationMethods({ session, bus, cfg: { fairPlay: true, host: '127.0.0.1', port: 25621 }, state: { dangerWatch: null } })
   return { bus, bot, session, methods }
 }
+
+test('swarm inspection cannot consume a witnessed death or a wind receipt, change allies or erase a running enemy’s velocity', async t => {
+  const f = fixture(), bot = f.bot
+  Object.setPrototypeOf(bot, EventEmitter.prototype)
+  bot.game.gameMode = 'survival'
+  bot.blockAt = p => ({ name: 'air', boundingBox: 'empty', shapes: [], position: p })
+  const enemy = { id: 2, username: 'Runner', type: 'player', position: bot.entity.position.offset(10, 0, 0), onGround: true }
+  bot.entities[2] = enemy
+  let at = 1000
+  t.mock.method(clock, 'now', () => at)
+  const primary = { swarm: true, swarmAllies: ['Wing'], deathScope: 'arena:1' }
+  const inspect = scope => f.methods.peek({ swarm: true, deathScope: scope })
+  try {
+    await f.methods.status(primary)
+    f.session._windOut = { log: [{ target: 'Runner', why: 'stale_release' }] }
+    bot.emit('death')
+    enemy.position = enemy.position.offset(-2.8, 0, 0); at += 500
+    const outside = await inspect('observer')
+    assert.deepEqual(outside.detail.witnessedDeaths, [])
+    for (let i = 0; i < 2; i++) {
+      const r = await inspect('arena:1')
+      assert.deepEqual(bot._ndSwarmAllies, ['Wing'])
+      assert.equal(r.detail.witnessedDeaths.length, 1)
+      assert.equal(r.detail.windOut.length, 1)
+    }
+    const r = await f.methods.status(primary)
+    assert.ok(Math.abs(r.detail.sightings[0].velocity.x + .28) < 1e-9)
+    assert.equal(r.detail.witnessedDeaths.length, 1)
+    assert.equal(r.detail.windOut.length, 1)
+    const next = await f.methods.status(primary)
+    assert.deepEqual(next.detail.windOut, [])
+    assert.deepEqual(next.detail.witnessedDeaths, [])
+  } finally { bot.emit('end') }
+})
 
 test('peek observes physics and inventory while preserving buffered damage/emergency/chat for status', async () => {
   const f = fixture()

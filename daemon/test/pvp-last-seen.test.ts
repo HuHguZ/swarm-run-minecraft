@@ -31,6 +31,25 @@ test('one body shares player observations while consumer close stays independent
   } finally { a.close(); b.close() }
 })
 
+test('a motion observation gains equipment only when a consumer sees it', () => {
+  const f = scene(), sight = createLastSeen(f.bot)
+  try {
+    const body = sight.observeMotion(f.raw)
+    assert.equal(body.heldItem, undefined)
+    f.move(3.5)
+    const receipt = body._ndPositionReceipts[1]
+    f.wall(true)
+    assert.equal(sight.observe(f.raw).heldItem, undefined)
+    f.wall(false)
+    assert.equal(sight.observeMotion(f.raw), body)
+    assert.equal(body.heldItem.name, 'iron_sword')
+    assert.equal(body.position.x, receipt.x)
+    f.raw.equipment[0] = { name: 'mace' }
+    f.bot.emit('physicsTick')
+    assert.equal(body.heldItem.name, 'mace')
+  } finally { sight.close() }
+})
+
 function scene () {
   let now = 1000
   let wall = false
@@ -56,6 +75,28 @@ function scene () {
   }
   return { bot, raw, move, wall: v => { wall = v; bot.emit('physicsTick') } }
 }
+
+test('one shot from a reached post follows only visible movement and never walks after the named player', async t => {
+  const f = scene(), { shoot } = require('../src/session/combat')
+  f.bot.players = { Foe: { entity: f.raw } }
+  const goals = []; f.bot.pathfinder = { setGoal: v => goals.push(v) }
+  f.bot.clearControlStates = () => {}
+  const at = f.bot.entity.position.clone()
+  let attempts = 0
+  t.mock.method(require('../src/bow/shoot'), 'shoot', async (_bot, seen, options) => {
+    attempts++
+    assert.notEqual(seen, f.raw); assert.equal(seen.username, 'Foe'); assert.equal(options.follow, false)
+    assert.equal(options.shouldStop(), false)
+    f.wall(true); f.move(8)
+    assert.equal(options.shouldStop(), true); assert.equal(seen.position.x, 2.5)
+    return { shot: false }
+  })
+  const fire = () => shoot.call({ require: () => f.bot, runIntent: (_n, fn) => fn({ aborted: false }) }, { target: 'Foe', fromPost: at })
+  await fire(); await fire()
+  f.wall(false); f.bot.entity.position.y -= 2; await fire()
+  assert.equal(attempts, 1); assert.deepEqual(goals, [null])
+  assert.equal(f.bot.listenerCount('physicsTick'), 0)
+})
 
 function socialScene (t, x = 6.5) {
   const clock: typeof import('../src/game-clock') = require('../src/game-clock')
@@ -143,6 +184,41 @@ test('PvP: telemetry source survives replacement and close without keeping obser
   assert.equal(f.raw.listenerCount('ndPositionObserved'), 0)
   assert.equal(replacement.listenerCount('ndPositionObserved'), 0)
   assert.equal(f.bot.listenerCount('physicsTick'), 0)
+})
+
+test('a stale view cannot evict a new player with a reused entity ID', () => {
+  const f = scene(), vision = createLastSeen(f.bot)
+  try {
+    const old = vision.observe(f.raw)
+    const replacement = Object.assign(new EventEmitter(), { id: f.raw.id, type: 'player', username: 'New',
+      position: new Vec3(8, 0, 0), isValid: true, equipment: [], metadata: [] })
+    const fresh = vision.observe(replacement)
+    f.bot.emit('entityGone', f.raw)
+    assert.equal(vision.visible(old), false)
+    assert.equal(vision.observe(replacement), fresh)
+    assert.equal(replacement.listenerCount('ndPositionObserved'), 1)
+    f.bot.emit('entityGone', replacement)
+    assert.equal(replacement.listenerCount('ndPositionObserved'), 0)
+    assert.equal(vision.observe(replacement), fresh, 'the last seen position remains available')
+    assert.equal(fresh.isValid, false)
+  } finally { vision.close() }
+  assert.equal(f.bot.listenerCount('entityGone'), 0)
+})
+
+test('departed players stop consuming physics ticks', () => {
+  const f = scene(), vision = createLastSeen(f.bot)
+  try {
+    let reads = 0
+    for (let id = 0; id < 20; id++) {
+      const raw = Object.assign(new EventEmitter(), { id: 20 + id, type: 'player', username: 'Gone' + id,
+        position: f.raw.position, isValid: true, onGround: true, equipment: [], metadata: [] })
+      vision.observe(raw)
+      f.bot.emit('entityGone', raw)
+      Object.defineProperty(raw, 'isValid', { get() { reads++; return false } })
+    }
+    for (let tick = 0; tick < 40; tick++) f.bot.emit('physicsTick')
+    assert.equal(reads, 0, 'twenty removed targets over forty ticks')
+  } finally { vision.close() }
 })
 
 test('PvP: hidden packets cannot move the last seen target, change gear, or supply exact health', () => {

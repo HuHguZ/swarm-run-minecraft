@@ -50,7 +50,9 @@ test('one or seven remaining blocks keep a native final ascent available, while 
     assert.equal(mv.allow1by1towers,count>0,`${count} available blocks use only the native physical limit`)
     assert.equal(mv.getNeighbors(start).some(n=>n.x===650&&n.y===151&&n.z===554),count>0)
     if (count===7) {
-      const r=new AStar(start,mv,new goals.GoalBlock(649,154,555),5000).compute()
+      const search = new AStar(start, mv, new goals.GoalBlock(649,154,555), 5000)
+      let r = search.compute()
+      while (r.status === 'partial') r = search.compute()
       assert.equal(r.status,'success','the confirmed final column needs fewer than seven placements')
       assert.ok(r.path.reduce((n,p)=>n+p.toPlace.length,0)<=count)
     }

@@ -64,10 +64,10 @@ function livingFlags (bot, e) {
   } catch { return 0 }
 }
 // Что он сейчас «использует»: { name, item } или null.
-function usingOf (bot, e) {
+function usingOf (bot, e, equipment?: any[]) {
   const f = livingFlags(bot, e)
   if (!(f & 0x01)) return null
-  const eq = e.equipment || []
+  const eq = equipment ?? e.equipment ?? []
   const it = (f & 0x02) ? eq[1] : eq[0]
   return it ? { name: it.name, item: it } : null
 }
@@ -130,12 +130,19 @@ function ageMemory (entry) {
   entry.healed += Math.max(0, entry.hp.snapshot().mean - before)
   entry.at = at // общий cursor для status и следующего Engage
 }
+// Entity-bound actions require the same life. A missing UUID can use the visible name plus entity id.
+function entryForEntity (memory, entity) {
+  if (!memory || !Number.isInteger(entity?.id)) return null
+  const name = typeof entity.username === 'string' && entity.username.toLowerCase()
+  const entry = typeof entity.uuid === 'string' && entity.uuid ? memory.targets.get(`uuid:${entity.uuid}`)
+    : name && [...memory.targets.values()].find(e => e.entityId === entity.id && e.username === name)
+  return entry?.entityId === entity.id ? entry : null
+}
 // Только чтение существующего знания: не создаёт/переключает scope и не подписывается на события.
 // Верх оценки хп противника (с поглощением) по своим подтверждённым попаданиям — для общего журнала роя (swarmSightings).
 // Память — текущего раунда этого тела; ни одного своего попадания — null (тогда рой считает 20).
 function foeHpUpper (bot, entity) {
-  const memory = hpMemories.get(bot), key = foeKey(entity)
-  const entry = memory && key && (memory.targets.get(key) || [...memory.targets.values()].find(e => e.username === entity?.username?.toLowerCase()))
+  const entry = entryForEntity(hpMemories.get(bot), entity)
   if (!entry) return null
   ageMemory(entry)
   return entry.hp.snapshot().hi
@@ -143,8 +150,7 @@ function foeHpUpper (bot, entity) {
 
 // История только собственных damage_event; повторные статусы возвращают тот же набор, а не новые попадания.
 function foeHitProof (bot, entity) {
-  const memory = hpMemories.get(bot), key = foeKey(entity)
-  const entry = memory && key && (memory.targets.get(key) || [...memory.targets.values()].find(e => e.username === entity?.username?.toLowerCase()))
+  const entry = entryForEntity(hpMemories.get(bot), entity)
   if (!entry) return null
   ageMemory(entry)
   const at = entry.now()
@@ -153,10 +159,11 @@ function foeHitProof (bot, entity) {
   return { healed: entry.healed, ...(entry.lastHealing ? { healing: { event: entry.lastHealing.event, ago: Math.max(0, at - entry.lastHealing.at), absorption: entry.lastHealing.absorption } } : {}), hits: entry.hits.map(h => ({ ago: Math.max(0, at - h.at), damage: h.damage, lowDamage: h.lowDamage, minDamage: h.minDamage, healed: h.healed })) }
 }
 
-function readFoeEstimate (bot, { roundScope, target }: any = {}) {
+function readFoeEstimate (bot, { roundScope, target, entity }: any = {}) {
   const memory = hpMemories.get(bot)
-  if (!memory || memory.scope !== roundScope || typeof target !== 'string' || !target) return null
-  const entry = memory.targets.get(`uuid:${target}`) || [...memory.targets.values()].find(e => e.username === target.toLowerCase())
+  if (!memory || memory.scope !== roundScope) return null
+  const entry = entity ? entryForEntity(memory, entity)
+    : typeof target === 'string' && target && (memory.targets.get(`uuid:${target}`) || [...memory.targets.values()].find(e => e.username === target.toLowerCase()))
   if (!entry) return null
   ageMemory(entry)
   return entry.hp.snapshot()
@@ -379,14 +386,19 @@ function reachTo (bot, e) {
 function observe (bot, entity, { tracker = null, since = 99, smash = null, boom = null, shieldOffTicks = 0, honest = true }: any = {}) {
   const me = bot.entity
   const player = isPlayer(entity)
-  const eq = (entity.equipment || []).map(it => player && honest ? (require('./last-seen') as typeof import('./last-seen')).visiblePlayerItem(it) : it)
   let hp
   if (player && honest) hp = tracker ? tracker.hp.snapshot() : { lo: 0, hi: 20, mean: 10, conf: 0, exact: false }
   else { const h = exactHpTelemetryOnly(bot, entity) ?? 20; hp = { lo: h, hi: h, mean: h, conf: 1, exact: true } }
   const los = (() => { try { return entity._ndVisible ?? (player ? (require('./last-seen') as typeof import('./last-seen')).seesPlayer(bot, entity) : assess().inSight(bot, entity)) } catch { return false } })()
+  let eq = []
+  if (!player || !honest) eq = entity.equipment || []
+  else if (los) {
+    const sight = (require('./last-seen') as typeof import('./last-seen'))
+    eq = entity._ndVisible === undefined ? sight.observePlayerGear(bot, entity).equipment : (entity.equipment || []).map(sight.visiblePlayerItem)
+  }
   const effects = {}
   if (!honest || !player || los) for (const n of read.effectsOf(bot, entity)) effects[n] = true
-  const using = !honest || !player || los ? usingOf(bot, entity) : null
+  const using = !honest || !player || los ? usingOf(bot, entity, eq) : null
   // Щит держит через 5 тиков после подъёма (blockDelayTicks): трекер видит начало использования.
   const blocking = !!(using && using.name === 'shield' && (!tracker || !tracker.using || tracker.tick - tracker.using.since >= dm.SHIELD_DELAY_TICKS))
   const vel = tracker ? tracker.vel : (!honest || !player || los && entity._ndVisible === true ? entity.velocity || { x: 0, y: 0, z: 0 } : { x: 0, y: 0, z: 0 })
@@ -396,7 +408,7 @@ function observe (bot, entity, { tracker = null, since = 99, smash = null, boom 
   const myAbs = read.absorptionOf(bot, me)
   // Его снаряжение — то, что видно (S7d, честное восприятие): пакеты снаряжения приходят и сквозь стену; пока его не
   // видно — последнее увиденное (человек помнит, с чем тот был), а не свежее из пакета.
-  const gearNow = () => ({ armor: [2, 3, 4, 5].map(i => itemObs(bot, eq[i])), main: itemObs(bot, eq[0]), off: itemObs(bot, eq[1]), totem: read.hasTotemInHand(entity) })
+  const gearNow = () => ({ armor: [2, 3, 4, 5].map(i => itemObs(bot, eq[i])), main: itemObs(bot, eq[0]), off: itemObs(bot, eq[1]), totem: read.hasTotemInHand({ equipment: eq }) })
   let gear
   if (!honest || !player || los) { gear = gearNow(); if (tracker) tracker.gearSeen = gear }
   else gear = tracker?.gearSeen || { armor: [null, null, null, null], main: null, off: null, totem: false }

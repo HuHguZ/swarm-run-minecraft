@@ -269,12 +269,13 @@ test('recorded AA native horizontal clipping fits the packet quantization interv
   assert.ok(stopped && stopped.vel.z === 0)
 })
 
-for (const mode of ['hidden', 'absolute', 'reacquired', 'target life', 'observer life', 'revision', 'stale bridge', 'legacy epoch']) {
+for (const mode of ['hidden', 'invisible', 'absolute', 'reacquired', 'target life', 'observer life', 'revision', 'stale bridge', 'legacy epoch']) {
   test(`a skipped fair coast interval cannot bridge ${mode}`, t => {
     const f = fixture(t)
     f.pose(new Vec3(600.45703125, 129.60627928376198, 600.330078125), 1000)
     f.pose(new Vec3(600.45703125, 128.49495115876198, 600.330078125), 1100); f.frame()
     if (mode === 'hidden') { f.foe._ndVisible = false; f.frame(); f.foe._ndVisible = true }
+    if (mode === 'invisible') { f.foe.metadata[0] = 0x20; assert.deepEqual(f.frame(), []); f.foe.metadata[0] = 0 }
     f.pose(new Vec3(600.45703125, 127.11726561188698, 600.330078125), mode === 'stale bridge' ? 1601 : 1200)
     f.pose(new Vec3(600.45703125, 125.48347654938698, 600.330078125), mode === 'stale bridge' ? 1602 : 1201)
     if (mode === 'absolute') f.foe._ndPositionReceipts[0].kind = 'entity_teleport'

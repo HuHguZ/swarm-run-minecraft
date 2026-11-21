@@ -56,7 +56,7 @@ export function pvpAssault(S: PvpPlan): void {
     // такой «урон» обнулял счёт потерь — штурм на чемпиона шёл 155 с и стоил восьми (стенд 21.10).
     if (foe?.hpEstimate !== undefined && foe.hpEstimate < episode.hp) { episode.lostAtHit = lost; episode.hp = foe.hpEstimate }
     // Пропажа sightings не доказывает исход; дальнюю цель подтверждает свежий обзор (15.10).
-    const outOfReach = foe && tNow - foe.seenAt <= 500 && assault.voters.every(id => !board.alive(id) || distance(team.find(m => m.id === id)!.position, foe.position) > 40)
+    const outOfReach = foe && S.witnesses.get(foe.id)?.has(foe.source) && tNow - foe.seenAt <= 500 && assault.voters.every(id => !board.alive(id) || distance(team.find(m => m.id === id)!.position, foe.position) > 40)
     // Проигрываем — потери с последнего подтверждённого урона по цели: не меньше трёх и 40 % голосовавших (первая же потеря
     // обрывала штурм за 16 с — стенд 15.10).
     const losing = lost - episode.lostAtHit >= Math.max(3, Math.ceil(assault.voters.length * .4))
@@ -69,6 +69,7 @@ export function pvpAssault(S: PvpPlan): void {
     }
   }
   if (aggressive && !assault) for (const foe of [...enemies].sort((a, b) => distance(a.position, center) - distance(b.position, center))) {
+    if (!S.confirmed(foe.id)) continue
     const ready = votersFor(foe), balance = balanceFor(foe, ready), failed = state.failed.get(foe.id)
     if (ended && board.assaultEnded?.target === foe.id || ready.length < Math.max(4, Math.ceil(team.length / 4)) || failed && !improved(balance, failed)) continue
     board.assault = assault = { since: tNow, target: foe.id, voters: ready.map(m => m.id), startAlive: team.length }

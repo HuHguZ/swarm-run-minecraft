@@ -169,7 +169,8 @@ test('a flying defender treats a charged close pass as a turning lance even when
 })
 
 test('a driven flight dodges a visible incoming spear across its line and then resumes the route', async t => {
-  const f = scene(t), e = f.spawn()
+  const f = scene(t)
+  let e = f.spawn()
   Object.assign(f.bot, { health: 20, _ndFoes: [e.username] })
   Object.assign(f.bot.entity, { elytraFlying: true, onGround: false })
   const goals: any[] = [], states: any[] = [], state = { driving: 0, fd: 0, moveFd: 8 }
@@ -230,11 +231,23 @@ test('a driven flight dodges a visible incoming spear across its line and then r
       missing = true
       if (reset === 'ally') f.bot._ndSwarmAllies = [e.username]
       if (reset === 'scope') f.bot._ndFoes = []
-      if (reset === 'replacement') f.spawn(e.id, -18)
+      if (reset === 'replacement') {
+        // Mineflayer retires the old object before populating the reused entity ID.
+        f.bot.emit('entityGone', e)
+        e.isValid = false
+        delete f.bot.entities[e.id]
+        e = f.spawn(e.id, -18)
+      }
       f.timer.advanceTicks(reset === 'expired' ? 25 : 1); f.bot.emit('physicsTick')
       assert.equal(goals.at(-1).x, 20, 'the episode is discarded on ' + reset)
-      f.bot._ndSwarmAllies = []; f.bot._ndFoes = [e.username]; f.bot.entities[e.id] = e
-      missing = false; e.elytraFlying = false; f.forecast()
+      f.bot._ndSwarmAllies = []; f.bot._ndFoes = [e.username]
+      missing = false
+      if (reset === 'replacement') {
+        assert.deepEqual(f.forecast(), [], 'a replacement has no observed velocity of its own yet')
+        f.bot.emit('physicsTick')
+        assert.equal(goals.at(-1).x, 20, 'a single sighting of the replacement cannot inherit the old dodge')
+      }
+      e.elytraFlying = false; f.forecast()
     }
     kind = 'point'
     f.bot.entity.velocity.set(0, 0, -2)

@@ -3,6 +3,8 @@
 import * as gameClock from '../game-clock'
 import * as edges from '../edges'
 import * as pick from '../pick'
+import { supportAt } from '../navigation/geometry'
+import { landingDamage } from '../navigation/landing'
 import { MACE_BASE, SWAP, KEYS, LAUNCH_BACK, yawTo, smashDamage } from './consts'
 import { densityOf, findItem, shieldAtUs, nextTick, install, offWind, windCount, windReady, ensureHotbar, fireWind, selfWindAim, healthOf } from './hands'
 import { burnNear, webOnBody, headroom, landingSoon } from './world'
@@ -12,7 +14,7 @@ import { descend } from './descend'
 
 // Когда взлетать. Он рядом по горизонтали (долететь рулём в воздухе:
 // ускорение 0.02 б/т², трение 0.91 — за 25 тиков до ~4 блоков), на нашей
-// высоте и на земле; его щит не смотрит на нас (передний щит держит удар
+// высоте или на безопасной нижней полке; его щит не смотрит на нас (передний щит держит удар
 // булавы целиком); над головой есть воздух; вокруг нет ям (снесёт — и сели
 // ниже всплеска). Ожидаемый урон — по высоте, какую даст потолок.
 // Он в коробке: крыша над головой и стены с трёх сторон — сверху булавой не
@@ -28,33 +30,52 @@ function boxedIn (bot, e) {
 
 // Почему нет (why) или план взлёта: причина отказа — в журнал боя (стенд 21.10: у булавников по одной попытке за раунд,
 // а отказ молчал).
-export function smashCheck (bot, e, { minRoom = 5 }: any = {}): { plan?: { dh: number; room: number; h: number; expect: number }; why?: string } {
+export function smashCheck (bot, e, { minRoom = 5, arena, velocity, frame }: any = {}): { plan?: { dh: number; room: number; h: number; expect: number; ticks?: number }; why?: string } {
   const b = bot.entity
   if (!b || !landingSoon(bot) || b.isInWater || b.isInLava) return { why: 'не на земле' }
-  if (boxedIn(bot, e)) return { why: 'он в коробке' }
+  const me = b.position, dy = e.position.y - me.y
+  if (!findItem(bot, 'mace') || !windReady(bot)) return { why: 'нет булавы или заряда' }
+  const dh = Math.hypot(e.position.x - me.x, e.position.z - me.z)
+  if (dh < 0.6 || dh > 4.2) return { why: `до него ${dh.toFixed(1)} бл. по горизонтали` }
+  let terrain = bot
+  if (Math.abs(dy) > 1) {
+    const { seesPlayer } = require('../pvp/last-seen') as typeof import('../pvp/last-seen')
+    if (!seesPlayer(bot, e)) return { why: 'цель скрылась' }
+    terrain = (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot)
+  }
+  if (boxedIn(terrain, e)) return { why: 'он в коробке' }
   // В паутине всплеск не поднимет (webOnBody ниже, 2026-09-26).
   if (webOnBody(bot)) return { why: 'я в паутине' }
-  if (!findItem(bot, 'mace') || !windReady(bot)) return { why: 'нет булавы или заряда' }
-  const me = b.position
-  const dh = Math.hypot(e.position.x - me.x, e.position.z - me.z)
-  const dy = e.position.y - me.y
-  if (dh < 0.6 || dh > 4.2) return { why: `до него ${dh.toFixed(1)} бл. по горизонтали` }
-  if (Math.abs(dy) > 1.0) return { why: `он на ${dy.toFixed(1)} по высоте` }
+  if (dy < -1) {
+    const support = supportAt(terrain, e.position, .05)
+    if (!support || landingDamage(support.block, me.y - support.top, b.attributes) > 0)
+      return { why: 'под нижней целью нет видимой безопасной опоры' }
+  }
   if (shieldAtUs(bot, e)) return { why: 'его щит на меня' }
-  const room = headroom(bot, me, 12)
+  const room = headroom(terrain, me, 12)
   if (room < minRoom) return { why: `потолок в ${Math.floor(room)} бл.` }
   try {
     const cache = new Map()
-    if (edges.hazardAround(bot, me, 3, cache)) return { why: 'край или лава у меня' }
-    if (edges.hazardAround(bot, e.position, 3, cache)) return { why: 'край или лава у него' }
+    if (edges.hazardAround(terrain, me, 3, cache)) return { why: 'край или лава у меня' }
+    if (edges.hazardAround(terrain, e.position, 3, cache)) return { why: 'край или лава у него' }
   } catch {}
-  if (burnNear(bot, me) || burnNear(bot, e.position)) return { why: 'огонь рядом' }
+  if (burnNear(terrain, me) || burnNear(terrain, e.position)) return { why: 'огонь рядом' }
   // Вершина (замер probe-mace 2026-09-26): стоя 6.1 бл., с прыжком 8.3–11.2;
   // потолок срезает. Удар — у самой земли, падение ≈ вершина. Булава к удару
   // заряжена (windSmash держит её с запасом) — крит.
   const top = Math.min(8, room - 0.2)
-  const h = Math.max(0, top - 0.3)
-  return { plan: { dh, room, h, expect: Math.round(smashDamage(h, { base: SWAP ? 7 : MACE_BASE, charge: 1, density: densityOf(bot) })) } }
+  let raised: ReturnType<typeof import('../combat/mace-chain').chainChoice> = null
+  if (dy > 1) {
+    const cached = frame?.raisedSmash
+    if (cached?.foe === e && cached.time === frame.now) raised = cached.result
+    else {
+      raised = (require('../combat/mace-chain') as typeof import('../combat/mace-chain')).chainChoice(bot, [e], { launch: true, safeLanding: true, arena, velocity })
+      if (frame) frame.raisedSmash = { foe: e, time: frame.now, result: raised }
+    }
+  }
+  if (dy > 1 && !raised) return { why: 'на верхнюю цель нет удара с безопасной посадкой' }
+  const h = raised ? raised.fall : Math.max(0, top - .3)
+  return { plan: { dh, room, h, ...(raised && { ticks: raised.ticks }), expect: Math.round(smashDamage(h, { base: SWAP ? 7 : MACE_BASE, charge: 1, density: densityOf(bot) })) } }
 }
 export function smashPlan (bot, e, opts: any = {}) { return smashCheck(bot, e, opts).plan ?? null }
 
@@ -85,6 +106,7 @@ function diagText (dg) {
 // stillOk() — пока копится заряд булавы, он не ушёл и не поднял щит.
 export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, jump = true, chargeTicks = 9, stillOk = null, telemetryHp = e => healthOf(bot, e), chain = null, ready = null }: any = {}) {
   const out: any = { launched: false, hit: false, swung: false, note: '' }
+  let upper = !!chain && e.position.y > bot.entity.position.y + 1
   install(bot)
   const sleep = (ms) => new Promise<any>(r => gameClock.setTimeout(r, ms))
   const offBefore = bot.inventory.slots[45] ? bot.inventory.slots[45].name : null
@@ -127,7 +149,6 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
   const webNow = webOnBody(bot)
   if (webNow || headroom(bot, bot.entity.position, 4) < 3) { await restoreOff(); out.note = `булава: передумал взлетать (${webNow ? 'паутина' : 'над головой блок'})`; out.cancelled = true; return out }
   const hpSelf0 = bot.health ?? 20
-  const theirHp0 = telemetryHp(e)
   const y0 = bot.entity.position.y
   const toward = yawTo(bot.entity.position, e.position)
   for (const k of KEYS) { try { bot.setControlState(k, false) } catch {} }
@@ -148,8 +169,17 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
   if (jump && bot.entity.onGround) {
     await nextTick(bot)
   }
-  const release = { packetAim: bot.version === '1.21.11', canFire: () => !ctl.aborted && (!stillOk || stillOk()) &&
-    !bot._ndHandLock?.on?.() && (!bot._ndReflexSession || (require('../reflex-lock') as typeof import('../reflex-lock')).allowed(bot._ndReflexSession)) }
+  const release = { packetAim: bot.version === '1.21.11', canFire: () => {
+    if (ctl.aborted || stillOk && !stillOk() || bot._ndHandLock?.on?.() ||
+        bot._ndReflexSession && !(require('../reflex-lock') as typeof import('../reflex-lock')).allowed(bot._ndReflexSession)) return false
+    if (chain?.visible?.(e) === false) return false
+    if (chain && e.position.y > bot.entity.position.y + 1) upper = true
+    if (!upper && (!chain || Math.abs(e.position.y - bot.entity.position.y) <= 1)) return true
+    // The target can move while the mace charges. Require both the downward hit
+    // and a safe touchdown if it misses, using the current view at packet release.
+    const { chainChoice } = require('../combat/mace-chain') as typeof import('../combat/mace-chain')
+    return !!chainChoice(bot, [e], { launch: true, arena: chain?.arena, velocity: vel, safeLanding: true, upperApproach: upper })
+  } }
   const fired: any = await fireWind(bot, moved => selfWindAim(bot, {
     moved, yaw: toward, back: bot.entity.onGround || bot.entity.velocity.y < .2 ? 0 : LAUNCH_BACK
   }), { ...release, swap, hand: swap ? 'main' : 'off', before: () => { try { bot.setControlState('jump', jump && bot.entity.onGround); dg.off = bot.inventory.slots[45] ? bot.inventory.slots[45].name : null; dg.vy0 = bot.entity.velocity.y; dg.web = webOnBody(bot) } catch {} } })
@@ -198,7 +228,7 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
   if (!launched) { bot._ndWind = null; await restoreOff(); out.note = 'булава: всплеск не поднял (' + diagText(dg) + ')'; out.why = diagText(dg); return out }
   out.launched = true
   if (stats) stats.launched++
-  const r: any = await descend(bot, ctl, e, { vel, swap, stats, telemetryHp, chain, ready })
+  const r: any = await descend(bot, ctl, e, { vel, swap, stats, telemetryHp, chain, ready, upperApproach: upper })
   const peak = r.peak - y0
   out.peak = Math.round(peak * 100) / 100
   if (stats) stats.peaks.push(out.peak)
@@ -212,8 +242,9 @@ export async function windSmash (bot, ctl, e, { vel, swap = SWAP, stats = null, 
     out.expect = Math.round(smashDamage(r.hit.fall, { base: MACE_BASE, charge: r.hit.charged ? 1 : 0.8, density: densityOf(bot) }))
     // Сколько снял: минимум его здоровья после удара (регенерация при
     // сытости возвращает по 1 хп в 10 тиков — берём самое низкое).
-    const hpMin = r.hit.hpMin != null ? r.hit.hpMin : telemetryHp(e)
-    out.dealt = theirHp0 != null && hpMin != null ? Math.max(0, theirHp0 - hpMin) : null
+    const struck = e.id === r.hit.targetId ? e : bot.entities?.[r.hit.targetId]
+    const hpMin = r.hit.hpMin ?? (struck && struck.isValid !== false && (struck.username || struck.name) === r.hit.target ? telemetryHp(struck) : null)
+    out.dealt = r.hit.hp0 != null && hpMin != null ? Math.max(0, r.hit.hp0 - hpMin) : null
     if (stats) { stats.smashHits += r.hits?.length || 1; if (out.dealt != null) stats.dealt.push(out.dealt) }
   }
   await sleep(150)

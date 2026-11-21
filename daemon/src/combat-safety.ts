@@ -207,14 +207,14 @@ function watch (bot) {
 // Использует существующий PvP-отрыв с проверками пола и края, включая
 // явно переданных игроков. clear означает разрыв ближнего контакта;
 // луч от стрелка ещё должен закрыть модуль укрытия перед едой.
-async function disengage (session, ctl, foes, { kite, ms = 4000 }: any = {}) {
+async function disengage (session, ctl, foes, { kite, ms = 4000, exposed }: any = {}) {
   const bot = session.bot
   try { bot.pathfinder.setGoal(null) } catch {}
   bot.clearControlStates()
   const contact = () => (foes() || []).some(e => e?.position && e.isValid !== false &&
     e.position.distanceTo(bot.entity.position) < 8 && assess.inSight(bot, e))
   if ((bot.health ?? 0) <= 0 || ctl.aborted) return { clear: false, how: 'прервано' }
-  const safe = () => !contact() && safeGround(bot)
+  const safe = () => !contact() && !exposed?.() && safeGround(bot)
   if (safe()) return { clear: true, how: 'контакта уже нет' }
   const run = kite || (require('./tempo') as typeof import('./tempo')).kite
   const how = await run(bot, ctl, foes, { ms, until: safe, stop: () => (bot.health ?? 0) <= 0 })

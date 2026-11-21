@@ -23,26 +23,38 @@ export function createPathMiningProgress (bot, now) {
 // Цена шага пути у лавы и огня (mineflayer-pathfinder exclusionAreasStep: блок ног узла → прибавка): над лавой или огнём
 // (лава вровень с полом — яма Колизея: pathfinder с запасом блоков «мостит» её поставкой, и неудачная поставка — шаг
 // в лаву) — 100, нельзя; рядом (3×3, ноги и пол) — 30, в обход, если обход есть. Годится и для goto (session movements).
-export function burnStepCost (bot) {
+export function burnStepCost (bot, observed?: { blockAt: (p) => any }) {
   const BURN = /^(lava|fire|soul_fire)$/
+  const burns = p => {
+    const b = bot.blockAt(p)
+    return b && BURN.test(b.name) && (!observed || BURN.test(observed.blockAt(p)?.name))
+  }
   return b => {
     const p = b && b.position
     if (!p) return 0
-    for (const dy of [0, -1]) { const n = bot.blockAt(p.offset(0, dy, 0)); if (n && BURN.test(n.name)) return 100 }
+    for (const dy of [0, -1]) if (burns(p.offset(0, dy, 0))) return 100
     for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const dy of [0, -1]) {
-      const n = bot.blockAt(p.offset(dx, dy, dz))
-      if (n && BURN.test(n.name)) return 30
+      if ((dx || dz) && burns(p.offset(dx, dy, dz))) return 30
     }
     return 0
   }
 }
 
-const burnPriced = new WeakSet<object>()
-export function priceBurnSteps (bot, movements) {
-  if (burnPriced.has(movements)) return () => {}
-  burnPriced.add(movements)
+const burnPriced = new WeakMap<object, { seen?: ReturnType<typeof burnStepCost> }>()
+export function priceBurnSteps (bot, movements, observed?: { blockAt: (p) => any }) {
+  const seen = observed && burnStepCost(bot, observed)
+  const installed = burnPriced.get(movements)
+  if (installed) {
+    if (!seen) return () => {}
+    const previous = installed.seen
+    installed.seen = seen
+    return () => { if (installed.seen === seen) installed.seen = previous }
+  }
+  const prices = { seen }
+  burnPriced.set(movements, prices)
   const burn = burnStepCost(bot), fb = bot._ndFastBlocks
   const risk = (block: any) => {
+    if (prices.seen) return prices.seen(block)
     if (fb?.live && block && block._ndBurnVer === fb.ver) return block._ndBurnV
     const value = burn(block)
     if (fb?.live && block) { block._ndBurnVer = fb.ver; block._ndBurnV = value }
@@ -71,7 +83,7 @@ export function priceBurnSteps (bot, movements) {
 }
 
 // Acquisition and the duel must use the same route constraints, including intermediate nodes.
-export function combatMovement (bot, arena = null) {
+export function combatMovement (bot, arena = null, observed?: { blockAt: (p) => any }) {
   const mv = bot.pathfinder?.movements
   const arenaOk = arena && ['x', 'y', 'z', 'r'].every(k => Number.isFinite(arena[k])) && arena.r > 0 ? arena : null
   const onField = p => !!arenaOk && !!p && p.y >= arenaOk.y - 1.5 && Math.abs(p.x - arenaOk.x) <= arenaOk.r + .5 && Math.abs(p.z - arenaOk.z) <= arenaOk.r + .5
@@ -81,7 +93,7 @@ export function combatMovement (bot, arena = null) {
   // Путь в бою — не вплотную к лаве и огню (стенд 15×15 a8 21.10: погоня по краю ямы с лавой, срезанный угол на спринте —
   // 4 смерти «tried to swim in lava» без чужого удара). Клетка у лавы (на уровне ног или пола, вкл. диагональ) — дорого,
   // в обход, если обход есть; сама лава — уже не клетка пути (pathfinder blocksToAvoid).
-  const stopBurn = Array.isArray(mv.exclusionAreasStep) ? priceBurnSteps(bot, mv) : null
+  const stopBurn = Array.isArray(mv.exclusionAreasStep) ? priceBurnSteps(bot, mv, observed) : null
   mv.allow1by1towers = false; mv.scafoldingBlocks = []; mv.allowParkour = false
   // Pathfinder compares feet Y to the solid support's block Y, one below landing feet.
   mv.maxDropDown = edges.SAFE_FALL + 1

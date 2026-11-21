@@ -6,7 +6,11 @@ import * as pick from './pick'
 import { directThreat } from './swarm-work'
 import { seesPlayer, createLastSeen } from './pvp/last-seen'
 import { observedCollision } from './pvp/search'
-import { bodyClear, shapeBoxes, HAZARD } from './navigation/geometry'
+import { bodyClear, shapeBoxes, supportAt, HAZARD } from './navigation/geometry'
+import { withinArena } from './navigation/parkour/model'
+import { bowScreenStep, screensBow } from './swarm/common'
+import { windOutside } from './combat/team-wind'
+import { webCells } from './hazards'
 // Фабрика vec3 (parseFloat, null → 0,0,0), как прежний require('vec3'); тип — класс Vec3.
 const Vec3 = vec3 as unknown as typeof import('vec3').Vec3
 
@@ -99,6 +103,78 @@ function guard(bot, ctl, p, budget, { healthFloor = Infinity, ranged = true, thr
     } }
 }
 
+// Commit to one point in front of the ward. A new line belongs to a new command.
+async function enterBowLane(bot, g, p, shield) {
+  const ward = bot.players?.[p.coverAlly]?.entity, archer = bot.players?.[p.whileDraw]?.entity
+  const { aims } = require('./threats') as typeof import('./threats')
+  const activeDraw = () => g.active && ward && archer && ward.isValid !== false && archer.isValid !== false &&
+    bot.players?.[p.coverAlly]?.entity === ward && bot.players?.[p.whileDraw]?.entity === archer &&
+    bot.players[p.coverAlly]?.gamemode !== 3 && bot.players[p.whileDraw]?.gamemode !== 3 && seesPlayer(bot, ward) &&
+    aims(bot, null, null, { toward: ward.position, candidates: [archer] }).some(a => a.weapon === 'bow')
+  const start = bot.entity.position.clone(), at = activeDraw() && bowScreenStep(start, ward.position, archer.position)
+  if (!at) return g.stop('cover_lane_lost')
+  if (screensBow(start, ward.position, archer.position)) return
+  const target = new Vec3(at.x, at.y, at.z)
+  const fixedLane = () => activeDraw() && screensBow(target, ward.position, archer.position)
+  const safe = (world, pos, from) => {
+    if (!withinArena(world, pos, p.arena, from) || p.arena?.ellipse && windOutside(p.arena, pos) ||
+        Math.abs(pos.y - start.y) > .03 || !bodyClear(world, pos, { from })) return false
+    const box = supportAt(world, pos, .04)?.box
+    return box && pos.x >= box.minX && pos.x <= box.maxX && pos.z >= box.minZ && pos.z <= box.maxZ
+  }
+  const world = observedCollision(bot)
+  const steps = Math.ceil(start.distanceTo(target) * 4)
+  for (let i = 1; i <= steps; i++) {
+    if (!safe(world, start.plus(target.minus(start).scaled(i / steps)), start)) return g.stop('cover_step_blocked')
+  }
+  await bot.lookAt(archer.position.offset(0, pick.eyeHeight(bot, archer), 0), true)
+  if (!g.active) return
+  if (!fixedLane()) return g.stop('cover_lane_lost')
+  const raised = await shield.raise(true)
+  if (!g.active) return
+  if (!fixedLane()) return g.stop('cover_lane_lost')
+  if (!raised) return g.stop(shield.failure() || 'cover_step_blocked')
+  const edges = require('./edges') as typeof import('./edges')
+  for (let tick = 0; tick < 40 && g.active; tick++) {
+    const me = bot.entity.position
+    if (!fixedLane()) return g.stop('cover_lane_lost')
+    if (shield.failure() || bot.inventory.slots[45]?.name !== 'shield') return g.stop('cover_step_blocked')
+    if (screensBow(me, ward.position, archer.position)) return
+    if (!bot.entity.onGround || start.distanceTo(me) > 1.25) return g.stop('cover_step_blocked')
+    const right = (target.x - me.x) * Math.cos(bot.entity.yaw) - (target.z - me.z) * Math.sin(bot.entity.yaw) > 0
+    const side = { ...edges.IDLE, left: !right, right }, sim = edges.simOf(bot), terrain = edges.worldOf(world)
+    // Validate one input tick and the stopping distance if the archer releases immediately afterward.
+    const control = [edges.IDLE, side].find(input => {
+      if (input === edges.IDLE && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < .005) return false
+      const probe = edges.stateOf(bot, input)
+      for (let brake = 0; brake < 12; brake++) {
+        const before = probe.pos.clone()
+        sim(probe, terrain)
+        if (!probe.onGround || probe.isCollidedHorizontally || !safe(world, probe.pos, before) || probe.pos.distanceTo(start) > 1.25) return false
+        if (Math.hypot(probe.vel.x, probe.vel.z) < .005) return input === side || screensBow(probe.pos, ward.position, archer.position)
+        probe.control = { ...edges.IDLE }
+      }
+      return false
+    })
+    if (!control) return g.stop('cover_step_blocked')
+    if (!g.active) return
+    const key = control.left ? 'left' : control.right ? 'right' : null
+    if (key) bot.setControlState(key, true)
+    if (!g.active) return
+    await new Promise<void>(resolve => {
+      const release = () => {
+        bot.removeListener('physicsTick', release)
+        const index = g.local.onAbort.indexOf(release)
+        if (index >= 0) g.local.onAbort.splice(index, 1)
+        if (g.active && key) bot.setControlState(key, false)
+        resolve()
+      }
+      g.local.onAbort.push(release); bot.once('physicsTick', release)
+    })
+  }
+  if (g.active) g.stop('cover_step_blocked')
+}
+
 // Стойка на месте: присед и взгляд на видимого врага (часовой, засада). shield: true — стойка кольца: щит поднят,
 // лицом к видимому врагу снаружи кольца, а нет такого — наружу, на точку face; стрелы в щит стойку не рвут, рвёт только
 // ближний бой и здоровье ниже healthFloor (6).
@@ -114,13 +190,49 @@ async function swarmHold(session, ctl, p: any = {}) {
       p.enemies && (!Array.isArray(p.enemies) || p.enemies.length > 128 || p.enemies.some(n => !['string', 'number'].includes(typeof n))) ||
       p.webSmash !== undefined && (typeof p.webSmash !== 'string' || !p.webSmash || p.webSmash.length > 100 || p.whileSmash !== p.webSmash || p.allies?.includes(p.webSmash)) ||
       p.whileDraw !== undefined && (typeof p.whileDraw !== 'string' || !p.whileDraw || p.whileDraw.length > 100 || p.shield !== true || p.whileSmash || p.allies?.includes(p.whileDraw)) ||
+      p.whileWebbed !== undefined && (typeof p.whileWebbed !== 'boolean' || p.whileWebbed && (!p.whileDraw || p.coverAlly)) ||
+      p.coverAlly !== undefined && (!p.whileDraw || !p.allies?.includes(p.coverAlly) || p.coverAlly === bot.username) ||
+      p.stepIntoLane !== undefined && (typeof p.stepIntoLane !== 'boolean' || p.stepIntoLane && !p.coverAlly) ||
       p.face !== undefined && !finite(p.face) || p.healthFloor !== undefined && !Number.isFinite(p.healthFloor)) return { ok: false, why: 'invalid_hold' }
   const shieldMode = p.shield === true
+  const projectiles = () => (require('./threats') as typeof import('./threats')).projectileDangers(bot, { foes: [p.whileDraw] })
+  const incomingArrow = a => a.blockable && /^(spectral_)?arrow$/.test(a.name)
+  const bowAimed = a => a.name === p.whileDraw && (a.weapon === 'bow' || a.weapon === 'crossbow')
+  if (p.whileWebbed) {
+    if (!webCells(bot).length) return { ok: false, why: 'not_webbed' }
+    const danger = projectiles()
+    if (!danger.aims.some(bowAimed) && !danger.arrows.some(incomingArrow)) return { ok: false, why: 'no_visible_threat' }
+  }
   // Щит к булаве (whileSmash) не рвёт «прямая угроза»: падающий с булавой и есть она, щит — ответ на неё. Стойка снималась за
   // тики до удара, драйвер поднимал её снова (5 т без блока) — «☂ щит к нему» по 3–4 раза в секунду и смерть (игра
   // пользователя 23.10, 5 «smashed» за 20 с).
   const g = guard(bot, ctl, p, seconds * 1000 + 50, shieldMode || p.webSmash ? { healthFloor: p.healthFloor ?? 6, ranged: false, threat: !p.whileSmash } : {})
-  let seen = 0, shield = null, raisedTicks = 0, web = null
+  let seen = 0, shield = null, raisedTicks = 0, web = null, wardAt = null
+  let lastArrows: Set<number> | undefined, arrowFrom = null
+  const webCheck = () => {
+    if (!g.active || (!lastArrows && webCells(bot).length)) return
+    const incoming = projectiles().arrows.filter(incomingArrow)
+    // Once free, only finish blocking shots that were already on course at the cut.
+    lastArrows ??= new Set(incoming.map(a => a.id))
+    const next = incoming.find(a => lastArrows.has(a.id))
+    if (next) arrowFrom = next.from
+    else g.stop('web_cleared')
+  }
+  if (p.whileWebbed) bot.on('physicsTick', webCheck)
+  const finish = (extra = {}) => {
+    const result = g.out(extra)
+    return result.why === 'web_cleared' ? { ...result, ok: true, aborted: false } : result
+  }
+  const intent = p.coverAlly && session.current?.name === 'swarm_hold' ? session.current : null
+  const coveredBow = threat => {
+    const from = threat.from || threat.at, me = bot.entity.position
+    if (!wardAt || !from || !shield || bot.inventory?.slots?.[45]?.name !== 'shield' || shield.failure() ||
+        -(from.x - me.x) * Math.sin(bot.entity.yaw) - (from.z - me.z) * Math.cos(bot.entity.yaw) <= 0) return false
+    if (threat.weapon === 'bow') return threat.name === p.whileDraw
+    // A shot already in flight needs a confirmed block. Its observed position lies on the projectile, not at the archer's feet.
+    return threat.blockable && /^(spectral_)?arrow$/.test(threat.name) && shield.blocking() &&
+      screensBow(me, wardAt, { ...from, y: from.y - 1.62 })
+  }
   try {
     g.check()
     // До подъёма щита — одна проверенная попытка; поднятый щит ради паутины не опускаем.
@@ -133,15 +245,25 @@ async function swarmHold(session, ctl, p: any = {}) {
     }
     if (shieldMode && g.active) {
       shield = (require('./combat') as typeof import('./combat')).makeShield(session, g.local, { shield: 'always' })
-      if (!(await shield.wear())) { const why = shield.report()?.why; shield.close(); shield = null; if (p.requireShield || p.whileDraw) { g.stop('no_shield'); return g.out({ shieldWhy: why }) } }
+      const worn = p.whileWebbed ? await Promise.race([shield.wear(), g.interrupted]) : await shield.wear()
+      if (!worn) { const why = shield.report()?.why; shield.close(); shield = null; if (p.requireShield || p.whileDraw) { g.stop('no_shield'); return finish({ shieldWhy: why }) } }
     }
     if (g.active) { bot.clearControlStates(); bot.setControlState('sneak', !shieldMode && p.sneak !== false) }
     const face = p.face ? new Vec3(p.face.x, p.face.y, p.face.z) : null
     let calm = 0
     const threatGone = () => {
       if (p.whileDraw) {
-        const d = (require('./threats') as typeof import('./threats')).dangers(bot, { foes: [p.whileDraw] })
-        calm = d.aims.some(a => a.name === p.whileDraw) || d.arrows.length ? 0 : calm + 1
+        if (p.whileWebbed) {
+          webCheck()
+          if (!g.active) return true
+          if (lastArrows) return false
+          const d = projectiles(), arrow = d.arrows.find(incomingArrow)
+          arrowFrom = arrow?.from
+          calm = arrow || d.aims.some(bowAimed) ? 0 : calm + 1
+        } else {
+          const d = (require('./threats') as typeof import('./threats')).dangers(bot, { foes: [p.whileDraw] })
+          calm = d.aims.some(a => a.name === p.whileDraw) || d.arrows.length ? 0 : calm + 1
+        }
         return calm >= 3
       }
       if (!p.whileSmash) return false
@@ -152,20 +274,32 @@ async function swarmHold(session, ctl, p: any = {}) {
       return calm >= 10
     }
     const watch = async () => {
+      let shooterAt = null
+      if (p.stepIntoLane && g.active) await enterBowLane(bot, g, p, shield)
       while (g.active && clock.now() - g.start < seconds * 1000 && !threatGone()) {
         const me = bot.entity.position
         const outward = face ? face.minus(me) : null
         const visible = (Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity &&
           (e.type === 'player' || e.username) && !(p.allies || []).includes(e.username) &&
-          (!p.enemies?.length || p.enemies.includes(e.username) || p.enemies.includes(e.id)) && seesPlayer(bot, e))
+          (!p.whileWebbed || e.username === p.whileDraw) && (!p.enemies?.length || p.enemies.includes(e.username) || p.enemies.includes(e.id)) && seesPlayer(bot, e))
         // Position is read only after strict LOS. No opponent health or inventory enters this skill.
         // В кольце — только враг снаружи (с моей стороны кольца): повернуться к тому, кто за спиной, — открыть спину кольца.
         const enemy = visible.filter(e => !outward || outward.x * (e.position.x - me.x) + outward.z * (e.position.z - me.z) > 0)
           .sort((a, b) => a.position.distanceTo(me) - b.position.distanceTo(me))[0]
-        if (enemy) { seen++; await bot.lookAt(enemy.position.offset(0, pick.eyeHeight(bot, enemy), 0), true) }
+        if (p.coverAlly) {
+          const ally = bot.players?.[p.coverAlly]?.entity
+          if (enemy?.username === p.whileDraw) shooterAt = point(enemy.position)
+          if (bot.inventory?.slots?.[45]?.name !== 'shield') { g.stop('no_shield'); break }
+          if (!shooterAt || !seesPlayer(bot, ally) || !screensBow(me, ally.position, shooterAt)) { g.stop('cover_lane_lost'); break }
+          wardAt = point(ally.position)
+          if (intent) intent.coveredBow = coveredBow
+        }
+        if (arrowFrom) await bot.lookAt(new Vec3(arrowFrom.x, arrowFrom.y, arrowFrom.z), true)
+        else if (enemy) { seen++; await bot.lookAt(enemy.position.offset(0, pick.eyeHeight(bot, enemy), 0), true) }
         else if (face) await bot.lookAt(face, true)
         // Стрелок скрылся, но стрела ещё летит: держать прежний фронт щита, не крутиться в поиске цели.
         else if (!p.whileDraw) await bot.look(bot.entity.yaw + Math.PI / 8, bot.entity.pitch || 0, true)
+        if (p.whileWebbed) webCheck()
         if (shield && g.active) {
           await shield.raise(true)
           const failure = p.whileDraw && shield.failure()
@@ -176,10 +310,14 @@ async function swarmHold(session, ctl, p: any = {}) {
       }
     }
     await Promise.race([watch(), g.interrupted])
-    return g.out({ heldSeconds: Math.min(seconds, (clock.now() - g.start) / 1000), seen, ...(p.webSmash ? { web } : {}),
+    return finish({ heldSeconds: Math.min(seconds, (clock.now() - g.start) / 1000), seen, ...(p.webSmash ? { web } : {}),
       ...(shieldMode ? { shield: shield ? { blockingSeconds: raisedTicks / 20, ...shield.nativeUse() } : null } : {}) })
-  } catch (error) { g.stop('hold_failed'); return g.out({ error: error.message, seen }) }
-  finally { shield?.close(); g.close() }
+  } catch (error) { g.stop('hold_failed'); return finish({ error: error.message, seen }) }
+  finally {
+    if (p.whileWebbed) bot.removeListener('physicsTick', webCheck)
+    if (intent?.coveredBow === coveredBow) delete intent.coveredBow
+    shield?.close(); g.close()
+  }
 }
 
 async function swarmPillar(session, ctl, p: any = {}) {

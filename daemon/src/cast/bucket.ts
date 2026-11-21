@@ -94,7 +94,7 @@ export function aimFor (bot, ref, face, expect) {
 
 // Вылить из ведра на грань face блока ref: жидкость ляжет в ref+face. Прицел
 // проверен лучом заранее — не туда не льём вовсе.
-export async function pour (bot, full, ref, face = UP) {
+export async function pour (bot, full, ref, face = UP, ctl?: { readonly aborted: boolean }) {
   if (!(await hold(bot, full))) return { ok: false, why: `нет ${full}` }
   const expect = ref.plus(face)
   const aim = aimFor(bot, ref, face, expect)
@@ -106,6 +106,7 @@ export async function pour (bot, full, ref, face = UP) {
   }
   try { await bot.lookAt(aim, true) } catch {}
   await sleep(60)
+  if (ctl?.aborted) return { ok: false, why: 'прервано' }
   const before = countOf(bot, full)
   try { bot.activateItem() } catch {}
   const t0 = gameClock.now()

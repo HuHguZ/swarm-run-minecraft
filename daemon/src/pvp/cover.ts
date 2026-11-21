@@ -376,18 +376,30 @@ const healItem = () => ctx.findPotion(ctx.bot, 'splash_potion', 'heal') || ctx.f
     ctx.findItem(ctx.bot, i => /cooked_|bread|baked_potato|golden_carrot|steak/.test(i.name))
 
 // Изнутри ниши видны готовые стены и выход. Считаем только недостающие блоки и материал будущей двери.
-const canFinishHere = (cell) => {
+const alcoveBuildMs = (cell) => {
     const { bot, fortify } = ctx
     const need = fortify.refugeNeed(bot, cell)
-    if (!need || (need.wallBlocks === 8 && !need.roofSolid && !need.leans)) return false
+    if (!need || (need.wallBlocks === 8 && !need.roofSolid && !need.leans)) return Infinity
     const check = fortify.boxCheck(bot, { cell, toward: ctx.entity.position, roof: true })
-    if (!check.ok) return false
+    if (!check.ok) return Infinity
     const mats = fortify.boxMaterials(bot, check.plan)
-    return [0, 2, 4, 6].some(i => {
+    const hasExit = [0, 2, 4, 6].some(i => {
       const side = check.plan[i].minus(cell)
       return standable(bot, check.plan[i]) && standable(bot, cell.plus(side.scaled(2))) &&
         [mats[i], mats[i + 1]].every(name => !name || fortify.canBreakOut(bot, { name }))
     })
+    return hasExit ? check.ms : Infinity
+  }
+
+const nearbyAlcove = (here) => {
+    let best = null, bestMs = Infinity
+    for (const cell of [here, ...ctx.fortify.SIDES.map(side => here.plus(side))]) {
+      if (!standable(ctx.bot, cell)) continue
+      const walkMs = cell.offset(.5, 0, .5).distanceTo(ctx.bot.entity.position) / 4.3 * 1000
+      const ms = walkMs + alcoveBuildMs(cell)
+      if (ms < bestMs) { bestMs = ms; best = cell }
+    }
+    return best
   }
 
 const fortPossible = () => {
@@ -396,10 +408,9 @@ const fortPossible = () => {
     if (!ctx.bot.entity.onGround || ctx.bot.entity.isInWater) return false
     const cell = ctx.fortify.feetCell(ctx.bot)
     const openSite = ctx.countOf(ctx.bot, filler.name) >= 10 && [2, 3].every(k => ctx.bot.blockAt(cell.offset(0, k, 0))?.boundingBox === 'empty')
-    if (!openSite && !canFinishHere(cell)) return false
     const creeper = ctx.bot.nearestEntity(e => e && e.name === 'creeper' && e.position.distanceTo(ctx.bot.entity.position) < 9)
     if (creeper) return false
-    return !!ctx.healItem() || (ctx.bot.food ?? 0) >= 18
+    return (!!ctx.healItem() || (ctx.bot.food ?? 0) >= 18) && (openSite || !!nearbyAlcove(cell))
   }
 
 const isAir = (c) => { const b = ctx.bot.blockAt(c); return !!b && b.name === 'air' }
@@ -415,7 +426,11 @@ const cellOk = (c) => {
 
 const fortSpot = () => {
     const here = ctx.fortify.feetCell(ctx.bot)
-    if (ctx.cellOk(here) || canFinishHere(here)) return here
+    const filler = ctx.pickFiller(ctx.bot, { steady: true })
+    const openBudget = filler && ctx.countOf(ctx.bot, filler.name) >= 10
+    if (openBudget && ctx.cellOk(here)) return here
+    const alcove = nearbyAlcove(here)
+    if (alcove || !openBudget) return alcove
     const away = ctx.bot.entity.position.minus(ctx.entity.position)
     let best = null; let bs = Infinity
     for (let dx = -5; dx <= 5; dx++) {
@@ -490,7 +505,10 @@ const fortOut = async () => {
     if (!box.sealed || box.aborted || ctx.ctl.aborted) {
       ctx.aim = 'target'
       await ctx.holdWeapon()
-      if (!ctx.buildDone(gB, 'коробку') && box.placed) ctx.used('коробка не вышла')
+      if (!ctx.buildDone(gB, 'коробку') && !ctx.ctl.aborted) {
+        if (box.aborted && box.why) { ctx.st.build.aborted++; ctx.used('бросил коробку: ' + box.why) }
+        else if (box.placed) ctx.used('коробка не вышла')
+      }
       return false
     }
     ctx.fort = box
@@ -564,7 +582,7 @@ const fortOut = async () => {
           ctx.tt.stats.breaches++
           const theirHp0 = ctx.foeHpDecide(ctx.entity) // оценка, не метаданные (правило 06.10)
           const edge = (theirHp0 != null && hpNow >= theirHp0 + 6) || !!ctx.tt.state(ctx.entity).consuming
-          why = `вскрыли (${breach}) — ${edge ? 'перевес, выхожу драться' : 'вырываюсь с тыла'}`
+          why = `вскрыли (${breach}) — ${edge ? 'перевес, выхожу драться' : 'ищу выход из-под удара'}`
           breakAway = !edge
           break
         }
@@ -597,7 +615,11 @@ const fortOut = async () => {
           if (confirmed) { ctx.used('лечение под ноги'); ctx.st.healed.push('взрывное лечения') }
           ctx.aim = 'free'
         } else if (await ctx.consumeItem(item)) { confirmed = true; ctx.used('съел в коробке ' + item.name); ctx.st.healed.push(item.name) }
-        if (!confirmed) { why = 'лечение не подтверждено — перепланирую'; break }
+        if (!confirmed) {
+          // A wall opened during the use. Re-evaluate the breach before choosing a repair or retreat.
+          if (ctx.prof.player && ctx.tempo.ON && enc.sealed && !ctx.fortSealed()) continue
+          why = 'лечение не подтверждено — перепланирую'; break
+        }
       }
       const regen = (ctx.bot.food ?? 0) >= 18 || ctx.hasEffect(ctx.bot, 'regeneration')
       if ((ctx.bot.health ?? 0) >= 18) break
@@ -618,8 +640,38 @@ const fortOut = async () => {
     if (hitThrough) ctx.used(`бил через дыру ×${hitThrough}`)
     const theirs = ctx.foeHpDecide(ctx.entity)
     const bold = !breakAway && (ctx.bot.health ?? 0) >= (theirs ?? 20) - 2
+    const safeExit = (mid, outside, digMs, walkMs = 350) => {
+      const { bot, entity: foe } = ctx
+      if (ctx.ctl.aborted || !(bot.health > 0)) return false
+      if (!foe?.isValid || foe._ndVisible === false || !(require('./last-seen') as typeof import('./last-seen')).seesPlayer(bot, foe)) return true
+      const eye = foe.position.offset(0, ctx.pick.eyeHeight(bot, foe), 0), range = ctx.pick.RANGE
+      const startRange = ctx.reachFrom(eye, bot.entity), approachMs = Math.max(0, startRange - range) / ctx.tempo.SPRINT_BPT * 50
+      const exposedDig = digMs > 0 && approachMs <= digMs &&
+        ctx.pick.canHit(bot, bot.entity, { eye, range: Math.max(range, startRange + .05) })
+      const end = { ...bot.entity, position: outside.offset(.5, 0, .5) }
+      const endRange = ctx.reachFrom(eye, end), closes = endRange < startRange
+      if (!exposedDig && !(closes && endRange <= range)) return true
+      const verdict = (require('../combat-safety') as typeof import('../combat-safety')).inspect(bot, { target: foe, entities: [foe] })
+      const hit = verdict.threats.find(t => t.id === foe.id)?.hit
+      if (!hit) return true
+      const cooldown = ctx.tempo.swingCooldownMs(foe.equipment?.[0]?.name)
+      const lastSwing = ctx.tt.foes.get(foe.id)?.swungAt
+      const readyIn = lastSwing ? Math.max(0, lastSwing + cooldown - ctx.gameClock.now()) : 0
+      const hp = bot.health + (read.absorptionOf(bot, bot.entity) || 0)
+      const nextHits = (Math.ceil(hp / hit) - 1) * cooldown
+      if (exposedDig && digMs >= Math.max(readyIn, approachMs) + nextHits) return false
+      // Even an open doorway can end at the sword. Allow time to regain melee separation at a sprint.
+      const clearMs = walkMs + Math.max(0, range - endRange) / ctx.tempo.SPRINT_BPT * 50
+      if (!closes || digMs + clearMs < readyIn + nextHits) return true
+      const seen = (require('./search') as typeof import('./search')).observedCollision(bot)
+      const world = { entity: bot.entity, registry: bot.registry, blockAt: p => p.x === mid.x && p.z === mid.z &&
+        (p.y === mid.y || p.y === mid.y + 1) ? null : seen.blockAt(p) }
+      // Unknown terrain cannot promise protection. Only the intended door is cleared in the forecast.
+      return !ctx.pick.canHit(world, end, { eye, range })
+    }
     const out = await ctx.fortify.breakOut(ctx.bot, box.cell, bold ? { toward: ctx.entity.position } : { away: ctx.entity.position }, {
-      onHole: async () => {
+      safeExit: breakAway ? safeExit : null,
+      onHole: breakAway ? null : async () => {
         const eye0 = ctx.bot.entity.position.offset(0, ctx.EYE, 0)
         if (!ctx.entity.isValid || ctx.reachFrom(eye0, ctx.entity) > ctx.HIT_REACH) return false
         await ctx.holdWeapon()
@@ -635,12 +687,38 @@ const fortOut = async () => {
       }
     })
     if (ctx.process.env.ND_DEBUG_PVP) console.log('[fort] out', JSON.stringify({ ok: out.ok, side: out.side, hp: ctx.bot.health, theirs, bold, steps: out.steps }))
-    ctx.used(out.ok ? (bold ? 'вышел из коробки ему во фланг' : 'вышел из коробки с тыла') : 'не выбрался из коробки')
+    const defendOpening = async () => {
+      ctx.fort = null; ctx.aim = 'target'
+      if (!ctx.ctl.aborted && ctx.bot.health > 0) {
+        await ctx.holdWeapon()
+        if (ctx.guard && ctx.bot.inventory.slots[45]?.name === 'shield') {
+          if ((require('./last-seen') as typeof import('./last-seen')).seesPlayer(ctx.bot, ctx.entity))
+            await ctx.bot.lookAt(ctx.entity.position.offset(0, ctx.pick.eyeHeight(ctx.bot, ctx.entity), 0), true).catch(() => {})
+          if (!ctx.ctl.aborted) await ctx.guard.raise(true)
+        }
+      }
+      return false
+    }
+    if (out.exposed || out.unsafeGround) {
+      ctx.used(out.unsafeGround ? 'за проломом нет подтверждённого прохода' : 'не копаю под ударом — защищаюсь у пролома')
+      return defendOpening()
+    }
+    ctx.used(out.ok ? (bold ? 'вышел из коробки ему во фланг' : 'открыл проход для отхода из коробки') : 'не выбрался из коробки')
     if (out.ok) {
       await ctx.bot.lookAt(out.exit.offset(0.5, 1.2, 0.5), true).catch(() => {})
-      ctx.set('forward', true)
-      await ctx.sleep(350)
-      ctx.set('forward', false)
+      if (out.canStep) {
+        let ticks = 0
+        try {
+          while (ticks < 7 && !ctx.ctl.aborted && ctx.bot.health > 0 && out.canStep() && safeExit(out.exit, out.outside, 0, (7 - ticks) * 50)) {
+            ctx.set('forward', true); ticks++; await ctx.sleep(50)
+          }
+        } finally { ctx.set('forward', false) }
+        if (ticks < 7 || ctx.ctl.aborted || ctx.bot.health <= 0) return defendOpening()
+      } else {
+        ctx.set('forward', true)
+        await ctx.sleep(350)
+        ctx.set('forward', false)
+      }
       if (breakAway) {
         ctx.fort = null
         ctx.aim = 'free'

@@ -1,18 +1,22 @@
 'use strict'
 // Ход раундов: смерти по журналу сервера и счёт, старт (сброс, наборы на раунд, разнос по точкам, мобы), конец
 // раунда гонки и цикл бойца.
-import { SOLO } from './context'
+import { belowArenaFloor, SOLO } from './context'
 import { champTurn } from './champion'
 import { teamOfHuman } from './humans'
 import { dress } from './gear'
 import { LAN, lanCmd } from './server'
 import { restoreRoundRoster } from './fleet'
+import { publicDeathNotice } from '../../daemon/src/pvp/death-credit'
 import { configureRescue } from './map'
 import type { ArenaContext } from './context'
 import * as fs from 'fs'
 
 export function installRounds (ctx: ArenaContext) {
   const { i, teams, arms, bots, names, pos, deaths, kills, deadNow, out, deathAt, killGaps, humans, roundWins, radio, opened, chestBy, chestFail, refills, labNeed, brewed, alchemist, LOGF, BOX, HUMAN_TEAM, Y, teamOf, rcon, log, sleep } = ctx
+  let killsAtRoundStart = { ...kills }
+  let skipPreparationLine = false
+  let deferredTimeoutRound: number | undefined
   ctx.roundT0 = Date.now()
   ctx.lastKillAt = Date.now()
   // Смерти и убийства — по журналу сервера (кто кого: «X was slain/speared by Y»).
@@ -21,17 +25,34 @@ export function installRounds (ctx: ArenaContext) {
       const st = fs.statSync(LOGF)
       // Paper в полночь заводит новый latest.log: читать его с начала. Прежнее место — в старом файле, и после 00:00 драйвер
       // не видел ни смертей, ни «рестарт» (игра пользователя 22.10: «никита умер — раунд не кончается, рестарт не работает»).
-      if (st.size < ctx.logAt || ctx.logBorn && st.birthtimeMs !== ctx.logBorn) ctx.logAt = 0
+      if (st.size < ctx.logAt || ctx.logBorn && st.birthtimeMs !== ctx.logBorn) { ctx.logAt = 0; skipPreparationLine = false }
       ctx.logBorn = st.birthtimeMs
       if (st.size <= ctx.logAt) return
-      const fd = fs.openSync(LOGF, 'r'); const buf = Buffer.alloc(st.size - ctx.logAt); fs.readSync(fd, buf, 0, buf.length, ctx.logAt); fs.closeSync(fd); ctx.logAt = st.size
-      if (ctx.between) return
-      for (const line of buf.toString('utf8').split(/\r?\n/)) {
+      const buf = Buffer.alloc(st.size - ctx.logAt), fd = fs.openSync(LOGF, 'r')
+      let bytes: number
+      try { bytes = fs.readSync(fd, buf, 0, buf.length, ctx.logAt) } finally { fs.closeSync(fd) }
+      const data = buf.subarray(0, bytes), end = data.lastIndexOf(10) + 1
+      ctx.logAt += end // Paper may still be appending the last record.
+      if (ctx.between) { skipPreparationLine = end < bytes; return }
+      if (!end) return !skipPreparationLine
+      const first = skipPreparationLine ? data.indexOf(10) + 1 : 0
+      skipPreparationLine = false
+      let humanEliminated = false
+      for (const line of data.toString('utf8', first, end).split(/\r?\n/)) {
         const cm = /<(\S+)> !?(рестарт|restart)\s*$/i.exec(line)
-        if (cm && !names.includes(cm[1])) { ctx.endRound(false, `${cm[1]} написал «${cm[2]}»`).catch(() => {}); continue }
+        if (cm && !names.includes(cm[1])) {
+          ctx.endRound(false, `${cm[1]} написал «${cm[2]}»`).catch(() => {})
+          if (ctx.between) { skipPreparationLine = end < bytes; break }
+          continue
+        }
         const m = /\]: (NeuroFarm\S+) (was (?!kicked\b).+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
         const hm = !m && /\]: (\S+) (was (?!kicked\b).+|died.*|fell.+|hit the ground.*|burned.*|tried to swim.*|drowned.*|experienced kinetic.*|suffocated.*|starved.*|froze.*|withered.*|went up in flames.*|blew up.*|walked into.*|discovered.*|left the confines.*)$/.exec(line)
         const dead = m || hm, wind = dead && ctx.windOutAt?.[dead[1]]
+        const published = /^\[[^\]]+\] \[Server thread\/INFO\]: (([A-Za-z0-9_]{1,16}) .+)$/.exec(line)
+        if (published && (names.includes(published[2]) || humans[published[2]])) {
+          const notice = publicDeathNotice(published[1])
+          if (notice) ctx.swarmDriver?.publicDeath?.(notice.victim, notice.killer)
+        }
         if (wind && Date.now() - wind.at < 4000) {
           ctx.windRecentDeaths = (ctx.windRecentDeaths || 0) + 1; delete ctx.windOutAt[dead[1]]
           log(`🌬☠ ${dead[1]} погиб в течение 4 с после броска ветра (${wind.kind}, бросал ${wind.by}); native причина: ${dead[2]} — всего таких смертей ${ctx.windRecentDeaths}`)
@@ -40,7 +61,7 @@ export function installRounds (ctx: ArenaContext) {
           log(`☠ ${hm[1]} ${hm[2]}`)
           // Соло (12.10: «умер — раунд заново»; 14.10, двое людей: «логика n людей»): погибший выбыл до конца раунда (зритель),
           // как бот; раунд синих — когда выбыли все люди. Набор и место выдаст старт раунда (humanStart → kitHuman).
-          if (SOLO) { ctx.humanOut.add(hm[1]); ctx.humanOutWatch(hm[1]).catch(() => {}); ctx.endRound().catch(() => {}) } else ctx.kitHuman(hm[1])
+          if (SOLO) { ctx.humanOut.add(hm[1]); ctx.humanOutWatch(hm[1]).catch(() => {}); humanEliminated = true } else ctx.kitHuman(hm[1])
           // Его вещи на земле — лут для бойцов, не подарок (10.10: выпавший трезубец засчитался союзом).
           if (humans[hm[1]].p) deathAt[hm[1]] = { p: humans[hm[1]].p, at: Date.now(), looted: new Set<string>(), inv: {}, armor: {}, team: null }
         }
@@ -57,6 +78,8 @@ export function installRounds (ctx: ArenaContext) {
         const vb = bots.find(o => o.name === m[1])
         log(`☠ ${m[1]} ${m[2]}${by ? ` [убийца ${pos[by]?.gliding ? 'летит' : 'на земле'}${pos[by]?.p && pos[m[1]]?.p ? ' в ' + Math.round(Math.hypot(pos[by].p.x - pos[m[1]].p.x, pos[by].p.y - pos[m[1]].p.y, pos[by].p.z - pos[m[1]].p.z)) + ' бл.' : ''}; жертва: ход ${vb?.swarmTask?.kind || '-'}, ${vb?.last?.m || '-'}${pos[m[1]]?.gliding ? ', летела' : ''}]` : ''}`)
       }
+      if (humanEliminated && !ctx.between) ctx.endRound().catch(() => {})
+      return end < bytes
     } catch {}
   }
   ctx.board = () => names.map(n => `${teams ? (teamOf(n) === 'red' ? '🟥' : '🟦') : ''}${n.replace(`NeuroFarm${i}`, '#') || '#'}: ${kills[n] || 0}/${deaths[n] || 0}`).join('  ') +
@@ -110,46 +133,67 @@ export function installRounds (ctx: ArenaContext) {
     return ready
   }
   // Конец раунда: команда без живых — победа другой; пауза, уборка, новые сундуки, все на старт, снова лут и бой.
-  // Раунд дольше ROUND_S (420 реальных с) — победа той, где живых больше (ничья — по убийствам).
+  // По времени сравниваем выживших, затем убийства за этот раунд. При полном равенстве очко не присуждается.
   ctx.endRound = async function endRound (timeout = false, forced: string | null = null) {
     if (!arms || ctx.between) return
+    if (timeout) {
+      const incomplete = ctx.readDeaths()
+      if (ctx.between) return // A chat restart or elimination in the same batch already settled the round.
+      if (incomplete && deferredTimeoutRound !== ctx.round) { deferredTimeoutRound = ctx.round; return }
+      const round = ctx.round
+      for (const h of ctx.humanNames) {
+        if (!/^\w{1,16}$/.test(h) || ctx.humanOut.has(h)) continue
+        const cmd = `execute if entity @a[name=${h},gamemode=!spectator,gamemode=!creative]`
+        const receipt = String(await (LAN ? lanCmd(cmd, 3000, /^Test (?:passed|failed)/i) : rcon(i, cmd)).catch(() => '')).trim()
+        if (ctx.between || ctx.round !== round || !/^Test failed$/i.test(receipt)) return
+      }
+    }
     // Люди в соло: живые — онлайн и не выбывшие; пока никого нет онлайн — считаю одного (раунд ждёт людей, а не кончается).
     // Люди своей команды в игре (ARMS_HUMAN_TEAMS — у каждого своя); людей нет — команда людей не пустеет.
     const humansIn = (t) => ctx.humanNames.length ? ctx.humanNames.filter(h => !ctx.humanOut.has(h) && teamOfHuman(h, HUMAN_TEAM) === t).length : t === HUMAN_TEAM ? 1 : 0
-    const alive = (t) => bots.filter(b => b.team === t && !out.has(b.name)).length + (SOLO ? humansIn(t) : 0)
-    let win = alive('red') === 0 ? 'blue' : alive('blue') === 0 ? 'red' : null
-    if (!win && timeout) {
-      const kt = (t) => names.filter(n => teamOf(n) === t).reduce((a, n) => a + (kills[n] || 0), 0)
-      win = alive('red') !== alive('blue') ? (alive('red') > alive('blue') ? 'red' : 'blue') : (kt('red') >= kt('blue') ? 'red' : 'blue')
+    const alive = (t) => bots.filter(b => b.team === t && !out.has(b.name) && !deadNow.has(b.name)).length + (SOLO ? humansIn(t) : 0)
+    const red = alive('red'), blue = alive('blue')
+    if (!forced && !timeout && red > 0 && blue > 0) return
+    let lead = red - blue
+    if (!forced && timeout && !lead && red > 0) {
+      const roundKills = (team: string) => names.filter(n => teamOf(n) === team).reduce((sum, n) => sum + (kills[n] || 0) - (killsAtRoundStart[n] || 0), 0)
+      lead = roundKills('red') - roundKills('blue')
     }
-    // Рестарт по чату (10.10: «команда рестарт — перезапускать раунд самому») — без победителя.
-    if (forced) win = null
-    if (!win && !forced) return
+    const win = forced || !lead ? null : lead > 0 ? 'red' : 'blue'
     ctx.between = true
     if (win) roundWins[win]++
-    const ru = win === 'red' ? 'красных' : 'синих'
+    const result = win === 'red' ? 'Победа красных' : win === 'blue' ? 'Победа синих' : 'Ничья'
     for (const o of bots) if (o.team === win && !out.has(o.name)) ctx.emote(o, Math.random() < 0.5 ? 'crouch' : 'wave')
     if (forced) log(`🔄 раунд ${ctx.round} перезапущен: ${forced}`)
-    else log(`🏁 раунд ${ctx.round}${timeout ? ' (время)' : ''}: победа ${ru} — раунды 🟥 ${roundWins.red} : ${roundWins.blue} 🟦; ${ctx.board()}`)
-    await rcon(i, 'title @a times 10 70 20').catch(() => {})
-    const tr = String(await rcon(i, `title @a title {"text":"${forced ? 'Рестарт' : 'Победа ' + ru}","color":"${win || 'gold'}"}`, 15000).catch(e => 'ошибка ' + e.message))
-    if (!/Showing/i.test(tr)) log(`⚠ титр победы не показан: ${tr.slice(0, 120)}`)
-    await rcon(i, `tellraw @a {"text":"${forced ? '🔄 Раунд ' + ctx.round + ' перезапущен' : '🏁 Раунд ' + ctx.round + ': победа ' + ru}","color":"${win || 'gold'}"}`).catch(() => {})
-    await rcon(i, `title @a subtitle {"text":"Раунд ${ctx.round} · 🟥 ${roundWins.red} : ${roundWins.blue} 🟦"}`).catch(() => {})
-    for (const b of bots) await b.c.call('stop').catch(() => {})
-    // Only owned bots leave collision during arena restoration; humans retain their own game mode and position.
-    for (const b of bots) await rcon(i, `gamemode spectator ${b.name}`)
-    await sleep(forced ? 1500 : 5000)
+    else log(`🏁 раунд ${ctx.round}${timeout ? ' (время)' : ''}: ${result.toLowerCase()} — раунды 🟥 ${roundWins.red} : ${roundWins.blue} 🟦; ${ctx.board()}`)
+    const endingRound = ctx.round
+    const current = () => !ctx.stop && ctx.between && ctx.round === endingRound
+    const announce = (cmd: string, timeoutMs?: number) => rcon(i, cmd, timeoutMs, { current, channel: 'round-announcement' })
+    await announce('title @a times 10 70 20').catch(() => {})
+    const tr = String(await announce(`title @a title {"text":"${forced ? 'Рестарт' : result}","color":"${win || 'gold'}"}`, 15000).catch(e => 'ошибка ' + e.message))
+    if (!current()) return
+    if (!/Showing/i.test(tr)) log(`⚠ сервер не подтвердил титр победы: ${tr.slice(0, 120)}`)
+    const chat = await announce(`tellraw @a {"text":"${forced ? '🔄 Раунд ' + endingRound + ' перезапущен' : '🏁 Раунд ' + endingRound + ': ' + result.toLowerCase()}","color":"${win || 'gold'}"}`).catch(() => null)
+    const announced = /Showing/i.test(tr) || chat === ''
+    await announce(`title @a subtitle {"text":"Раунд ${endingRound} · 🟥 ${roundWins.red} : ${roundWins.blue} 🟦"}`).catch(() => {})
+    if (!current()) return
+    const parkRoster = !LAN && !!bots.length && ctx.COLOS_MAP && process.env.ARMS_RESET !== '0'
+    if (!parkRoster) {
+      for (const b of bots) await b.c.call('stop').catch(() => {})
+      for (const b of bots) await rcon(i, `gamemode spectator ${b.name}`)
+    }
+    const resultPause = sleep(forced ? 1500 : 5000)
+    if (!parkRoster) await resultPause
     ctx.round++
-    ctx.swarmDriver.reset()
+    ctx.swarmDriver.reset(announced ? win : null)
     for (const t of ['item', 'arrow', 'experience_orb', 'splash_potion']) await rcon(i, `kill @e[type=${t},${BOX}]`).catch(() => {})
     const rebuild = async () => { await ctx.restoreArena(); await ctx.stockChests(ctx.round) }
     let joined: Set<string> | undefined
-    if (!LAN && ctx.COLOS_MAP && process.env.ARMS_RESET !== '0') {
+    if (parkRoster) {
       try {
-        joined = await restoreRoundRoster(i, bots, rcon, rebuild, log)
-        for (const b of bots) if (joined.has(b.name)) await rcon(i, `gamemode spectator ${b.name}`)
+        joined = await restoreRoundRoster(i, bots, rcon, rebuild, log, { x: ctx.X + 0.5, y: ctx.Y + 4, z: ctx.Z + 0.5 })
         await Promise.all(bots.filter(b => joined!.has(b.name)).map(b => configureRescue(ctx, b)))
+        await resultPause
       } catch (error) { ctx.stop = true; log(`⚠ восстановление раунда ${ctx.round}: ${error}`); throw error }
     } else await rebuild()
     for (const k of Object.keys(deathAt)) delete deathAt[k]
@@ -172,10 +216,13 @@ export function installRounds (ctx: ArenaContext) {
     deadNow.clear(); ctx.humanOut.clear()
     for (const b of bots) if (!out.has(b.name)) await rcon(i, `gamemode survival ${b.name}`)
     await ctx.giveBlue()
-    if (HUMAN_TEAM) for (const h of new Set([...ctx.humanNames, ...Object.keys(humans)])) await ctx.humanStart(h)
+    if (teams) for (const h of new Set([...ctx.humanNames, ...Object.keys(humans)])) {
+      if (teamOfHuman(h, HUMAN_TEAM)) await ctx.humanStart(h)
+    }
     await rcon(i, `title @a title {"text":"Раунд ${ctx.round}","color":"gold"}`).catch(() => {})
     await sleep(1500)
     if (process.env.ARMS_PHASES === '1') await ctx.armsPrep()
+    killsAtRoundStart = { ...kills }
     ctx.roundT0 = Date.now(); ctx.lastKillAt = Date.now(); killGaps.length = 0
     ctx.between = false
   }
@@ -294,6 +341,8 @@ export async function fighterLoop (ctx: ArenaContext, b) {
       continue
     }
     if (!pos[b.name]?.p) { await reconnect(b); await sleep(250); continue }
+    // Keep polling for a rescue or a referee death; an upper chest cannot help from beneath the kill plane.
+    if (belowArenaFloor(ctx, pos[b.name].p)) { await sleep(250); continue }
     // Ход, вернувшийся без обращения к демону (занят чужой задачей, нет задачи), — пауза: иначе цикл крутится на готовых
     // обещаниях и Node не доходит до таймеров и сокетов (ревью 13.10: вся арена вставала, напарник ждал вечно).
     const turnAt = Date.now()

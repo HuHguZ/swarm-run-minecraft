@@ -8,6 +8,22 @@ function status(bot: any) {
   return methods.status
 }
 
+test('swarm status retains own position and death events below the kill plane without scanning combat targets', async t => {
+  const calls: string[] = [], bot = { entity: { position: { x: 524, y: 62.3, z: 545 } }, inventory: { slots: [] } }
+  const sensors = require('../src/swarm-senses')
+  t.mock.method(sensors, 'swarmSightings', () => { calls.push('sight'); return [] })
+  t.mock.method(sensors, 'witnessedDeaths', () => [{ self: true }])
+  t.mock.method(require('../src/combat/pearl-watch'), 'enemyPearls', () => { calls.push('pearls'); return [] })
+  t.mock.method(require('../src/threats'), 'dangers', () => { calls.push('dangers'); return {} })
+  const poll = status(bot), params = { swarm: true, dangers: true, deathScope: 'round', arena: { killY: 113 } }
+  const below = await poll(params)
+  assert.equal(below.at.y, 62.3)
+  assert.deepEqual(below.witnessedDeaths, [{ self: true }])
+  assert.deepEqual(calls, [])
+  bot.entity.position.y = 113
+  await poll(params); assert.deepEqual(calls, ['sight', 'pearls', 'dangers'])
+})
+
 test('P7 ench status: реальные чары доходят до силы и физической готовности лаборатории', async () => {
   const { powerOf, labReady }: typeof import('../src/pvp/arms-graph') = require('../src/pvp/arms-graph')
   const observe = async (ench: Record<string, number>) => {

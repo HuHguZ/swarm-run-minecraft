@@ -64,6 +64,8 @@ test('exact climb reaches a lower slab without mining its requested support or a
     assert.equal(f.goals[0].y, 64, 'the native feet node is above the fractional support')
     const result = await f.drive(running)
     assert.ok(result.arrived, JSON.stringify(result))
+    assert.equal(result.arrived.y, 63)
+    assert.equal(result.arrivedY, 63.5, 'the exact-height receipt preserves the actual landing on the slab')
     assert.equal(f.bot.entity.onGround, true)
     assert.ok(Math.abs(f.bot.entity.position.y - 63.5) < 1e-6)
     assert.ok(f.paths.every(p => p.path.every(n => !n.toBreak?.some(b => b.equals(slab)))), 'the route must retain its destination support')

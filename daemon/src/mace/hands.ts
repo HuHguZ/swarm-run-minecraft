@@ -69,11 +69,18 @@ export function slamHit (bot, e, stats = null) {
   if (shieldAtUs(bot, e)) for (let i = 0; i < 9; i++) { const it = bot.inventory.slots[36 + i]; if (it && /_axe$/.test(it.name)) { ai = i; break } }
   if (ai >= 0) {
     bot.setQuickBarSlot(ai)
-    bot.attack(e)
+    if (bot.attack(e) === false) {
+      if (ai !== cur) bot.setQuickBarSlot(cur)
+      return { blocked: true, stun: false, swapped: false, cur }
+    }
     if (stats) stats.stunSlams = (stats.stunSlams || 0) + 1
   }
   if (mi >= 0 && bot.quickBarSlot !== mi) bot.setQuickBarSlot(mi)
-  bot.attack(e)
+  const blocked = bot.attack(e) === false
+  if (blocked) {
+    if (bot.quickBarSlot !== cur) bot.setQuickBarSlot(cur)
+    return { blocked: true, stun: ai >= 0, swapped: false, cur }
+  }
   return { stun: ai >= 0, swapped: mi >= 0 && mi !== cur, cur }
 }
 

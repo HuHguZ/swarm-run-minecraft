@@ -2,9 +2,9 @@
 import { DIST_ROOT } from '../../daemon/src/paths'
 // Поле и карта: гонка — раскладка arms-layout или Колизей (сброс арены каждый раунд, насесты), точки старта бойцов и
 // падение с арены.
-import { ROOT } from './context'
+import { arenaDeathY, ROOT } from './context'
 import { LAN, LAN_NAME } from './server'
-import { leaveForRestore } from './fleet'
+import { restoreRoundRoster } from './fleet'
 import { makeStockChests } from './loot'
 import type { ArenaContext } from './context'
 import * as fs from 'fs'
@@ -77,14 +77,12 @@ export async function setupArmsMap (ctx: ArenaContext) {
     if (room) for (const c of [`setworldspawn ${X + room.spot.x} ${Y + room.spot.y} ${Z + room.spot.z}`, 'gamerule respawn_radius 0']) await rcon(i, c).catch(() => {})
     ctx.spawnAt = { x: X, y: sy, z: Z }
   }
-  // catch: при первой постройке сервер занят генерацией, а часы драйвера шлют запрос раз в секунду — RCON закрывается
-  // (21.10, слот 30: «rcon closed» ронял запуск); следующая команда переподключится.
-  for (const b of bots) await rcon(i, `gamemode spectator ${b.name}`).catch(() => {})
-  if (!LAN && COLOS_MAP && process.env.ARMS_RESET !== '0') {
-    const exited = await leaveForRestore(i, bots, rcon)
-    if (exited) log(`гонка: до восстановления Колизея вышли бойцы прошлого матча (${exited})`)
+  if (!LAN && bots.length && COLOS_MAP && process.env.ARMS_RESET !== '0') {
+    await restoreRoundRoster(i, bots, rcon, ctx.restoreArena, log, { x: X + 0.5, y: Y + 4, z: Z + 0.5 })
+  } else {
+    for (const b of bots) await rcon(i, `gamemode spectator ${b.name}`).catch(() => {})
+    await ctx.restoreArena()
   }
-  await ctx.restoreArena()
   await rcon(i, `kill @e[type=!minecraft:player,x=${X - L.half},y=${Y + L.y0},z=${Z - L.half},dx=${2 * L.half},dy=${L.y1 - L.y0},dz=${2 * L.half}]`).catch(() => {})
   // Насесты (10.10: «жемчуг высоко на Колизей — никто не достанет»): клетки, где можно стоять, на крышах ярусов и
   // вершинах (модель постройки: опора, над ней 2 воздуха; 11+ над полем). Туда бросает жемчуг тот, кому не убежать.
@@ -118,40 +116,84 @@ export function installPlaces (ctx: ArenaContext) {
 
 export function configureRescue (ctx: ArenaContext, b) {
   const { X, Y, Z, L } = ctx
-  return b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: Y + L.y0 - 3,
+  return b.c.call('rescue_config', { safe: { x: X + 0.5, y: Y, z: Z + 0.5 }, killY: arenaDeathY(ctx),
     arena: { x: X + 0.5, z: Z + 0.5, r: L.half, ellipse: L.ellipse } }).catch(() => {})
 }
 
 export function guardFalls (ctx: ArenaContext) {
   const { i, arms, bots, X, Y, Z, L, rcon } = ctx
+  if (!arms) return { rescueT: null, fallT: null }
   // Упал с Колизея — сразу смерть (12.10: «упал — лень подниматься наверх»): ниже нижнего яруса постройки на 3 бл., раз в секунду,
   // кроме зрителей; дальше обычный ход смерти (боец — в зрители, человек — набор и на свою сторону).
   // guardFalls runs after every body connected: install rescue/wind before the first fight, then refresh reconnecting bodies.
   const configure = () => { for (const b of bots) configureRescue(ctx, b) }
-  if (arms) configure()
-  const rescueT = arms ? setInterval(configure, 20000) : null
+  configure()
+  const rescueT = setInterval(configure, 20000)
   // Улетел за Колизей (элитры, заряд, жемчуг) дальше 8 бл. за границу арены — как упавший: оттуда путь в арену не строится
   // (стенд 15.10, 31ad на x 370: «точка подъёма вне арены» по кругу).
-  const fallT = arms ? setInterval(() => {
-    if (ctx.between) return
-    // EntitySelectorParser includes dy + 1: keep the upper face at the advertised killY.
-    rcon(i, `kill @a[gamemode=survival,x=${X - 200},z=${Z - 200},dx=400,dz=400,y=-64,dy=${Y + L.y0 - 3 + 64 - 1}]`).catch(() => {})
+  const killY = arenaDeathY(ctx)!
+  // EntitySelectorParser includes dy + 1: keep the upper face at the advertised killY.
+  const floorBox = `x=${X - 200},z=${Z - 200},dx=400,dz=400,y=-64,dy=${killY + 64 - 1}`
+  const edge = L.half + 8, field = `x=${X - edge},z=${Z - edge},dx=${2 * edge},dz=${2 * edge}`
+  const inFootprint = (p, half) => p.x >= X - half && p.x < X + half + 1 && p.z >= Z - half && p.z < Z + half + 1
+  const outside = new Map<string, { since: number; retryAt: number }>()
+  let edgeRound = ctx.round, edgePending = false, planePending = false, planeError = '', lastReceipt = ''
+  const fallT = setInterval(() => {
+    if (ctx.between || ctx.stop || edgeRound !== ctx.round) { outside.clear(); edgeRound = ctx.round }
+    if (ctx.between || ctx.stop) return
+    const round = ctx.round, current = () => ctx.round === round && !ctx.between && !ctx.stop
+    const below: string[] = []
+    if (!planePending) {
+      planePending = true
+      rcon(i, `kill @a[gamemode=survival,${floorBox}]`, 2000, { current, channel: 'death-plane' })
+        .then(reply => {
+          planeError = ''
+          if (!current()) return
+          const result = below.length ? `${below.join(', ')} — ${String(reply || 'пустой ответ').slice(0, 240)}` : ''
+          if (result && result !== lastReceipt) ctx.log?.(`⚖ Ниже Y${killY}, ответ судьи: ${result}`)
+          lastReceipt = result
+        }, error => {
+          if (!current()) return
+          const why = String(error?.message || error)
+          if (why !== planeError) ctx.log?.(`⚠ Не удалось проверить нижнюю границу арены: ${why}`)
+          planeError = why
+        }).finally(() => { planePending = false })
+    }
+    const now = Date.now()
     for (const b of bots) {
       const m = ctx.pos?.[b.name], p = m?.p
+      const inFloor = p && p.y >= -64 && p.y < killY && inFootprint(p, 200)
+      if (inFloor && m.hp > 0 && ctx.alive?.(b.name)) below.push(b.name)
       // Упал под Колизей (пользователь 25.10: «падают в обрыв — умирают, а можно на элитрах улететь») — с чем падал и откуда.
       if (p && ctx.alive?.(b.name) && p.y < Y + L.y0 + .5 && (b.fellAt || 0) < Date.now() - 10000) {
         b.fellAt = Date.now()
         const inv = m.inv || {}, room = (require('../../daemon/src/combat/team-wind') as typeof import('../../daemon/src/combat/team-wind')).arenaRoom({ x: X + .5, z: Z + .5, r: L.half, ellipse: L.ellipse }, p)
         ctx.log?.(`🕳☠ ${b.name}: падаю под Колизей у ${Math.round(p.x)},${p.y.toFixed(1)},${Math.round(p.z)} (до стены ${room.toFixed(1)} бл.), элитры ${inv.elytra || (m.armor?.torso === 'elytra' ? 'на теле' : 0)}, ракет ${inv.firework_rocket || 0}${m.offHand?.item === 'firework_rocket' ? ' (с левой рукой)' : ''}, жемчуг ${inv.ender_pearl || 0}, ветер ${inv.wind_charge || 0}, хп ${m.hp ?? '?'}${m.gliding ? ', лечу' : ''}${m.rescuing ? ', спасаюсь' : ''}, дело ${b.last?.m || '?'}`)
       }
-      if (!p || !ctx.alive?.(b.name) || (Math.abs(p.x - X) <= L.half + 8 && Math.abs(p.z - Z) <= L.half + 8)) { b.outSince = 0; continue }
-      // 4 с на возврат (летит на элитрах над краем — ещё вернётся); дальше — как упавший.
-      b.outSince = b.outSince || Date.now()
-      if (Date.now() - b.outSince < 4000 || (b.outKillAt || 0) > Date.now()) continue
-      b.outKillAt = Date.now() + 5000
-      ctx.log?.(`🛫 ${b.name}: за пределами Колизея (${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}) — как упавший`)
-      rcon(i, `execute unless entity @a[name=${b.name},x=${X - L.half - 8},z=${Z - L.half - 8},y=-64,dx=${2 * L.half + 16},dz=${2 * L.half + 16},dy=448] run kill ${b.name}`).catch(() => {})
+      if (!p || inFloor || !ctx.alive?.(b.name) || inFootprint(p, edge)) outside.delete(b.name)
+      else if (!outside.has(b.name)) outside.set(b.name, { since: now, retryAt: 0 })
     }
-  }, 1000) : null
+    if (!edgePending && outside.size) {
+      const due = [...outside].filter(([, trip]) => now - trip.since >= 4000 && now >= trip.retryAt)
+      if (!due.length) return
+      edgePending = true
+      // One acknowledgement per write. Keep the floor clock independent while several fliers are outside.
+      void (async () => {
+        for (const [name, trip] of due) {
+          const stillOutside = () => current() && outside.get(name) === trip && ctx.alive(name)
+          if (!stillOutside()) continue
+          trip.retryAt = Date.now() + 5000
+          // distance=0.. selects in the referee's dimension. "at @s" follows the flier's Y above build height.
+          const command = `execute as @a[name=${name},gamemode=survival,distance=0..] at @s unless entity @s[${floorBox}] unless entity @s[${field}] run kill @s`
+          try {
+            const reply = await rcon(i, command, 2000, { current: stillOutside, channel: 'arena-edge' })
+            if (stillOutside() && reply) ctx.log?.(`🛫 ${name}: за пределами Колизея, ответ судьи: ${String(reply).slice(0, 240)}`)
+          } catch (e) {
+            if (stillOutside()) ctx.log?.(`⚠ Не удалось проверить боковую границу для ${name}: ${String(e?.message || e)}`)
+          }
+        }
+      })().finally(() => { edgePending = false })
+    }
+  }, 1000)
   return { rescueT, fallT }
 }

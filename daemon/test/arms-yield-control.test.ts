@@ -70,6 +70,37 @@ function monitor(promise) {
   return state
 }
 
+for (const mode of ['hidden near', 'hidden far', 'visible near', 'emerges during swap', 'nearby mob']) test(`solo fight chooses armour from observed contact: ${mode}`, async t => {
+  const f = fixture(t), { bot, foe } = f
+  let wall = mode !== 'visible near' && mode !== 'nearby mob'
+  foe.position.x = mode === 'hidden far' ? 12.5 : 3.5
+  const params = { ...f.params, lastStand: true }
+  if (mode === 'nearby mob') {
+    delete bot.players.Foe
+    Object.assign(foe, { username: undefined, name: 'zombie', type: 'mob' })
+    params.target = 'zombie'; params.allowPlayer = false
+  }
+  const open = bot.blockAt
+  bot.blockAt = p => wall && p.floored().x === 1 && p.y >= 0 ? { name: 'stone', type: 1, position: p.floored(),
+    boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : open(p)
+  for (const [slot, name] of [[5, 'leather_helmet'], [9, 'iron_chestplate'], [10, 'iron_boots']] as const)
+    bot.inventory.slots[slot] = { name, slot, count: 1 }
+  bot.inventory.items = () => bot.inventory.slots.slice(9, 45).filter(Boolean)
+  const clicked = []
+  bot.equip = async (item, dest) => {
+    const slot = { torso: 6, feet: 8 }[dest]
+    if (!slot) return
+    clicked.push(dest)
+    bot.inventory.slots[item.slot] = null; item.slot = slot; bot.inventory.slots[slot] = item
+    if (mode === 'emerges during swap') wall = false
+  }
+  t.mock.method(pvp, 'duel', async () => ({}))
+  const result = await f.settle(combat.fight(f.session, f.ctl, params))
+  assert.ok(result.armor)
+  assert.deepEqual(clicked, mode === 'visible near' || mode === 'nearby mob' ? [] : mode === 'emerges during swap' ? ['torso'] : ['torso', 'feet'])
+  assert.equal(f.ctl.aborted, false, 'stopping an armour swap preserves ownership of the fight')
+})
+
 test('P8 yield: accepted current fight reaches the real PvP loop and preserves its report', async t => {
   const f = fixture(t)
   const running = combat.fight(f.session, f.ctl, f.params)

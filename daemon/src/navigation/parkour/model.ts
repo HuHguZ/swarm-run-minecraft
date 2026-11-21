@@ -29,12 +29,12 @@ export interface MovementBot extends CollisionWorld {
   pathfinder?: { setGoal(goal: null): void };
   emit?(event: string, value: unknown): void
   canSeeBlock?(block: CollisionBlock): boolean
-  world?: { raycast(from: Vec3, direction: Vec3, distance: number, match: (block: CollisionBlock, iterator: { intersect(shapes: CollisionBlock['shapes'], position: Point): boolean }) => boolean): unknown }
+  world?: { raycast(from: Vec3, direction: Vec3, distance: number, match: (block: CollisionBlock, iterator: { intersect(shapes: CollisionBlock['shapes'], position: Point): { pos: Vec3 } | null }) => boolean): unknown }
 }
 export interface Cancellation { aborted: boolean; onAbort?: Array<() => void> }
-export interface PlanningDiagnostics { why?: string; frames: number; profiles: number; closest?: { pos: Point; vel: Point; onGround: boolean; distance: number }; workMs?: number; reboundCeiling?: number; momentum?: { runway: Point; entry: Point; contact: Point; contactTick: number } }
-/** `maxFrames` bounds planning by native forecast ticks: deterministic at any server tick rate and machine load. `planningMs` is a wall-clock cap. */
+export interface PlanningDiagnostics { why?: string; frames: number; profiles: number; closest?: { pos: Point; vel: Point; onGround: boolean; distance: number }; workMs?: number; pausedMs?: number; reboundCeiling?: number; momentum?: { runway: Point; entry: Point; contact: Point; contactTick: number } }
 export interface MovementArena { x: number; y?: number; z: number; r: number; killY?: number; minY?: number; avoid?: ReadonlyArray<Point & { r: number }> }
+/** maxFrames bounds simulated ticks. planningMs bounds work inside search slices, with at most one budget of measured thread suspension excluded. */
 export interface JumpOptions { beam?: number; maxTicks?: number; tolerance?: number; web?: boolean; sprint?: boolean; allowWalk?: boolean; planningMs?: number; maxFrames?: number; diagnostics?: PlanningDiagnostics; bounce?: Point; chain?: Point[]; climb?: Point; maxFallDamage?: number; arena?: MovementArena }
 /** Forecast-tick budget of one routed landing (≈180 ms of the former wall budget on an idle core). */
 export const ROUTE_FRAMES = 6000
@@ -62,7 +62,7 @@ export const { PlayerState } = (require('../../tick-plugins') as typeof import('
 export const IDLE: Control = Object.freeze({ forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false })
 export const flat = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.z - b.z)
 export const controls = (extra: Partial<Control> = {}): Control => ({ ...IDLE, ...extra })
-export function withinArena(bot: CollisionWorld, pos: Point, arena?: MovementArena, from: Point = pos): boolean {
+export function withinArena(bot: Pick<CollisionWorld, 'physics' | 'entity'>, pos: Point, arena?: MovementArena, from: Point = pos): boolean {
   if (!arena) return true
   const half = dimensions(bot).half
   return [arena.x, arena.z, arena.r, ...(arena.y === undefined ? [] : [arena.y]), ...(arena.killY === undefined ? [] : [arena.killY]), ...(arena.minY === undefined ? [] : [arena.minY])].every(Number.isFinite) &&
@@ -95,6 +95,17 @@ export function worldOf(bot: MovementBot) {
 export function geometryOf(bot: MovementBot, world: ReturnType<typeof worldOf>): CollisionWorld {
   return { blockAt: p => world.getBlock(p), physics: bot.physics, game: bot.game }
 }
+export function seesPoint(bot: MovementBot, eye: Vec3, point: Vec3): boolean {
+  const delta = point.minus(eye), distance = delta.norm()
+  if (!bot.world || distance < .01) return true
+  try {
+    return !bot.world.raycast(eye, delta.normalize(), distance, (block, it) => {
+      const hit = block && it.intersect(block.shapes, block.position)
+      // Луч уже в клетке плиты, но её поверхность может лежать за точкой прицеливания.
+      return !!hit && eye.distanceTo(hit.pos) < distance - 1e-6
+    })
+  } catch { return false }
+}
 export function visibleLanding(bot: MovementBot, target: Point, geometry: CollisionWorld = bot): boolean {
   const support = supportAt(geometry, target, .04)
   if (!support) return false
@@ -102,8 +113,7 @@ export function visibleLanding(bot: MovementBot, target: Point, geometry: Collis
   // The center of a distant floor block is buried behind its near neighbour.
   // Observe the real exposed landing surface rather than the block's center.
   const from = bot.entity.position.offset(0, 1.62, 0)
-  const to = new Vec3(target.x, target.y + .015, target.z); const delta = to.minus(from); const distance = delta.norm()
-  try { return !bot.world.raycast(from, delta.normalize(), distance, (block, iterator) => !!block && iterator.intersect(block.shapes, block.position)) } catch { return false }
+  return seesPoint(bot, from, new Vec3(target.x, target.y + .015, target.z))
 }
 export function simulator(bot: MovementBot) { return (bot._ndSimOrig ?? bot.physics.simulatePlayer).bind(bot.physics) }
 const reboundApexes = new WeakMap<object, Map<string, number>>()

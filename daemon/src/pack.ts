@@ -159,7 +159,7 @@ async function makeRoom (bot, { slots = 1, forItem = null, away = null, preserve
   const plan = tossPlan(bot, { below, preserve })
   const tossed = []
   const stopped = () => ctl?.aborted || gameClock.now() >= deadline
-  if (away && !stopped()) {
+  if (away && plan.length && !stopped()) {
     const me = bot.entity.position
     const dx = me.x - away.x
     const dz = me.z - away.z

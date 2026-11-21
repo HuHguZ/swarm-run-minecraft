@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { guardFalls } from './arena/map'
 import { installSight } from './arena/watch'
+import { fighterLoop } from './arena/rounds'
+import { createSwarmDriver } from './swarm/swarm-driver'
 
 test('connected arena bodies receive the driver arena in rescue and wind configuration before the first refresh', async t => {
   const timers = new Map<number, () => void>(), configs: any[] = []
@@ -48,4 +50,27 @@ for (const [Y, y0] of [[120, -4], [90, -8]]) test(`the arena death volume ends a
 test('classic arena has no artificial death plane or rescue interval', t => {
   t.mock.method(globalThis, 'setInterval', () => { throw Error('no timers outside arms') })
   assert.deepEqual(guardFalls({ arms: false } as any), { rescueT: null, fallT: null })
+})
+
+for (const champ of [false, true]) test(`a ${champ ? 'champion' : 'swarm fighter'} below the arena resumes its turn only after its own feet return to play`, async () => {
+  const name = 'NeuroFarm31y', turns: number[] = [], pos = { [name]: { p: { x: 524, y: 62.3, z: 545 }, hp: 20 } }
+  const act = () => { turns.push(pos[name].p.y); ctx.stop = true }
+  const b = { name, champ, c: { call: async () => { act(); return {} } } }
+  const ctx: any = { arms: true, X: 600, Y: 120, Z: 600, R: 80, L: { y0: -4 }, bots: [b], pos,
+    stop: false, deadNow: new Set(), out: new Set(), busy: new Set(), alive: () => true, log() {},
+    swarmDriver: { turn: act, scout: act, enemies: () => [] }, armsHome: () => ({ x: 600, y: 120, z: 600 }),
+    sleep: async () => { pos[name].p.y = 113 } }
+  await fighterLoop(ctx, b)
+  assert.deepEqual(turns, [113])
+  assert.equal(ctx.out.size + ctx.deadNow.size, 0, 'only the server can record the death')
+})
+
+test('the swarm cannot start a queued turn below its arena plane even while the referee still counts the player', async () => {
+  const rpc = [], b: any = { name: 'NeuroFarm31y', team: 'blue', c: { call: async method => { rpc.push(method); return { status: 'failed' } } },
+    swarmFightReply: { status: 'interrupted' } }
+  const pos = { [b.name]: { p: { x: 524, y: 62.3, z: 545 }, hp: 20 } }
+  const driver = createSwarmDriver({ bots: [b], pos, alive: () => true, arena: { x: 600, z: 600, r: 80, killY: 113 }, log() {} })
+  await driver.turn(b); assert.deepEqual(rpc, [])
+  pos[b.name].p.y = 113
+  await driver.turn(b); assert.deepEqual(rpc, ['observe'])
 })

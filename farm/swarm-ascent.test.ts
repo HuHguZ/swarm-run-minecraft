@@ -3,6 +3,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { swarmClimb } from './swarm/swarm-driver/climb'
 import { ascentActive, runAscent } from './swarm/swarm-driver/ascent'
+import { swarmRetry } from './swarm/swarm-driver/retry'
+import { pearlStandGallery } from '../daemon/test/pearl-stand-fixture'
 
 function fixture({ inventory = { stone: 64, iron_pickaxe: 1 }, reply = null, ladder = false }: any = {}) {
   let time = 1000
@@ -25,6 +27,13 @@ function fixture({ inventory = { stone: 64, iron_pickaxe: 1 }, reply = null, lad
     run: () => swarmClimb(sw).climbTo(b, foe, foe.position) }
 }
 
+async function reportLaunch(f, climb, stand, roof, hops = 1) {
+  const scout = { name: 'Scout', team: 'blue', c: { call: async m => ({ detail: m === 'pearl_plan' ? { ok: true } :
+    { ok: true, hops, launchAt: stand, at: roof } }) } }
+  f.sw.pos.Scout ??= { ...f.frame, p: { ...f.frame.p } }
+  await climb.pearlUp(scout, roof)
+}
+
 test('сорванный подъём под луком в том же ходе уходит в укрытие, затем в бегство', async () => {
   const f = fixture()
   assert.equal(await f.run(), true)
@@ -36,6 +45,238 @@ test('сорванный подъём под луком в том же ходе 
   f.calls.length = 0
   await f.run()
   assert.deepEqual(f.calls.map(c => c.method), ['take_cover', 'flee'], 'тот же отказ не запускает подъём снова')
+})
+
+test('после отказа броска соседняя стойка остаётся доступна, пока путь в безопасной зоне', async () => {
+  const f = fixture({ inventory: { ender_pearl: 3 }, reply: method => method === 'pearl_up'
+    ? { detail: { ok: false, stop: 'нет броска' } } : null })
+  f.b.arrowThreat.active = false
+  f.frame.p = { x: 15, y: 64, z: 1 }
+  f.sw.arena.z = .5
+  const h = { x: 40.5, y: 92, z: .5 }
+  const bounds = { ...f.sw.arena, avoid: [{ x: 16.5, y: 64, z: .5, r: 1 }] }
+  f.sw.lootArena = () => bounds
+  f.sw.surfaceY = x => [14, 16, 12].includes(Math.floor(x)) ? 64 : null
+  const climb = swarmClimb(f.sw)
+  assert.deepEqual(await climb.pearlUp(f.b, h), { moved: true })
+  assert.deepEqual(f.calls.map(c => c.method), ['pearl_up', 'goto'])
+  const { x, y, z, arena } = f.calls[1].params
+  assert.deepEqual({ x, y, z }, { x: 12.5, y: 64, z: .5 })
+  assert.deepEqual(arena, bounds)
+  f.calls.length = 0
+  await climb.pearlUp(f.b, h)
+  assert.deepEqual(f.calls.map(c => c.method), ['pearl_up'], 'последняя безопасная стойка уже проверена')
+  f.calls.length = 0
+  await climb.pearlUp(f.b, h)
+  assert.deepEqual(f.calls, [], 'при тех же условиях расчёт не повторяется')
+  bounds.avoid.length = 0
+  await climb.pearlUp(f.b, h)
+  assert.deepEqual(f.calls.map(c => c.method), ['pearl_up', 'goto'], 'после ухода угрозы открылась стойка')
+  assert.equal(f.calls[1].params.x, 16.5)
+})
+
+test('разведчик передаёт своим ближнюю стойку, с которой сам долетел на крышу', async () => {
+  const ledge = { x: 42.5, y: 90, z: .5 }, launch = { x: 39.25, y: 70, z: 12.75 }
+  const f = fixture({ inventory: { ender_pearl: 1 } })
+  f.b.team = 'blue'; f.b.arrowThreat.active = false
+  f.frame.p = { x: 38.5, y: 70, z: 15.5 }
+  let bounds = f.sw.arena
+  f.sw.lootArena = () => bounds
+  Object.assign(f.sw, swarmRetry(f.sw))
+  const climb = swarmClimb(f.sw), calls = []
+  f.b.c.call = async (m, p) => { calls.push([m, p]); return { detail: { ok: false, why: 'no path' } } }
+  const attempt = async () => { calls.length = 0; await climb.pearlUp(f.b, ledge); return calls.map(c => c[0]) }
+  assert.deepEqual(await attempt(), ['pearl_plan'])
+  assert.deepEqual(await attempt(), [], 'нет новой информации')
+  await reportLaunch(f, climb, launch, ledge)
+  f.b.team = 'red'
+  assert.deepEqual(await attempt(), [], 'другая команда не слышит разведчика')
+  f.b.team = 'blue'
+  bounds = { ...f.sw.arena, avoid: [{ ...launch, r: 1 }] }
+  assert.deepEqual(await attempt(), ['pearl_plan'], 'опасная стойка исключена')
+  bounds = f.sw.arena
+  assert.deepEqual(await attempt(), ['pearl_plan', 'goto'], 'новый доклад открыл ранее закрытую цель')
+  const p = calls[1][1]
+  assert.deepEqual([p.x, p.y, p.z, p.exactY, p.range], [launch.x, launch.y, launch.z, true, 0])
+  assert.deepEqual(await attempt(), ['pearl_plan'], 'пеший отказ не повторяет тот же маршрут')
+  assert.deepEqual(await attempt(), [])
+  f.sw.generation++
+  Object.assign(f.sw, swarmRetry(f.sw))
+  assert.deepEqual(await attempt(), ['pearl_plan'], 'старую стойку в новом раунде никто не сообщал')
+})
+
+test('отказ одной крыши не мешает броску на соседнюю с того же места', async () => {
+  const f = fixture({ inventory: { ender_pearl: 1 }, reply: (method, p) => ({
+    detail: { ok: p.to.x === 12, at: p.to } }) })
+  f.b.arrowThreat.active = false
+  const climb = swarmClimb(f.sw)
+  await climb.pearlUp(f.b, { x: 16, y: 80, z: 0 })
+  assert.equal((await climb.pearlUp(f.b, { x: 12, y: 80, z: 0 }))?.arrived, true)
+  assert.deepEqual(f.calls.map(c => c.method), ['pearl_plan', 'pearl_plan', 'pearl_up'])
+})
+
+test('a scout guides a last-pearl carrier by a fraction of a block and the carrier checks its own arc again', async () => {
+  const roof = { x: 16.5, y: 124, z: .5 }
+  const f = fixture({ inventory: { ender_pearl: 1 } })
+  const releases: string[] = [], calls: string[] = []
+  function actor(name: string, startZ: number) {
+    const { bot, rpc, arena } = pearlStandGallery(startZ)
+    f.sw.arena = arena
+    const pearl = { name: 'ender_pearl', type: bot.registry.itemsByName.ender_pearl.id, slot: 36, count: 1 }
+    bot.heldItem = pearl; bot.inventory.items = () => pearl.count ? [pearl] : []
+    let landing
+    bot.activateItem = () => {
+      releases.push(name); pearl.count--
+      // The fixture supplies the server teleport after the native release.
+      bot.entity.position = landing.clone(); bot.entity.velocity = bot.entity.velocity.scaled(0)
+    }
+    const frame = f.sw.pos[name] = { ...f.frame, p: bot.entity.position.clone() }
+    return { name, team: 'blue', c: { call: async (m, p) => {
+      calls.push(m)
+      const timer = m === 'pearl_up' ? setInterval(() => bot.waitForTicks(1), 4) : undefined
+      try {
+        const detail = await rpc[m](p)
+        if (m === 'pearl_plan' && detail.ok) landing = detail.feet
+        frame.p = bot.entity.position.clone()
+        return { detail }
+      } finally { clearInterval(timer) }
+    } } }
+  }
+  const scout = actor('Scout', -.75), carrier = actor('Carrier', -.99)
+  Object.assign(f.sw, swarmRetry(f.sw))
+  const climb = swarmClimb(f.sw)
+  assert.equal((await climb.pearlUp(scout, roof))?.arrived, true)
+  calls.length = 0
+  assert.deepEqual(await climb.pearlUp(carrier, roof), { moved: true })
+  assert.deepEqual(calls, ['pearl_plan', 'pearl_stand'])
+  assert.ok(Math.abs(f.sw.pos.Carrier.p.z + .75) < .08)
+  assert.deepEqual(releases, ['Scout'])
+  assert.equal((await climb.pearlUp(carrier, roof))?.arrived, true)
+  assert.deepEqual(calls, ['pearl_plan', 'pearl_stand', 'pearl_plan', 'pearl_up'])
+  assert.deepEqual(releases, ['Scout', 'Carrier'])
+})
+
+test('new danger cancels the precise approach and a failed footing leaves another point in the same cell available', async () => {
+  const roof = { x: 16.5, y: 124, z: .5 }, first = { x: .5, y: 120, z: -.75 }, other = { ...first, z: -.25 }
+  let guarded = true, interrupted = true
+  const f = fixture({ inventory: { ender_pearl: 1 }, reply(m) {
+    if (m === 'pearl_plan' && guarded) bounds = { ...f.sw.arena, avoid: [{ ...first, r: 2 }] }
+    if (m === 'pearl_stand' && interrupted) return { status: 'interrupted' }
+  } })
+  let bounds = f.sw.arena
+  f.b.team = 'blue'; f.b.arrowThreat.active = false; f.frame.p = { ...first, z: -.99 }
+  f.sw.lootArena = () => bounds
+  Object.assign(f.sw, swarmRetry(f.sw))
+  const climb = swarmClimb(f.sw)
+  await reportLaunch(f, climb, first, roof)
+  await reportLaunch(f, climb, other, roof)
+  const step = async () => { f.calls.length = 0; await climb.pearlUp(f.b, roof); return f.calls.find(c => c.method === 'pearl_stand')?.params.at }
+  assert.equal(await step(), undefined, 'the latest threat arrived during the preview')
+  guarded = false; bounds = f.sw.arena
+  assert.deepEqual(await step(), first)
+  interrupted = false
+  assert.deepEqual(await step(), first, 'external interruption leaves the first footing available')
+  assert.deepEqual(await step(), other, 'a genuine movement failure only closes one precise footing')
+  assert.equal(await step(), undefined)
+  await step()
+  assert.deepEqual(f.calls, [], 'unchanged geometry stops both walking and speculative previews')
+})
+
+test('a coarse arrival one level below the scout cannot keep the carrier walking to the same block', async () => {
+  const stand = { x: 1.5, y: 120.5, z: .5 }, roof = { x: 16.5, y: 124, z: .5 }
+  const f = fixture({ inventory: { ender_pearl: 1 }, reply(m) {
+    if (m === 'goto') return { detail: { arrived: { x: 1, y: 120, z: 0 } } }
+  } })
+  f.frame.p = { ...stand, y: 120 }; f.b.team = 'blue'; f.b.arrowThreat.active = false
+  Object.assign(f.sw, swarmRetry(f.sw))
+  const climb = swarmClimb(f.sw)
+  await reportLaunch(f, climb, stand, roof)
+  for (let i = 0; i < 3; i++) await climb.pearlUp(f.b, roof)
+  assert.deepEqual(f.calls.map(c => c.method), ['pearl_plan', 'goto', 'pearl_plan'])
+})
+
+test('a now-safe launch point reopens after the nearby threat seen during the precise movement leaves', async () => {
+  const stand = { x: .5, y: 120, z: -.75 }, roof = { x: 16.5, y: 124, z: .5 }
+  const f = fixture({ inventory: { ender_pearl: 1 }, reply: m => m === 'pearl_stand' ? { detail: { ok: false, why: 'unsafe_start' } } : null })
+  let bounds = { ...f.sw.arena, avoid: [{ ...stand, x: 3, r: .5 }] }
+  f.sw.lootArena = () => bounds
+  f.frame.p = { ...stand, z: -.99 }; f.b.team = 'blue'; f.b.arrowThreat.active = false
+  Object.assign(f.sw, swarmRetry(f.sw))
+  const climb = swarmClimb(f.sw)
+  await reportLaunch(f, climb, stand, roof)
+  for (let i = 0; i < 3; i++) await climb.pearlUp(f.b, roof)
+  assert.equal(f.calls.filter(c => c.method === 'pearl_stand').length, 1)
+  bounds = f.sw.arena
+  f.calls.length = 0
+  await climb.pearlUp(f.b, roof)
+  assert.deepEqual(f.calls.map(c => c.method), ['pearl_plan', 'pearl_stand'])
+})
+
+test('the swarm keeps both proven approaches to a roof when the newest one is guarded or the nearest walk fails', async () => {
+  const roof = { x: 42.5, y: 90, z: .5 }
+  const west = { x: 11.25, y: 70, z: 12.75 }, east = { x: 36.25, y: 70, z: 12.75 }
+  const f = fixture({ inventory: { ender_pearl: 1 } })
+  f.b.team = 'blue'; f.b.arrowThreat.active = false
+  f.frame.p = { x: 16.5, y: 70, z: 14.5 }
+  let bounds = f.sw.arena
+  f.sw.lootArena = () => bounds
+  Object.assign(f.sw, swarmRetry(f.sw))
+  const climb = swarmClimb(f.sw)
+  await reportLaunch(f, climb, west, roof)
+  await reportLaunch(f, climb, east, roof)
+  await reportLaunch(f, climb, { x: 19, y: 70, z: 14 }, roof, 0)
+  const approach = async () => {
+    f.calls.length = 0
+    await climb.pearlUp(f.b, roof)
+    return f.calls.find(c => c.method === 'goto')?.params
+  }
+  bounds = { ...f.sw.arena, avoid: [{ ...east, r: 2 }] }
+  assert.equal((await approach())?.x, west.x, 'the earlier confirmed throw remains a safe approach')
+  assert.equal((await approach())?.x, undefined, 'the failed walk and the guarded alternative cannot attract a retry')
+  bounds = f.sw.arena
+  assert.equal((await approach())?.x, east.x, 'once clear, the other approach is still available')
+  assert.equal((await approach())?.x, undefined)
+  await reportLaunch(f, climb, { ...east, x: east.x + .1, y: east.y + .01 }, roof)
+  await approach()
+  assert.deepEqual(f.calls, [], 'another throw from the same cell cannot restart an exhausted approach')
+  const launch = { x: 23.5, y: 70, z: 14.5 }
+  await reportLaunch(f, climb, launch, roof)
+  assert.equal((await approach())?.x, launch.x, 'a newly proven footing reopens the approach')
+})
+
+test('к известной крыше бот подходит с ближней безопасной стороны и пробует другую стойку после отказа', async () => {
+  const f = fixture({ inventory: { ender_pearl: 1 } })
+  f.b.arrowThreat.active = false
+  f.frame.p = { x: 27.5, y: 64, z: .5 }; f.sw.arena.z = .5
+  const roof = { x: 40.5, y: 92, z: .5 }
+  f.sw.surfaceY = x => [14, 22, 30].includes(Math.floor(x)) ? 64 : null
+  const climb = swarmClimb(f.sw)
+  for (let i = 0; i < 3; i++) await climb.pearlUp(f.b, roof)
+  assert.deepEqual(f.calls.filter(c => c.method === 'goto').map(c => c.params.x), [30.5, 22.5, 14.5])
+})
+
+test('поздний ответ о дуге после смены раунда не бросает жемчуг, не запускает подход и не закрывает стойку', async () => {
+  for (const pending of ['pearl_plan', 'pearl_up', 'goto']) {
+    const f = fixture({ inventory: { ender_pearl: 1 }, reply: method => {
+      if (method === pending) { f.sw.generation++; f.b.climbing = true }
+      return { detail: method === 'pearl_plan' ? { ok: pending !== 'goto' } : { ok: false, stop: 'нет броска' } }
+    } })
+    f.b.arrowThreat.active = false
+    f.sw.surfaceY = () => 64
+    await swarmClimb(f.sw).pearlUp(f.b, { x: 40, y: 90, z: 0 })
+    assert.equal(f.calls.at(-1).method, pending)
+    assert.equal(f.b.climbing, true, 'новый ход сохраняет управление')
+    assert.ok(![...f.refusals].some(k => k.startsWith('pearlUp:') || k.startsWith('pearlSpot:A:14,')))
+  }
+})
+
+test('жемчуг к замеченному противнику на ярусе проверяет наблюдаемую посадку и границу арены', async () => {
+  const f = fixture({ inventory: { ender_pearl: 2, stone: 64 }, reply: method => method === 'pearl_to'
+    ? { status: 'done', detail: { ok: false, why: 'no_observed_pearl_trajectory' } } : null })
+  f.b.arrowThreat.active = false
+  await f.run()
+  assert.deepEqual(f.calls.map(c => c.method), ['pearl_to', 'goto'])
+  assert.deepEqual(f.calls[0].params, { to: f.foe.position, observed: true, arena: f.sw.arena, _climb: true })
 })
 
 test('дошёл без набора высоты: свежий ответ RPC тоже ведёт в укрытие', async () => {

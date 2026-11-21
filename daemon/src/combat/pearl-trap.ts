@@ -10,13 +10,16 @@
 import { Vec3 } from 'vec3'
 import * as gameClock from '../game-clock'
 import { pearlLanding } from './pearl-watch'
+import { pearlDeadline } from './pearl-clock'
+import * as pick from '../pick'
 
 const REACH = 4.2, RUN = 5.6 // бл., бл./с (спринт)
+export const TRAP_HAND_MS = 250 // прицел, пакет, тик сервера
 
 /** What fits before arrival: [kind, ms] options in preference order (lava, web, dig), given items and dig time. */
 export function trapOptions(left: number, runMs: number, kit: { lava: boolean; web: boolean; digMs: number; digOk: boolean }) {
   const out: [string, number][] = []
-  const slack = 250 // руки: прицел, пакет, тик сервера
+  const slack = TRAP_HAND_MS
   if (kit.lava && runMs + 300 + slack <= left) out.push(['lava', runMs + 300])
   if (kit.web && runMs + 300 + slack <= left) out.push(['web', runMs + 300])
   if (kit.digOk && runMs + kit.digMs + slack <= left) out.push(['dig', runMs + kit.digMs])
@@ -25,7 +28,9 @@ export function trapOptions(left: number, runMs: number, kit: { lava: boolean; w
 
 export async function pearlTrap(session: any, ctl: any, p: any = {}) {
   const bot = session.require()
-  const arrival = gameClock.now() + Number(p.eta) * 50, left = () => arrival - gameClock.now()
+  const deadline = pearlDeadline(session, bot, ctl, p)
+  if (!deadline || deadline.left() <= 0) return { ok: false, why: 'поздно к жемчугу' }
+  const left = deadline.left, work = { get aborted() { return left() <= 0 } }
   if (!p.block) return { ok: false, why: 'нет блока удара' }
   const hitBlock = new Vec3(p.block.x, p.block.y, p.block.z)
   // Клетка появления — где жемчуг был в начале тика удара (p.at): под углом это соседняя с блоком удара (сцена: лава над блоком
@@ -48,24 +53,27 @@ export async function pearlTrap(session: any, ctl: any, p: any = {}) {
   const opts = trapOptions(left(), runMs(), kit)
   if (!opts.length) return { ok: false, why: `не успеваю: до появления ${Math.round(left())} мс, до блока ${eye().distanceTo(target).toFixed(1)} бл., лава ${kit.lava}, паутина ${kit.web}, копка ${Number.isFinite(kit.digMs) ? Math.round(kit.digMs) + ' мс' : 'нет'}` }
   const kind = opts[0][0]
-  bot._ndCombo = { kind: 'pearl_trap', until: gameClock.now() + left() + 1500 }
+  const combo = { kind: 'pearl_trap', until: gameClock.now() + left() + 1500 }
+  bot._ndCombo = combo
   try {
     // Подбег до руки — прямо (поле открытое), как засада.
     while (!ctl.aborted && eye().distanceTo(target) > REACH && left() > 0) {
       const me = bot.entity.position
       await bot.look(Math.atan2(-(target.x - me.x), -(target.z - me.z)), 0, true).catch(() => {})
+      if (work.aborted) break
       bot.setControlState('forward', true); bot.setControlState('sprint', true)
       bot.setControlState('jump', !!bot.entity.isCollidedHorizontally)
       await new Promise(r => gameClock.setTimeout(r, 50))
     }
     bot.clearControlStates()
+    if (work.aborted || !trapOptions(left(), 0, kit).some(([option]) => option === kind)) return { ok: false, why: 'поздно к жемчугу', kind }
     if (eye().distanceTo(target) > REACH + .3) return { ok: false, why: `не добежал: ${eye().distanceTo(target).toFixed(1)} бл.`, kind }
     if (kind === 'lava') {
-      const r = await (require('../cast/bucket') as typeof import('../cast/bucket')).pour(bot, 'lava_bucket', cell.offset(0, -1, 0))
+      const r = await (require('../cast/bucket') as typeof import('../cast/bucket')).pour(bot, 'lava_bucket', cell.offset(0, -1, 0), undefined, work)
       return { ok: r.ok, kind, why: r.why, lateMs: -Math.round(left()) }
     }
     if (kind === 'web') {
-      const r = await (require('../build') as typeof import('../build')).placeBlockAt(bot, cell, { item: 'cobweb', timeoutMs: Math.max(300, left()) })
+      const r = await (require('../build') as typeof import('../build')).placeBlockAt(bot, cell, { item: 'cobweb', timeoutMs: left(), honest: true, visibleOccupantsOnly: true, ctl: work })
       return { ok: !!r.ok, kind, why: r.reason, lateMs: -Math.round(left()) }
     }
     // Подкоп: блок удара, потом под ним; каждый — лучшим инструментом.
@@ -74,14 +82,18 @@ export async function pearlTrap(session: any, ctl: any, p: any = {}) {
       if (ctl.aborted || left() < 100) break
       const b = bot.blockAt(at, false)
       if (!b || b.boundingBox !== 'block') continue
-      const r = await tools.breakFast(bot, at, { maxMs: Math.max(200, left()) })
+      if (!pick.blockSeen(bot, at, { range: 4.5, seeThrough: null })) break
+      const digMs = tools.bestFor(bot, b).ms
+      const r = await tools.breakFast(bot, at, { maxMs: left(), ctl: { get aborted() { return work.aborted || left() < digMs } } })
       if (!r.ok) break
       dug++
     }
     // Куда теперь упадёт: живой жемчуг, мир уже со вскрытым.
-    const e = p.id != null ? bot.entities[p.id] : null
-    const land = e?.position && e.velocity ? pearlLanding({ blockAt: (q: Vec3) => bot.blockAt(q, false) }, e.position, e.velocity) : null
+    const e = p.id != null ? bot.entities?.[p.id] : null
+    const delta = e?.name === 'ender_pearl' && e.position && e.position.minus(pick.eyeOf(bot)), length = delta && delta.norm()
+    const visible = !!delta && length <= 64 && (!length || !pick.blockOnRay(bot, pick.eyeOf(bot), delta.scaled(1 / length), length))
+    const land = visible && e.velocity ? pearlLanding({ blockAt: (q: Vec3) => bot.blockAt(q, false) }, e.position, e.velocity) : null
     const drop = land ? +(p.at.y - land.at.y).toFixed(1) : null
-    return { ok: dug > 0, kind, dug, lateMs: -Math.round(left()), newAt: land ? { x: +land.at.x.toFixed(2), y: +land.at.y.toFixed(2), z: +land.at.z.toFixed(2) } : null, drop, lost: !!e && !land }
-  } finally { delete bot._ndCombo; bot.clearControlStates() }
+    return { ok: dug > 0, kind, dug, lateMs: -Math.round(left()), newAt: land ? { x: +land.at.x.toFixed(2), y: +land.at.y.toFixed(2), z: +land.at.z.toFixed(2) } : null, drop, lost: visible && !land }
+  } finally { if (bot._ndCombo === combo) { delete bot._ndCombo; bot.clearControlStates() } }
 }

@@ -3,7 +3,7 @@
 import type { SwarmMember, SwarmTask } from './types'
 import { type SwarmBoard, liveMembers, pvpState, knownEnemies } from './board'
 import { doctrines } from './common'
-import { keepDoctrine } from './doctrine'
+import { CONTACT_FRESH_MS, doctrineFocus, keepDoctrine } from './doctrine'
 import { type PvpOptions, type PvpPlan, pvpFrame } from './plan-frame'
 import { pvpAssault } from './plan-assault'
 import { pvpFlee, pvpRecover } from './plan-flee'
@@ -17,13 +17,15 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: PvpO
   board.setMembers(members)
   const team = liveMembers(board, members).sort((a, b) => a.id.localeCompare(b.id))
   const state = pvpState(board)
-  const enemies = knownEnemies(board)
+  const reports = board.enemies(board.now() - CONTACT_FRESH_MS)
+  const enemies = knownEnemies(board, reports)
 
   // Натиск — против людей (соло) и против сильного меньшинства (race.ts strongFew): мир решает, как играть.
   ineffectiveDamage(state, team, enemies)
   const strong = strongFew(state, team, enemies, options.foesLeft, options.killsBy)
   const aggressive = !!options.aggressive || strong
-  const doctrine = options.doctrine ?? keepDoctrine(board, team, aggressive)
+  const focus = doctrineFocus(team, enemies, board.now(), reports)
+  const doctrine = options.doctrine ?? keepDoctrine(board, team, aggressive, focus)
   if (!doctrines.includes(doctrine)) throw new Error('Invalid doctrine')
   const plan = new Map<string, SwarmTask>()
   if (!team.length) {
@@ -36,7 +38,7 @@ export function planPvp(board: SwarmBoard, members: SwarmMember[], options: PvpO
     return plan
   }
   // Строй и группы; штурм; ва-банк и бегство; раненые и лекари.
-  const S = pvpFrame({ board, options, team, state, enemies, aggressive, doctrine, plan } as PvpPlan)
+  const S = pvpFrame({ board, options, team, state, enemies, aggressive, doctrine, plan } as PvpPlan, focus)
   pvpAssault(S)
   pvpFlee(S)
   pvpRecover(S)

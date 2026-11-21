@@ -5,6 +5,66 @@ import { worldOf, native } from './parkour-fixture'
 import { smartFlee, insideArena } from '../src/flee'
 import * as clock from '../src/game-clock'
 
+// Run the same unarmed defender and visible sword carrier over a lower tier, or inside a sealed cell.
+async function knockedDefender (airborne: boolean) {
+  const cells: Array<[number, number, number, string]> = []
+  for (let x = -14; x <= 14; x++) for (let z = -14; z <= 14; z++) cells.push([x, 0, z, 'bedrock'])
+  if (airborne) cells.push([-2, 3, 0, 'stone'])
+  else {
+    for (let x = -2; x <= 1; x++) for (let z = -1; z <= 1; z++) {
+      if (z === 0 && (x === -1 || x === 0)) continue
+      for (let y = 1; y <= 4; y++) cells.push([x, y, z, 'bedrock'])
+    }
+  }
+  const { bot, world } = worldOf(cells)
+  const start = new Vec3(.5, airborne ? 6 : 1, .5)
+  Object.assign(bot.entity, { id: 1, name: 'player', type: 'player', height: 1.8, metadata: [],
+    position: start.clone(), onGround: !airborne, velocity: new Vec3(airborne ? .12 : 0, airborne ? .12 : 0, 0) })
+  const sword = { name: 'netherite_sword' }
+  const foe = { id: 2, name: 'player', type: 'player', username: 'Champion', height: 1.8, width: .6, metadata: [],
+    position: airborne ? new Vec3(-1.5, 4, .5) : new Vec3(-.5, 1, .5), velocity: new Vec3(0, 0, 0),
+    heldItem: sword, equipment: [sword, null, null, null, { name: 'netherite_chestplate' }] }
+  bot.entities = { 2: foe }
+  bot.players = { Champion: { entity: foe } }
+  const controls = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
+  bot.setControlState = (key, value) => { controls[key] = value }
+  bot.look = async (yaw, pitch) => { bot.entity.yaw = yaw; bot.entity.pitch = pitch }
+  const ctl = { aborted: false, onAbort: [] }, game = clock.activate(new clock.GameClock({ manual: true }))
+  const arena = { x: .5, y: 1, z: .5, r: 20, killY: -1 }
+  let result, landing: Vec3 | undefined
+  const done = smartFlee({ bot }, ctl, { arena, foes: [foe.id], timeoutMs: 2000 }).then(value => { result = value })
+  try {
+    for (let tick = 0; tick < 45 && !result; tick++) {
+      await new Promise<void>(resolve => setImmediate(resolve))
+      if (result) break
+      const state = new native.PlayerState(bot, controls)
+      bot.physics.simulatePlayer(state, world); state.apply(bot)
+      if (bot.entity.onGround && !landing) landing = bot.entity.position.clone()
+      game.advanceTicks(1); bot.emit('physicsTick')
+    }
+    return { result, landing, position: bot.entity.position.clone() }
+  } finally {
+    ctl.aborted = true
+    for (const abort of ctl.onAbort) abort()
+    game.advanceTicks(200); await done
+    game.dispose(); clock.activate(null)
+  }
+}
+
+test('a knockback above an open lower tier does not turn retreat into a last stand in midair', async () => {
+  const { result, landing, position } = await knockedDefender(true)
+  assert.deepEqual(result?.from, ['Champion'])
+  assert.ok(!result.cornered, 'an airborne miss in the walking planner does not establish a physical corner')
+  assert.equal(landing?.y, 1)
+  assert.ok(position.distanceTo(landing) > 2, 'the defender lands and continues to run from the sword carrier')
+})
+
+test('a grounded defender with no exit can still report a real physical corner', async () => {
+  const { result } = await knockedDefender(false)
+  assert.deepEqual(result?.from, ['Champion'])
+  assert.equal(result.cornered, true)
+})
+
 test('an invisible remembered enclosure gets a bounded physical escape instead of immediately declaring safety', async () => {
   const cells: Array<[number, number, number, string]> = []
   for (let x = 608; x <= 649; x++) for (let z = 556; z <= 597; z++) cells.push([x, 119, z, 'stone'])

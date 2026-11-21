@@ -43,6 +43,22 @@ function secretBody(raw: any) {
   raw.equipment[5] = { name: 'netherite_helmet', componentMap: new Map([['enchantments', {}]]) }
 }
 
+test('one swarm sighting reuses the visible cover across equipment slots, then observes its removal immediately', () => {
+  const f = scene(), read = f.bot.blockAt
+  let reads = 0
+  f.bot.blockAt = p => { reads++; return read(p) }
+  f.raw.equipment = names.map(name => ({ name }))
+  const covered = swarmSightings(f.bot)[0]
+  assert.deepEqual(covered.equipment.armor, ['iron_helmet'])
+  assert.equal(covered.equipment.weapon, null)
+  const coverReads = reads
+  f.setWall(false)
+  const open = swarmSightings(f.bot)[0]
+  assert.deepEqual(open.equipment.armor, names.slice(2))
+  assert.equal(open.equipment.weapon, 'iron_sword')
+  assert.ok(coverReads < 100, `one slab took ${coverReads} block reads (open: ${reads - coverReads})`)
+})
+
 test('head-only vision never reads covered weapon/armor slots or HP getters, including shared swarm observations', () => {
   const f = scene(); secretBody(f.raw)
   assert.equal(gearPartVisible(f.bot, f.raw, 5), true)

@@ -12,6 +12,7 @@ import { countOf, findItem, findPotion } from './potions'
 import { EDIBLE, EYE, FAR, FIX, HIT_REACH, TICK_MS } from './rules'
 import { NEXT, type DuelCtx, type TurnFrame } from './turn'
 import { isAlly } from '../combat/ally-safety'
+import { acquireTarget } from './search'
 
 // Жив ли я и цель, убил ли, обход моба, следующая цель, конец по времени.
 export async function targetTurn (ctx: DuelCtx, turn: TurnFrame) {
@@ -53,12 +54,24 @@ export async function targetTurn (ctx: DuelCtx, turn: TurnFrame) {
     if (assess.inSight(bot, ctx.entity)) ctx.seenAt = now
     else if (now - ctx.seenAt > 6000) { dead.add(ctx.entity.id); ctx.unseen = true }
   }
+  // An entity leaving render range does not end a duel while the named player is still online.
+  if (ctx.prof.player && !clearArea && !ctx.killed && ctx.entity.isValid === false && now < deadline && bot.players?.[ctx.entity.username]) {
+    if (ctx.pathing) { ctx.pathTo(false); ctx.pathing = false }
+    clear()
+    const interrupted = () => ctx.killed || ctx.selfDied || !bot.players[ctx.entity.username] || isAlly(bot, ctx.entity) ||
+      edges.falling(bot) || !!otherAttacker()
+    const { entity, search } = await acquireTarget(bot, ctx.ctl, vision, ctx.entity, { deadline, arena: ctx.arena, interrupted })
+    if (search.legs) st.search = { legs: (st.search?.legs || 0) + search.legs, seconds: (st.search?.seconds || 0) + search.seconds }
+    if (ctx.ctl.aborted || ctx.killed || ctx.selfDied || bot.health <= 0 || isAlly(bot, ctx.entity) || edges.falling(bot)) return NEXT
+    const next = otherAttacker()?.e || entity
+    if (next) { retarget(next); await holdWeapon(); return NEXT }
+  }
   const lostIt = !ctx.killed && (!ctx.entity.isValid || ctx.unseen)
   if (ctx.unseen && !clearArea) return { end: finish({ lost: `${ctx.label} не видно — за стеной` }) }
   ctx.unseen = false
   if (ctx.killed || (lostIt && clearArea)) {
     dead.add(ctx.entity.id)
-    if (ctx.killed) kills.push(ctx.label)
+    if (ctx.killed && !ctx.prof.player) kills.push(ctx.label)
     let next = null
     if (clearArea) {
       try { const p = assess.plan(bot, { radius: clearArea, exclude: dead }); next = p && p.first ? p.first.e : null } catch {}
@@ -66,8 +79,8 @@ export async function targetTurn (ctx: DuelCtx, turn: TurnFrame) {
     }
     if (!next && ctx.prof.player) { const o = otherAttacker(); if (o) { next = o.e; used(`переключился на ${o.e.username}`) } }
     if (!next) {
-      if (hm && ctx.killed && ctx.prof.player) hm.victory()
-      return { end: finish(kills.length ? { killed: kills.length > 1 ? kills.join(', ') : kills[0] } : { lost: `${ctx.label} пропал из виду` }) }
+      if (hm && ctx.prof.player && kills.includes(ctx.label)) hm.victory()
+      return { end: finish(kills.length ? { killed: kills.join(', ') } : ctx.killed ? { targetDead: ctx.label } : { lost: `${ctx.label} пропал из виду` }) }
     }
     retarget(next)
     await holdWeapon()

@@ -151,6 +151,7 @@ test('an occupied upper reserve prices its return while a ready assigned ally co
     const options: any = { foesLeft: mode === 'finishing' ? 1 : 12, quorum: 2, doctrine: 'hunt', lootZones: [upper],
       travelSeconds: (m, from, to) => { if (mode === 'late' && m.id === ally.id) return 200; const price = moves.travelCost({ name: m.id }, to, from); return Math.min(price.walk, price.fly) } }
     f.board.setMembers(f.members)
+    for (const source of foe.sources) f.board.observe(source, 1000, { id: foe.id, visible: true, position: foe.position, equipment: foe.equipment })
     const S: any = pvpFrame({ board: f.board, options, team: f.members, state: pvpState(f.board), enemies: [foe], aggressive: false, doctrine: 'hunt', plan } as any)
     pvpTargets(S); pvpSectors(S)
     Object.assign(S, { hunting: () => false, gatherers: new Set(), diggers: new Map(), ladderers: new Map(), campers: new Map() })

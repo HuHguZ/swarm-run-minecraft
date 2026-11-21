@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import pick = require('../src/pick')
-import { seesPlayer, gearPartVisible } from '../src/pvp/last-seen'
+import { createLastSeen, seesPlayer, gearPartVisible, observePlayerGear } from '../src/pvp/last-seen'
+import { observationMethods } from '../src/rpc/observation'
 
 function scene () {
   const bot: any = Object.assign(new EventEmitter(), {
@@ -46,7 +47,9 @@ test('sight shortcut preserves exact rays around partial blocks, cube edges, pos
     for (const material of ['stone', 'glass']) for (const z of [-.31, 0, .5, 1, 1.31]) for (const gliding of [false, true]) {
       f.wall(shape, material); f.raw.position.z = z; f.raw.elytraFlying = gliding
       assert.equal(seesPlayer(f.bot, f.raw), reference(null), `body ${shape}/${material}/${z}/${gliding}`)
-      for (let i = 0; i < 6; i++) assert.equal(gearPartVisible(f.bot, f.raw, i), reference(i), `gear ${i}/${shape}/${material}/${z}/${gliding}`)
+      const expected = Array.from({length: 6}, (_, i) => reference(i))
+      assert.deepEqual(observePlayerGear(f.bot, f.raw).visible, expected, `all gear ${shape}/${material}/${z}/${gliding}`)
+      for (let i = 0; i < 6; i++) assert.equal(gearPartVisible(f.bot, f.raw, i), expected[i], `gear ${i}/${shape}/${material}/${z}/${gliding}`)
     }
   }
 })
@@ -56,4 +59,47 @@ test('unavailable terrain never becomes an observed occluder or reveals a body',
   const original = pick.blockOnRay, ray = t.mock.method(pick, 'blockOnRay', (...args: Parameters<typeof pick.blockOnRay>) => original(...args))
   assert.equal(gearPartVisible(f.bot, f.raw, 4), false)
   assert.equal(ray.mock.callCount(), 18, 'unknown geometry still takes the exact conservative path')
+})
+
+test('strands reveal the opponent and their hands while the crosshair still picks the web', () => {
+  const f = scene()
+  f.wall([0, 0, 0, 1, 1, 1], 'cobweb')
+  f.raw.equipment = [{ name: 'bow' }]
+  assert.equal(seesPlayer(f.bot, f.raw), true)
+  assert.equal(observePlayerGear(f.bot, f.raw).equipment[0]?.name, 'bow')
+  assert.equal(pick.canHit(f.bot, f.raw, { range: 5 }), false)
+  assert.ok(pick.blockAim(f.bot, new Vec3(3, 1, 0), { range: 5, seeThrough: null }))
+})
+
+test('a swarm status records occlusion for 20 enemies with one direct sight query each', async t => {
+  const f = scene(), { bot } = f
+  const opponents = Array.from({ length: 20 }, (_, i) => ({ ...f.raw, id: i + 2, username: `Foe${i}`,
+    position: f.raw.position.offset(i, 0, 0), equipment: [{ name: 'iron_sword' }] }))
+  bot.entities = Object.fromEntries(opponents.map(e => [e.id, e]))
+  bot.physics = {}
+  const sight = createLastSeen(bot)
+  const rpc = observationMethods({ session: { bot, immediate: read => read() }, cfg: {} } as any)
+  const poll = () => rpc.status({ swarm: true, swarmAllies: [] })
+  try {
+    f.wall([0, 0, 0, 1, 1, 1], 'glass')
+    const view = sight.observe(opponents[0])
+    assert.equal(view.equipment[0].name, 'iron_sword')
+    f.wall([0, 0, 0, 1, 1, 1])
+    opponents[0].equipment[0] = { name: 'mace' }
+    const ray = t.mock.method(pick, 'blockOnRay')
+    assert.ok(opponents.every(e => !seesPlayer(bot, e)))
+    const directRays = ray.mock.callCount()
+    const { sightings } = await poll()
+    const reportRays = ray.mock.callCount() - directRays
+    assert.equal(sightings.length, opponents.length)
+    assert.ok(sightings.every(s => s.nametag && !s.visible && !s.equipment.weapon))
+    assert.equal(view._ndVisible, false)
+    assert.equal(view.equipment[0].name, 'iron_sword')
+    assert.equal(reportRays, directRays, 'the radio already witnessed occlusion in this synchronous query')
+    f.wall([0, 0, 0, 1, 1, 1], 'glass')
+    bot.emit('physicsTick')
+    assert.equal(view._ndVisible, true)
+    assert.equal(view.equipment[0].name, 'mace')
+    assert.equal((await poll()).sightings[0].equipment.weapon, 'mace')
+  } finally { bot.emit('end'); sight.close() }
 })

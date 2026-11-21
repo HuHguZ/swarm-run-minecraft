@@ -59,35 +59,37 @@ function attachClients (wss, { session, gameClock, methods, log, state }: { sess
     // zero gameplay ticks, and campaigns must see stalls and rate changes.
     const clockTimer = gameClock.wall.setInterval(sendClock, 250)
     let bidId = 0
-    let pendingBid: { id: number; reply: (granted: boolean) => void } | undefined
+    let pendingBid: { id: number; reply: (granted?: boolean) => void } | undefined
     const pushWind = (packet: object) => {
       if (ws.readyState !== 1) return false
       try { ws.send(JSON.stringify(packet)); return true } catch { return false }
     }
+    const canBid = () => !pendingBid && ws.readyState === 1 && (ws.bufferedAmount || 0) < 65536
     const radio: WindRadio = (bid, signal) => new Promise(resolve => {
-      if (signal?.aborted || pendingBid || ws.readyState !== 1 || (ws.bufferedAmount || 0) >= 65536) return resolve(undefined)
+      if (signal?.aborted || !canBid()) return resolve(undefined)
       const id = ++bidId
       const finish: WindBidFinish = shot => { pushWind({ ...bid, type: 'wind_bid_done', id, shot }) }
-      const reply = (granted: boolean) => {
+      const reply = (granted?: boolean) => {
         if (pendingBid?.id !== id) return
         gameClock.wall.clearTimeout(timer)
         signal?.removeEventListener('abort', cancel)
         pendingBid = undefined
-        if (!granted) finish()
+        if (granted === undefined) finish() // local cancellation may race a grant already in transit
         resolve(granted ? finish : undefined)
       }
-      const cancel = () => reply(false)
+      const cancel = () => reply()
       const timer = gameClock.wall.setTimeout(cancel, WIND_BID_REPLY_TICKS * 50)
       pendingBid = { id, reply }
       signal?.addEventListener('abort', cancel, { once: true })
-      if (!pushWind({ ...bid, type: 'wind_bid', id })) reply(false)
+      if (!pushWind({ ...bid, type: 'wind_bid', id })) cancel()
     })
+    radio.canBid = canBid
     ws.on('close', () => {
       gameClock.wall.clearInterval(clockTimer)
       gameClock.changes.off('bound', bindClock)
       bindClock(null)
       if (session._windRadio === radio) delete session._windRadio
-      pendingBid?.reply(false)
+      pendingBid?.reply()
     })
     ws.on('close', () => { clients--; session.brainAttached = clients > 0 })
     log('brain attached')
@@ -96,7 +98,7 @@ function attachClients (wss, { session, gameClock, methods, log, state }: { sess
       try { msg = JSON.parse(raw.toString()) } catch { return }
       if (msg?.type === 'wind_radio') { session._windRadio ??= radio; return }
       if (msg?.type === 'wind_bid_answer') {
-        if (pendingBid && pendingBid.id === msg.id) pendingBid.reply(msg.granted === true)
+        if (pendingBid && pendingBid.id === msg.id) pendingBid.reply(typeof msg.granted === 'boolean' ? msg.granted : undefined)
         return
       }
       const { id, method, params } = msg
@@ -110,7 +112,8 @@ function attachClients (wss, { session, gameClock, methods, log, state }: { sess
         if (result && typeof result === 'object' && !result.state) result.clock = gameClock.snapshot()
         ws.send(JSON.stringify({ id, ok: true, result }))
       } catch (err) {
-        ws.send(JSON.stringify({ id, ok: false, error: String((err && err.message) || err) }))
+        ws.send(JSON.stringify({ id, ok: false, error: String((err && err.message) || err),
+          ...(typeof err?.code === 'string' && { code: err.code }), ...(err?.notStarted === true && { notStarted: true }) }))
       }
     })
     ws.on('close', () => log('brain detached'))

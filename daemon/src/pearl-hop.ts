@@ -43,9 +43,41 @@ function solidB (b) { return !!b && b.boundingBox === 'block' }
 function airB (b) { return !!b && b.boundingBox === 'empty' && !AIRISH_BAD.test(b.name) }
 
 // world(x, y, z) -> блок или null (чанк не прогружен)
-function worldOf (bot) {
+function worldOf (bot, minBlockY = -Infinity, observed = false) {
+  if (observed) {
+    const { observedCollision } = require('./pvp/search') as typeof import('./pvp/search')
+    const { worldOf: cached } = require('./edges/forecast') as typeof import('./edges/forecast')
+    const raw = cached(bot)
+    const read = p => p.y < minBlockY ? null : raw.getBlock(p)
+    const blocks = bot._ndFastBlocks
+    const shape = blocks?.def ? p => blocks.def(p.x, p.y, p.z) : read
+    const sight = cached(observedCollision(bot, read, true))
+    const world = (x, y, z) => y < minBlockY ? null : sight.getBlock(new Vec3(x, y, z))
+    // Use the packet palette only to enumerate possible surfaces. A hidden roof must neither
+    // become a landing nor exclude a lower ledge visible through the side of the column.
+    const surfaces = new Map<string, number | null>()
+    world.surfaceAt = (x, z, yTop, yBot) => {
+      const key = [x, z, yTop, yBot].join(',')
+      if (surfaces.has(key)) return surfaces.get(key)
+      let air = 0
+      let feet: number | null = null
+      const p = new Vec3(x, yTop, z)
+      for (; p.y >= Math.max(yBot, minBlockY); p.y--) {
+        const b = shape(p)
+        if (air >= 2 && solidB(b) && solidB(world(x, p.y, z)) && airB(world(x, p.y + 1, z)) && airB(world(x, p.y + 2, z))) {
+          feet = p.y + 1
+          break
+        }
+        air = airB(b) ? air + 1 : 0
+      }
+      surfaces.set(key, feet)
+      return feet
+    }
+    return world
+  }
   const cache = new Map()
   return (x, y, z) => {
+    if (y < minBlockY) return null
     const k = x + ',' + y + ',' + z
     if (cache.has(k)) return cache.get(k)
     let b = null
@@ -118,7 +150,7 @@ function settle (world, tp, { floorOk = null, avoid = null }: any = {}) {
   if (floorOk && !floorOk(floor)) return { ok: false, why: `пол ${floor.name} не годится` }
   const feet = new Vec3(cx + 0.5, fy, cz + 0.5)
   for (let dy = 0; dy <= 1; dy++) if (!airB(world(cx, fy + dy, cz))) return { ok: false, why: 'нет 2 воздуха' }
-  if (avoid && avoid(feet)) return { ok: false, why: 'запретная зона' }
+  if (avoid && (avoid(feet) || avoid(new Vec3(tp.x, fy, tp.z)))) return { ok: false, why: 'запретная зона' }
   // Край: соседи на 1 и 2 блока — есть ли под ними земля (не глубже 4 от ног).
   let edge = 0; let edge1 = 0
   for (const r of [1, 2]) {
@@ -134,6 +166,7 @@ function settle (world, tp, { floorOk = null, avoid = null }: any = {}) {
 
 // Высота над точкой: верх твёрдого с 2 воздуха над ним (первый сверху). -> y ног или null.
 function surfaceAt (world, x, z, yTop, yBot) {
+  if (world.surfaceAt) return world.surfaceAt(x, z, yTop, yBot)
   let airRun = 0
   for (let y = yTop; y >= yBot; y--) {
     const b = world(x, y, z)
@@ -211,6 +244,23 @@ function spreadVel (yaw, pitch, ex, ey, ez, extra = null) {
   return { x: (d.x + ex) * K.speed + (extra ? extra.x : 0), y: (d.y + ey) * K.speed + (extra ? extra.y : 0), z: (d.z + ez) * K.speed + (extra ? extra.z : 0) }
 }
 
+function scatterRisk (world, from, yaw, pitch, moved, { spread = 0.7, floorOk, avoid, edgeOk }: any, obstacles = null, arcs = null) {
+  const a = SPREAD * spread, px = Math.cos(yaw), pz = -Math.sin(yaw)
+  for (const [ex, ey, ez] of [[a * px, 0, a * pz], [-a * px, 0, -a * pz], [0, a, 0], [0, -a, 0]]) {
+    const arc = simulate(world, from, spreadVel(yaw, pitch, ex, ey, ez, moved))
+    if (!arc.tp) return arc.void ? 'разброс: пустота' : 'разброс: ?'
+    if (obstacles?.length) {
+      const hit = pathClear(arc, obstacles)
+      if (hit) return 'разброс: на пути ' + hit.name
+    }
+    const landing = settle(world, arc.tp, { floorOk, avoid })
+    if (!landing.ok) return 'разброс: ' + landing.why
+    if (landing.edge1 && !edgeOk) return 'разброс: край'
+    arcs?.push(arc)
+  }
+  return null
+}
+
 function segDist (a, b, q) {
   const vx = b.x - a.x; const vy = b.y - a.y; const vz = b.z - a.z
   const l2 = vx * vx + vy * vy + vz * vz
@@ -218,22 +268,24 @@ function segDist (a, b, q) {
   t = Math.max(0, Math.min(1, t))
   return Math.hypot(a.x + vx * t - q.x, a.y + vy * t - q.y, a.z + vz * t - q.z)
 }
-function pathClear (path, obstacles) {
+function pathClear (flight, obstacles) {
+  const path = flight.path
   for (const o of obstacles) {
     for (let i = 1; i < path.length; i++) if (segDist(path[i - 1], path[i], o.pos) < o.r) return o
+    if (flight.at && segDist(path[path.length - 1], flight.at, o.pos) < o.r) return o
   }
   return null
 }
 
 // Препятствия-сущности: кристалл (взорвётся от удара), дракон (коробка 16 × 8), эндермен.
-function obstaclesOf (bot) {
+const pearlObstacles = new Map([['end_crystal', [1, 3]], ['ender_dragon', [2, 14]], ['enderman', [1.5, 1.6]]])
+function obstaclesOf (bot, observed = false) {
   const out = []
-  for (const e of ((Object.values(bot.entities || {}) as any[]) as any)) {
+  for (const e of Object.values<any>(bot.entities || {})) {
     if (!e || !e.position || e === bot.entity) continue
-    const n = e.name || ''
-    if (n === 'end_crystal') out.push({ pos: e.position.offset(0, 1, 0), r: 3, name: n })
-    else if (n === 'ender_dragon') out.push({ pos: e.position.offset(0, 2, 0), r: 14, name: n })
-    else if (n === 'enderman') out.push({ pos: e.position.offset(0, 1.5, 0), r: 1.6, name: n })
+    const shape = pearlObstacles.get(e.name)
+    if (!shape || observed && !(require('./pvp/last-seen') as typeof import('./pvp/last-seen')).seesPlayer(bot, e)) continue
+    out.push({ pos: e.position.offset(0, shape[0], 0), r: shape[1], name: e.name })
   }
   return out
 }
@@ -293,7 +345,7 @@ function worth ({ walkSec, hopSec, restSec = 0, dmg, hp, hpMin = 12, hpSec = 1.5
 //   floorOk(block), avoid(feet) — фильтры места; obstacles — сущности [{pos, r}]; spread — доля разброса;
 //   jump — можно бросать в прыжке: 'stand' (на месте) или 'run' (ещё и с разбегом к посадке); с места, если
 //   долетает, иначе прыжок на месте, иначе с разбега (throw.jumpRoom: пол, потолок, не край). plan.jump — как бросать.
-function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 2, -4, 4, -7, 7, -10, 10], floorOk = null, avoid = null, obstacles = [], spread = 0.7, yTop = 30, yBot = 16, maxTries = 80, lookOk = null, jump = null, edgeOk = false }: any = {}) {
+function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 2, -4, 4, -7, 7, -10, 10], floorOk = null, avoid = null, obstacles = [], spread = 0.7, yTop = 30, yBot = 16, maxTries = 80, lookOk = null, jump = null, edgeOk = false, observed = false, finishRadius = null, orIntermediate = false }: any = {}) {
   maxR = maxR ?? (jump === 'run' ? 95 : 70)
   const stand = { from: { x: feet.x, y: feet.y + EYE, z: feet.z }, moved: null }
   const kinds = [null, ...(jump ? ['stand'] : []), ...(jump === 'run' ? ['run'] : [])]
@@ -307,25 +359,38 @@ function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 
   const ux = gx / gd; const uz = gz / gd
   const cands = []
   const seen = new Set()
+  const add = (x, z) => {
+    const key = x + ',' + z
+    if (seen.has(key)) return
+    seen.add(key)
+    const sy = surfaceAt(world, x, z, Math.floor(feet.y) + yTop, Math.floor(feet.y) - yBot)
+    if (sy == null) return
+    const rem = Math.hypot(goal.x - (x + 0.5), goal.z - (z + 0.5), observed ? goal.y - sy : 0)
+    cands.push({ x, z, y: sy, rem })
+  }
   for (let r = Math.min(maxR, gd + 3); r >= minR; r -= 1) {
     for (const lat of lateral) {
       const x = Math.floor(feet.x + ux * r - uz * lat)
       const z = Math.floor(feet.z + uz * r + ux * lat)
-      const key = x + ',' + z
-      if (seen.has(key)) continue
-      seen.add(key)
-      const sy = surfaceAt(world, x, z, Math.floor(feet.y) + yTop, Math.floor(feet.y) - yBot)
-      if (sy == null) continue
-      const rem = Math.hypot(goal.x - (x + 0.5), goal.z - (z + 0.5))
-      cands.push({ x, z, y: sy, rem })
+      add(x, z)
+    }
+  }
+  // The two-block lane spacing can skip the one visible rim cell with safe scatter.
+  if (observed) for (let dx = -2; dx <= 2; dx++) {
+    for (let dz = -2; dz <= 2; dz++) {
+      const x = Math.floor(goal.x) + dx, z = Math.floor(goal.z) + dz
+      const distance = Math.hypot(x + .5 - feet.x, z + .5 - feet.z)
+      if (distance >= minR && distance <= maxR) add(x, z)
     }
   }
   cands.sort((a, b) => a.rem - b.rem)
   const why = {}
   const no = (k) => { why[k] = (why[k] || 0) + 1 }
-  let tries = 0
+  let tries = 0, intermediate = null
   for (const c of cands) {
     if (tries >= maxTries) break
+    // Sorted by 3-D distance in observed terrain. Even the allowed aiming error no longer reaches the goal.
+    if (intermediate && c.rem > finishRadius + Math.hypot(2.5, 2)) break
     const pre = settle(world, { x: c.x + 0.5, y: c.y + 0.3, z: c.z + 0.5 }, { floorOk, avoid })
     if (!pre.ok) { no(pre.why); continue }
     // edgeOk — узкое место у цели годится (арена 12.10: стрелок на гребне стены Колизея — посадка рядом всегда у края).
@@ -358,22 +423,15 @@ function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 
       const st = settle(world, sim.tp, { floorOk, avoid })
       if (!st.ok) { no('посадка: ' + st.why); continue }
       if (Math.hypot(st.feet.x - (c.x + 0.5), st.feet.z - (c.z + 0.5)) > 2.5 || Math.abs(st.feet.y - c.y) > 2) { no('врезается раньше'); continue }
+      const near = finishRadius == null || st.feet.distanceTo(goal) <= finishRadius
+      if (!near && (!orIntermediate || intermediate)) { no('посадка не у цели'); continue }
       if (st.edge1 && !edgeOk) { no('край пустоты'); continue }
-      const hit = pathClear(sim.path, obstacles)
+      const hit = pathClear(sim, obstacles)
       if (hit) { no('на пути ' + hit.name); continue }
       // Разброс: ±spread от предельного отклонения по поперечной и вертикальной оси.
-      const a = SPREAD * spread
-      const px = Math.cos(yaw); const pz = -Math.sin(yaw)
-      let bad = null
-      for (const [ex, ey, ez] of [[a * px, 0, a * pz], [-a * px, 0, -a * pz], [0, a, 0], [0, -a, 0]]) {
-        const s2 = simulate(world, from, spreadVel(yaw, pitch, ex, ey, ez, L.moved))
-        if (!s2.tp) { bad = s2.void ? 'разброс: пустота' : 'разброс: ?'; break }
-        const t2 = settle(world, s2.tp, { floorOk, avoid })
-        if (!t2.ok) { bad = 'разброс: ' + t2.why; break }
-        if (t2.edge1 && !edgeOk) { bad = 'разброс: край'; break }
-      }
+      const bad = scatterRisk(world, from, yaw, pitch, L.moved, { spread, floorOk, avoid, edgeOk }, observed ? obstacles : undefined)
       if (bad) { no(bad); continue }
-      return {
+      const result = {
         plan: {
           yaw, pitch, ticks: sim.ticks, cell: { x: c.x, y: c.y, z: c.z }, tp: sim.tp, feet: st.feet, fall: st.fall, edge: st.edge,
           aim: new Vec3(c.x + 0.5, c.y + 0.05, c.z + 0.5), rem: Math.hypot(goal.x - st.feet.x, goal.z - st.feet.z), arc: pitch === ps[0] ? 'low' : 'high',
@@ -382,9 +440,16 @@ function planHop (world, feet, goal, { maxR = null, minR = 6, lateral = [0, -2, 
         tries,
         why
       }
+      if (near) return result
+      intermediate = result.plan
     }
   }
-  return { plan: null, tries, why, cands: cands.length }
+  return { plan: intermediate, tries, why, cands: cands.length }
+}
+
+// Предпросмотр и исполнитель проверяют один радиус посадки и столько же кандидатов.
+function planAscentHop (world, feet, goal, opts) {
+  return planHop(world, feet, goal, { ...opts, maxTries: opts.maxTries ?? 40, finishRadius: (opts.arriveR ?? 4) + 1 })
 }
 
 // mustArrive — цель, куда пешком не дойти (крыша, венец: оценка «пешком» по прямой там врёт): годится только цепочка, что
@@ -396,14 +461,20 @@ function planRoute (world, feet, goal, opts: any = {}) {
   let best: any = { plans: [], seconds: mustArrive ? Infinity : walkEstimate(world, feet, goal, { speed }).sec, damage: 0 }
   let frontier: any[] = [{ feet, plans: [], cost: 0 }]
   const seen = new Map()
+  const ascent = opts.observed && mustArrive
+  let firstSearch
   // ponytail: four-hop beam bounds geometry work; increase only with measured navigation failures.
   for (let depth = 0; depth < limit; depth++) {
     const next = []
     for (const node of frontier) {
       const alternatives = []
-      for (let branch = 0; branch < 3; branch++) {
-        const result = planHop(world, node.feet, goal, { ...opts, maxTries: 24, avoid: p =>
-          !!opts.avoid?.(p) || alternatives.some(past => past.distanceTo(p) < 4) || node.plans.some(plan => plan.feet.distanceTo(p) < 3) })
+      const finalStep = depth + 1 === limit
+      for (let branch = 0; branch < (ascent && finalStep ? 1 : 3); branch++) {
+        const avoid = p => !!opts.avoid?.(p) || alternatives.some(past => past.distanceTo(p) < 4) || node.plans.some(plan => plan.feet.distanceTo(p) < 3)
+        const result = ascent && branch === 0 && (depth === 0 || finalStep)
+          ? planAscentHop(world, node.feet, goal, { ...opts, avoid, orIntermediate: !finalStep })
+          : planHop(world, node.feet, goal, { ...opts, maxTries: 24, avoid })
+        if (ascent && !firstSearch) firstSearch = result
         if (!result.plan) break
         const plan = result.plan
         alternatives.push(plan.feet)
@@ -413,12 +484,19 @@ function planRoute (world, feet, goal, opts: any = {}) {
         seen.set(key, cost)
         const plans = [...node.plans, plan]
         const seconds = cost + walkEstimate(world, plan.feet, goal, { speed }).sec
-        if (seconds < best.seconds && (!mustArrive || arrived(plan.feet))) best = { plans, seconds, damage: plans.length * dmg }
+        if (seconds < best.seconds && (!mustArrive || arrived(plan.feet))) {
+          best = { plans, seconds, damage: plans.length * dmg }
+          if (ascent && depth === 0) return best
+        }
         next.push({ feet: plan.feet, plans, cost, seconds })
       }
     }
     frontier = next.sort((a, b) => a.seconds - b.seconds).slice(0, 3)
     if (!frontier.length) break
+  }
+  if (ascent && !best.plans.length) {
+    best.diagnostic = firstSearch?.plan ? { why: { 'нет цепочки до цели': 1 } } :
+      firstSearch ?? { why: { 'не хватает жемчуга или здоровья': 1 }, cands: 0 }
   }
   return best
 }
@@ -498,21 +576,20 @@ async function hopTo (bot, goal, opts: any = {}) {
   const t0 = gameClock.now()
   for (let k = 0; k < maxHops; k++) {
     if (opts.abortIf && opts.abortIf()) { out.stop = 'прервано'; break }
-    const world = worldOf(bot)
+    const world = worldOf(bot, opts.minBlockY, opts.observed)
     const me = bot.entity.position.clone()
     const rem = Math.hypot(goal.x - me.x, goal.y - me.y, goal.z - me.z)
-    if (rem <= arriveR) { out.stop = 'у цели'; break }
+    if (rem <= arriveR + (opts.observed && opts.mustArrive ? 1 : 0)) { out.stop = 'у цели'; break }
     const pearls = countPearls(bot)
     if (pearls - reserve <= 0) { out.stop = `жемчуга ${pearls} (резерв ${reserve})`; break }
-    const obstacles = typeof opts.obstacles === 'function' ? opts.obstacles() : (opts.obstacles || obstaclesOf(bot))
+    const obstacles = typeof opts.obstacles === 'function' ? opts.obstacles() : (opts.obstacles || obstaclesOf(bot, opts.observed))
     const tPlan = gameClock.wall.now()
     const dmg = pearlDamage(bot)
     const route = planRoute(world, me, goal, { ...opts, obstacles, pearls, reserve, hp: bot.health, hpMin, dmg, hpSec, maxHops: maxHops - k })
     const ph = { plan: route.plans[0], why: 'no safe worthwhile chain', tries: route.plans.length }
     const planMs = gameClock.wall.now() - tPlan
     if (!ph.plan) {
-      // Почему нет: разбор одного броска (причины отказа по кандидатам) — цепочка своих причин не хранит.
-      const one = planHop(world, me, goal, { ...opts, obstacles })
+      const one = route.diagnostic ?? planHop(world, me, goal, { ...opts, obstacles })
       out.stop = 'нет броска'; out.why = one.why
       log(`нет броска к ${xyz(goal)} (${Math.round(rem)} бл.): ${JSON.stringify(one.why)}, кандидатов ${one.cands ?? '?'} за ${planMs} мс`)
       break
@@ -524,25 +601,58 @@ async function hopTo (bot, goal, opts: any = {}) {
     const rest = { sec: route.seconds - hopSeconds(pl.ticks) - dmg * hpSec }
     let w = worth({ walkSec: walk.sec, hopSec: hopSeconds(pl.ticks), restSec: rest.sec, dmg, hp: bot.health, hpMin, hpSec, minGain, pearls, reserve })
     if (!w.go && w.lowHp) {
-      const hp = await recover(bot, hpMin + dmg, opts.recoverMs ?? 5000)
+      const hp = await recover(bot, hpMin + dmg, opts.recoverMs ?? 5000, opts.abortIf)
       w = worth({ walkSec: walk.sec, hopSec: hopSeconds(pl.ticks), restSec: rest.sec, dmg, hp, hpMin, hpSec, minGain, pearls, reserve })
     }
+    if (opts.abortIf?.()) { out.stop = 'прервано'; break }
     log(`бросок ${k + 1}: до цели ${Math.round(rem)} бл., пешком ~${walk.sec} с (пустоты ${walk.voids}); жемчугом ${r1(hopSeconds(pl.ticks))} с + остаток ${rest.sec} с + хп ${dmg}×${hpSec}; ` +
       `выигрыш ${w.gain ?? '-'} с; посадка ${xyz(pl.feet)} (${pl.arc}, ${pl.ticks} т, край ${pl.edge}${pl.jump ? ', прыжок ' + pl.jump : ''}), план ${planMs} мс, проб ${ph.tries}${w.go ? '' : ' — НЕТ: ' + w.why}`)
     if (!w.go) { out.stop = w.why; break }
     // Бросок: прицел пересчитывается на тике броска (своё движение) и проверяется по блокам.
     try { for (const c of ['forward', 'back', 'left', 'right', 'sprint', 'jump', 'sneak']) bot.setControlState(c, false) } catch {}
-    for (let i = 0; i < 10 && !(bot.entity.onGround && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 0.01); i++) await sleep(50)
+    for (let i = 0; i < 10 && !opts.abortIf?.() && !(bot.entity.onGround && Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z) < 0.01); i++) await sleep(50)
+    if (opts.abortIf?.()) { out.stop = 'прервано'; break }
     const pearl = bot.inventory.items().find(i => i.name === 'ender_pearl')
     const hp0 = bot.health
     const from0 = bot.entity.position.clone()
     let picked = null
+    const releaseArcs = []
+    let aimed = null, terrainChanged = false
+    const dirty = () => { terrainChanged = true }
+    const terrainEvents = opts.observed ? ['blockUpdate', 'chunkColumnUnload'] : []
+    for (const event of terrainEvents) bot.on?.(event, dirty)
+    const validate = (ctx, yaw, pitch) => {
+      const extra = { x: ctx.moved.x, y: ctx.airborne ? ctx.moved.y : 0, z: ctx.moved.z }
+      const launchWorld = opts.avoid || opts.observed ? worldOf(bot, opts.minBlockY, opts.observed) : world
+      const sim = simulate(launchWorld, ctx.from, velOf(yaw, pitch, extra))
+      const st = sim.tp ? settle(launchWorld, sim.tp, { floorOk: opts.floorOk, avoid: opts.avoid }) : null
+      if (!st?.ok || (st.edge1 && !opts.edgeOk) || Math.hypot(st.feet.x - pl.feet.x, st.feet.z - pl.feet.z) > 2.5 ||
+          opts.mustArrive && pl.feet.distanceTo(goal) <= arriveR + 1 && st.feet.distanceTo(goal) > arriveR + 1) return false
+      if (opts.observed) { releaseArcs.length = 0; releaseArcs.push(sim) }
+      if ((opts.avoid || opts.observed) && scatterRisk(launchWorld, ctx.from, yaw, pitch, extra, opts, undefined, opts.observed ? releaseArcs : null)) return false
+      if (opts.lookOk && !opts.lookOk(yaw, pitch)) return false
+      picked = { tp: sim.tp, feet: st.feet, ticks: sim.ticks }
+      return true
+    }
     const r = await throwMod.throwAt(bot, null, {
       item: pearl,
+      onAim: () => {
+        if (opts.abortIf?.()) return false
+        if (!opts.observed) return true
+        if (!aimed) return false
+        const current = throwMod.pearlReleaseFrame(bot, aimed)
+        if (!current) return false
+        const shifted = current.from.distanceTo(aimed.from) >= 1e-7 || current.airborne !== aimed.airborne ||
+          current.moved.x !== aimed.moved.x || current.moved.y !== aimed.moved.y || current.moved.z !== aimed.moved.z
+        if ((terrainChanged || shifted || !bot.on) && !validate(current, aimed.yaw, aimed.pitch)) return false
+        const visible = obstaclesOf(bot, true)
+        return !visible.length || releaseArcs.every(arc => !pathClear(arc, visible))
+      },
       // Прыжок по плану: на месте или с разбегом к посадке; бросок — на тике отрыва (throw.jumpChoice).
       jump: !!pl.jump, sprint: pl.jump === 'run', runYaw: pl.yaw,
       // Прицел — на тике броска из точной точки вылета, та же дуга, что в плане; своё движение — в скорость.
       pick: (ctx) => {
+        if (opts.abortIf?.()) return null
         const tx = pl.aim.x - ctx.from.x; const tz = pl.aim.z - ctx.from.z
         const yaw = Math.atan2(-tx, -tz)
         const extra = { x: ctx.moved.x, y: ctx.airborne ? ctx.moved.y : 0, z: ctx.moved.z }
@@ -550,14 +660,13 @@ async function hopTo (bot, goal, opts: any = {}) {
         const ps = pitchesFor(td, pl.aim.y - ctx.from.y, { h: (extra.x * tx + extra.z * tz) / td, vy: extra.y })
         const pitch = pl.arc === 'high' ? ps[1] : ps[0]
         if (pitch == null) return null
-        const sim = simulate(world, ctx.from, velOf(yaw, pitch, extra))
-        const st = sim.tp ? settle(world, sim.tp, { floorOk: opts.floorOk, avoid: opts.avoid }) : null
-        if (!st || !st.ok || (st.edge1 && !opts.edgeOk) || Math.hypot(st.feet.x - pl.feet.x, st.feet.z - pl.feet.z) > 2.5) return null
-        if (opts.lookOk && !opts.lookOk(yaw, pitch)) return null
-        picked = { tp: sim.tp, feet: st.feet, ticks: sim.ticks }
-        return { yaw, pitch, ticks: sim.ticks, at: pl.aim }
+        if (!validate(ctx, yaw, pitch)) return null
+        aimed = { ...ctx, yaw, pitch }; terrainChanged = false
+        return { yaw, pitch, ticks: picked.ticks, at: pl.aim }
       }
-    }).catch(e => ({ thrown: false, why: e.message }))
+    }).catch(e => ({ thrown: false, why: e.message })).finally(() => {
+      for (const event of terrainEvents) bot.removeListener?.(event, dirty)
+    })
     if (!r || !r.thrown) { out.stop = `не бросил: ${r && r.why}`; log(out.stop); break }
     out.pearls++
     const ticks = (picked && picked.ticks) || pl.ticks
@@ -567,17 +676,19 @@ async function hopTo (bot, goal, opts: any = {}) {
     const lost = Math.max(0, r1(hp0 - bot.health))
     const want = (picked && picked.feet) || pl.feet
     const err = Math.hypot(p1.x - want.x, p1.z - want.z)
-    const world2 = worldOf(bot)
+    const world2 = worldOf(bot, opts.minBlockY, opts.observed)
     const ground = groundBelow(world2, p1.x, p1.y + 0.1, p1.z, 40)
     const step = { k: k + 1, from: xyz(from0), want: xyz(want), got: xyz(p1), err: r1(err), dy: r1(p1.y - want.y), hp: `${r1(hp0)}→${r1(bot.health)}`, lost, ticks, moved }
     out.steps.push(step)
     out.hpLost = r1(out.hpLost + lost)
     if (!moved) { out.misses++; out.stop = 'не перенесло'; log(`бросок ${k + 1}: не перенесло (жемчуг в ${xyz(want)}?)`); break }
     out.hops++
+    out.launchAt = { x: from0.x, y: from0.y, z: from0.z }
     out.saved = r1(out.saved + (w.gain || 0))
     const miss = err > 4 || ground == null
     log(`бросок ${k + 1}: перенесло в ${xyz(p1)} (план ${xyz(want)}, ошибка ${r1(err)} бл.), хп ${step.hp} (−${lost})${miss ? ' — ПРОМАХ' : ''}`)
     if (miss) { out.misses++; if (ground == null) { out.stop = 'в пустоту'; break } }
+    if (opts.abortIf?.()) { out.stop = 'прервано'; break }
     const sf = await stepFromEdge(bot, world2, opts)
     if (sf.moved) log(`у края (пустота с ${sf.voids} сторон) — шаг от пустоты`)
   }
@@ -585,4 +696,4 @@ async function hopTo (bot, goal, opts: any = {}) {
   return out
 }
 
-export { recover, hopWorth, worldOf, reach, simulate, settle, surfaceAt, groundBelow, pitchesFor, planHop, planRoute, worth, walkEstimate, hopSeconds, pearlDamage, obstaclesOf, hopTo, stepFromEdge, velOf, PEARL_DMG, SPREAD, EYE }
+export { recover, hopWorth, worldOf, reach, simulate, settle, surfaceAt, groundBelow, pitchesFor, planHop, planAscentHop, planRoute, worth, walkEstimate, hopSeconds, pearlDamage, obstaclesOf, hopTo, stepFromEdge, velOf, PEARL_DMG, SPREAD, EYE }

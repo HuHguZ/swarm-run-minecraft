@@ -122,6 +122,15 @@ for (const fy of [0.6, 0.88, 0.35, 0.97, 0.12]) {
   for (const [fx, fz] of [[0.5, 0.5], [0.12, 0.5], [0.88, 0.5], [0.5, 0.12], [0.5, 0.88], [0.12, 0.12], [0.88, 0.88], [0.12, 0.88], [0.88, 0.12]]) FRACS.push([fx, fy, fz])
 }
 
+function pickBox (bot, e) {
+  const box = hitboxOf(bot, e)
+  // Снаряд с тегом redirectable_projectile (шар гаста, заряды ветра) прицел берёт по раздутой рамке: Projectile.getPickRadius = 1.0
+  // при isPickable (1.21.11; GameRenderer.pick → ProjectileUtil.getEntityHitResult, рамка inflate(pickRadius)).
+  const g = PICK_RADIUS[e.name] || 0
+  if (g) Object.assign(box, { lo: { x: box.lo.x - g, y: box.lo.y - g, z: box.lo.z - g }, hi: { x: box.hi.x + g, y: box.hi.y + g, z: box.hi.z + g }, w: box.w + 2 * g, h: box.h + 2 * g })
+  return box
+}
+
 function eyeOf (bot) {
   return bot.entity.position.offset(0, eyeHeight(bot), 0)
 }
@@ -131,12 +140,7 @@ function eyeOf (bot) {
 // blocked — чем закрыт прямой луч к груди (блок и клетка), для «сломать».
 function aim (bot, e, { eye = null, range = RANGE }: any = {}) {
   if (!bot.entity || !e || !e.position) return null
-  const o = eye || eyeOf(bot)
-  const box = hitboxOf(bot, e)
-  // Снаряд с тегом redirectable_projectile (шар гаста, заряды ветра) прицел берёт по раздутой рамке: Projectile.getPickRadius = 1.0
-  // при isPickable (1.21.11; GameRenderer.pick → ProjectileUtil.getEntityHitResult, рамка inflate(pickRadius)).
-  const g = PICK_RADIUS[e.name] || 0
-  if (g) Object.assign(box, { lo: { x: box.lo.x - g, y: box.lo.y - g, z: box.lo.z - g }, hi: { x: box.hi.x + g, y: box.hi.y + g, z: box.hi.z + g }, w: box.w + 2 * g, h: box.h + 2 * g })
+  const o = eye || eyeOf(bot), box = pickBox(bot, e)
   let first = null
   for (const [fx, fy, fz] of FRACS) {
     const tp = new Vec3(box.lo.x + box.w * fx, box.lo.y + box.h * fy, box.lo.z + box.w * fz)
@@ -163,7 +167,8 @@ const LIVING = /^(player|zombie|husk|drowned|skeleton|stray|creeper|spider|cave_
 function faceAim (bot, refPos, face, { eye = null, range = 4.5, avoid = null }: any = {}) {
   if (!bot.entity) return null
   const o = eye || eyeOf(bot)
-  const others = avoid || (Object.values(bot.entities || {}) as any[]).filter((e : any) => e && e !== bot.entity && e.position && LIVING.test(e.name || e.type || '') && e.position.distanceTo(o) < 6)
+  const others = avoid || (Object.values(bot.entities || {}) as any[]).filter((e : any) => e && e !== bot.entity && e.position &&
+    LIVING.test(e.name || e.type || '') && bot.players?.[e.username]?.gamemode !== 3 && e.position.distanceTo(o) < 6)
   const axis = face.x ? 'x' : face.y ? 'y' : 'z'
   const us = axis === 'x' ? ['y', 'z'] : axis === 'y' ? ['x', 'z'] : ['x', 'y']
   const i = 'xyz'.indexOf(axis), u = 'xyz'.indexOf(us[0]), v = 'xyz'.indexOf(us[1])
@@ -245,6 +250,29 @@ function canHit (bot, e, opts: any = {}) {
   return !!(a && a.point)
 }
 
+// A direct packet names its victim. A player's click first meets any visible teammate closer on that ray.
+function allyBeforeTarget (bot, target, a) {
+  if (!bot._ndSwarmAllies?.length && !bot.teamMap?.[bot.username || bot.entity.username]?.team) return false
+  const eye = eyeOf(bot), { yaw, pitch } = bot.entity, box = pickBox(bot, target)
+  const gaze = Number.isFinite(yaw) && Number.isFinite(pitch) ?
+    new Vec3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)) : null
+  const targetDepth = gaze && rayBox(eye, gaze, box.lo, box.hi, RANGE)
+  // Some callers queue their attack before their look is flushed. Check its intended ray too when the gaze misses.
+  const intended = targetDepth == null && a.dist > 0 ? a.point.minus(eye).normalize() : null
+  for (const ally of Object.values<any>(bot.entities || {})) {
+    const pos = ally?.position
+    if (!ally?.username || ally === bot.entity || !pos || ally.isValid === false || ally._ndVisible === false ||
+        bot.players?.[ally.username]?.gamemode === 3 || Math.hypot(pos.x - eye.x, pos.z - eye.z) > RANGE + .5 ||
+        pos.y > eye.y + RANGE || pos.y + 1.8 < eye.y - RANGE ||
+        !(require('./combat/ally-safety') as typeof import('./combat/ally-safety')).isAlly(bot, ally)) continue
+    const b = hitboxOf(bot, ally)
+    const depth = gaze && rayBox(eye, gaze, b.lo, b.hi, targetDepth ?? RANGE)
+    if ((depth != null || intended && rayBox(eye, intended, b.lo, b.hi, a.dist) != null) &&
+        (require('./pvp/last-seen') as typeof import('./pvp/last-seen')).seesPlayer(bot, ally)) return true
+  }
+  return false
+}
+
 // Сторож: удар по сущности, которую клиент игры не взял бы в прицел, не
 // уходит (как guardCrossbow в ranged.js). Всё, что не сущность с позицией
 // (части дракона, фаерболы без рамки), — как было.
@@ -254,14 +282,14 @@ function install (bot) {
   const raw = bot.attack
   bot._ndBlockedHits = 0
   bot.attack = function (target, swing) {
-    if ((require('./combat/ally-safety') as typeof import('./combat/ally-safety')).isAlly(bot, target)) { bot._ndBlockedHits++; return }
+    if ((require('./combat/ally-safety') as typeof import('./combat/ally-safety')).isAlly(bot, target)) { bot._ndBlockedHits++; return false }
     try {
       if (process.env.ND_PICK_GUARD !== '0' && target && target.position && typeof target.id === 'number' && target.width != null && bot.entity) {
         const a = aim(bot, target)
-        if (!a || !a.point) {
+        if (!a || !a.point || allyBeforeTarget(bot, target, a)) {
           bot._ndBlockedHits++
           if (process.env.ND_DEBUG_PICK) console.log('[pick] удар не отправлен — не в прицеле:', target.username || target.name, a && a.blocked ? `${a.blocked.block && a.blocked.block.name} ${a.blocked.pos}` : 'дальше 3')
-          return
+          return false
         }
       }
     } catch {}

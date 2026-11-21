@@ -36,18 +36,20 @@ function worldOf (bot) {
   // Один синхронный прогноз многократно читает те же клетки. Храним полный
   // Block (shapes/properties тоже), только до конца синхронного run/pushPlan:
   // следующий вызов заново увидит обновления мира и незагруженные колонки.
-  const xs = new Map()
+  const cells = new Map()
+  let originX = 0, originZ = 0
   const absent = Symbol('undefined Block')
   return { getBlock (p) {
     const x = Math.floor(p.x); const z = Math.floor(p.z); const y = Math.floor(p.y)
-    let zs = xs.get(x)
-    if (zs === undefined) xs.set(x, (zs = new Map()))
-    let ys = zs.get(z)
-    if (ys === undefined) zs.set(z, (ys = new Map()))
-    let block = ys.get(y)
+    if (!cells.size) { originX = x; originZ = z }
+    const dx = x - originX + 512, dz = z - originZ + 512
+    // Три смещения по 10 бит дают точный числовой ключ для соседних клеток.
+    const key = dx >= 0 && dx < 1024 && dz >= 0 && dz < 1024 && y >= -512 && y < 512
+      ? (dx * 1024 + dz) * 1024 + y + 512 : `${x},${y},${z}`
+    let block = cells.get(key)
     if (block === undefined) {
       block = bot.blockAt(p, false)
-      ys.set(y, block === undefined ? absent : block)
+      cells.set(key, block === undefined ? absent : block)
     }
     return block === absent ? undefined : block
   } }

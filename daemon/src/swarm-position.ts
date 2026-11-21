@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3'
 import { observedCollision } from './pvp/search'
 import { bodyClear, dimensions, HAZARD, shapeBoxes, standPositions, supportAt, type Point, type CollisionWorld } from './navigation/geometry'
 import { landingDamage } from './navigation/landing'
-import { windInside, windLanding, type WindArena } from './combat/team-wind'
+import { teamWindPlan, windInside, windLanding, windLandingOccupied, windStanceOverlaps, type WindArena, type WindReport } from './combat/team-wind'
 import * as pick from './pick'
 import * as edges from './edges'
 import * as projectile from './throw'
@@ -20,6 +20,9 @@ export interface SwarmPositionQuery {
   limit?: number
   methods?: PositionMethod[]
   reserve?: Record<string, number>
+  windPartner?: WindReport
+  windLandings?: Point[]
+  currentBuildOnly?: boolean
   // Потолок времени ответа по стене (мс): арена реального времени не ждёт полного обзора. Без него — полный обзор.
   budgetMs?: number
 }
@@ -34,11 +37,21 @@ const key = (p: Point) => `${p.x},${p.y},${p.z}`
 const finite = (p: Point) => p && ['x', 'y', 'z'].every(k => Number.isFinite(p[k]))
 const UNKNOWN = { name: 'unknown', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
 
-function observedWorld(bot: any): CollisionWorld {
-  const owner = bot._ndPositionOwner || bot, sight = observedCollision(owner), cache = new Map<string, any>()
+export function observedWorld(bot: any): CollisionWorld {
+  const owner = bot._ndPositionOwner || bot, cache = new Map<string, any>()
+  let raw: ReturnType<typeof edges.worldOf> | undefined
+  const sight = observedCollision(owner, p => {
+    // Adjacent sight rays cross the same cells. Reopen the raw view after every cooperative yield.
+    if (!raw) {
+      raw = edges.worldOf(owner)
+      queueMicrotask(() => { raw = undefined })
+    }
+    return raw.getBlock(p)
+  }, true)
   let memory = terrainMemory.get(owner)
   if (!memory) {
     memory = new Map(); terrainMemory.set(owner, memory)
+    owner.on?.('respawn', () => memory!.clear())
     owner.on?.('blockUpdate', (old, updated) => { const at = updated?.position || old?.position; if (at) memory!.delete(key(at)) })
   }
   return { physics: sight.physics, game: sight.game, blockAt(p: Vec3) {
@@ -194,14 +207,21 @@ export async function pearlToPosition(session: any, ctl: any, { to, arena }: { t
   bot.on('forcedMove', onTeleport)
   try {
     const shot = await projectile.throwAt(bot, target, { item, jump: false, sprint: false, pick(context) {
-      // Replan from the real movement packet at release; no externally supplied plan is executed.
+      // Pick the look from this physics frame; the movement packet can still change the throw.
       const world = observedWorld(bot)
       if (!bodyClear(world, target) || !pearlFootprint(world, target, arena) || !projectile.canSurvivePearl(bot)) return null
       const release = pearlTrial(bot, world, target, arena, context, proposal.best)
       if (release) { chosen = release; return chosen }
       const search = pearlSearch(bot, world, target, arena, context)
       for (;;) { const result = search.next(); if (result.done) { chosen = result.value; return chosen } }
-    }, onAim: () => !ctl.aborted })
+    }, onAim(frame) {
+      if (ctl.aborted || teleported) return false
+      const release = projectile.pearlReleaseFrame(bot, frame)
+      if (!release) return false
+      // Recheck only the selected arc against personal terrain at use_item.
+      chosen = pearlTrial(bot, observedWorld(bot), target, arena, release, frame.sol)
+      return !!chosen
+    } })
     if (!shot.thrown || !chosen) return { ok: false, why: 'pearl_not_released', shot }
     return await new Promise<any>(resolve => {
       let tick = 0, settled = 0, done = false
@@ -244,13 +264,36 @@ function material(bot: any, counts: Record<string, number>, reserve: Record<stri
 }
 
 /** Pure query over this body's observed terrain. Every access option is priced and physically checked. */
-export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promise<{ candidates: SwarmPosition[]; observed: true }> {
+function currentBuildPosition(bot: any, query: SwarmPositionQuery): SwarmPosition | undefined {
+  if (query.purpose !== 'build' || !bot.entity.onGround || bot.entity.isInWater || bot.entity.isInLava) return
+  const at = bot.entity.position.clone(), enemies = visibleEnemies(bot, query.enemies)
+  if (!enemies.some(e => at.y - e.position.y >= 3)) return
+  const world = observedCollision(bot), floor = supportAt(world, at, .03), { half } = dimensions(world)
+  if (!floor || !windInside(at, query.arena, half) || !bodyClear(world, at)) return
+  // Each corner has personally visible footing within a normal step, including the lower half of a stair.
+  const step = bot.physics?.stepHeight ?? .6
+  for (const x of [at.x - half, at.x + half]) for (const z of [at.z - half, at.z + half]) {
+    let supported = false
+    for (let y = Math.floor(at.y); y >= Math.floor(at.y - step) - 1 && !supported; y--) {
+      const p = new Vec3(Math.floor(x), y, Math.floor(z)), block = world.blockAt(p)
+      if (!block || HAZARD.test(block.name)) return
+      supported = shapeBoxes(block, p).some(s => x >= s.minX && x <= s.maxX && z >= s.minZ && z <= s.maxZ &&
+        s.maxY <= at.y + 1e-7 && s.maxY >= at.y - step)
+    }
+    if (!supported) return
+  }
+  return { at: point(at), support: floor.block.name, methods: [], ...tactical(world, at, at, enemies, 'build', false) }
+}
+
+export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promise<{ candidates: SwarmPosition[]; observed: true; currentBuild?: SwarmPosition; windOccupied?: boolean }> {
   const empty = { candidates: [] as SwarmPosition[], observed: true as const }
   if (!bot?.entity || !query || !['ranged', 'recover', 'escape', 'build'].includes(query.purpose) || !finite(bot.entity.position)) return empty
-  if (query.enemies && (!Array.isArray(query.enemies) || query.enemies.length > 128 || query.enemies.some(e => !e || !['string', 'number'].includes(typeof e.id))) ||
+  if (query.windLandings && (!Array.isArray(query.windLandings) || query.windLandings.length > 128 || query.windLandings.some(p => !finite(p))) ||
+      query.enemies && (!Array.isArray(query.enemies) || query.enemies.length > 128 || query.enemies.some(e => !e || !['string', 'number'].includes(typeof e.id))) ||
       query.methods && (!Array.isArray(query.methods) || query.methods.some(m => !['walk', 'pearl', 'wind', 'build'].includes(m)))) return empty
   const radius = Math.min(12, Math.max(1, Math.floor(query.radius ?? 6))), limit = Math.min(40, Math.max(1, Math.floor(query.limit ?? 6)))
   if (!Number.isFinite(radius) || !Number.isFinite(limit) || !windInside(bot.entity.position, query.arena)) return empty
+  if (query.currentBuildOnly) return { ...empty, currentBuild: currentBuildPosition(bot, query) }
   const methods = new Set(query.methods || ['walk', 'pearl', 'wind', 'build'])
   const counts: Record<string, number> = {}
   for (const item of bot.inventory?.items?.() || []) counts[item.name] = (counts[item.name] || 0) + item.count
@@ -281,7 +324,7 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
   }
   candidates.sort((a, b) => b.score - a.score)
   // ponytail: bounded terrain query; exhaustive jump planning remains in the executor RPC.
-  let windChecks = 0, pearlChecks = 0
+  let windChecks = 0, pearlChecks = 0, pairChecks = 0, windOccupied = false
   const physicsBot = { ...bot, _ndPositionOwner: bot, blockAt: p => world.blockAt(p) }
   for (const candidate of candidates) {
     if (performance.now() >= deadline) break
@@ -295,6 +338,15 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
     if (!candidate.methods.length && methods.has('wind') && counts.wind_charge && windChecks++ < 2) {
       const plan = (await (require('./wind-leap') as typeof import('./wind-leap')).planAsync(physicsBot, at, { arena: query.arena, maxTries: 16 })).best
       if (plan) candidate.methods.push({ kind: 'wind', cost: plan.ticks / 20 + 2 / counts.wind_charge, skill: 'wind_leap', params: { to: candidate.at, arena: query.arena }, plan })
+    }
+    if (!candidate.methods.length && methods.has('wind') && query.windPartner?.onGround && at.y > start.y &&
+        candidate.score > 0 && at.distanceTo(start) > 2 && pairChecks < 2 && performance.now() < deadline &&
+        !query.windLandings?.some(p => windStanceOverlaps(at, p))) {
+      if (windLandingOccupied(bot, at)) { windOccupied = true; continue }
+      pairChecks++
+      const plan = teamWindPlan(physicsBot, query.windPartner, at, { arena: query.arena, maxCandidates: 8 }).best
+      if (plan) candidate.methods.push({ kind: 'wind', cost: (40 + plan.receiver.steps.length) / 20,
+        skill: 'wind_receive', params: { to: candidate.at }, plan })
     }
   }
   if (methods.has('build')) {
@@ -324,5 +376,5 @@ export async function swarmPositions(bot: any, query: SwarmPositionQuery): Promi
         methods: [{ kind: 'build', cost, skill: 'swarm_pillar', params, plan: { kind: 'pillar', cells: column.cells.map(point), height, item, reserve } }] })
     }
   }
-  return { observed: true, candidates: candidates.filter(c => c.methods.length).map(c => ({ ...c, score: c.score - Math.min(...c.methods.map(m => m.cost)) })).sort((a, b) => b.score - a.score).slice(0, limit) }
+  return { observed: true, ...(windOccupied && { windOccupied }), currentBuild: currentBuildPosition(bot, query), candidates: candidates.filter(c => c.methods.length).map(c => ({ ...c, score: c.score - Math.min(...c.methods.map(m => m.cost)) })).sort((a, b) => b.score - a.score).slice(0, limit) }
 }

@@ -86,7 +86,9 @@ function pickFiller (bot, { steady = false }: any = {}) {
   }
   // Запас кирок — лучше в кладку, чем «нечем строить» (доска дороже: палки на кирку — из неё).
   if (keep) { const stone = itemMatching(bot, PICK_STONE); if (stone) return stone }
-  return itemMatching(bot, /_planks$/) || (scaffoldAny() ? itemMatching(bot, ARENA_FILLER) : null)
+  const planks = itemMatching(bot, /_planks$/)
+  if (planks || !scaffoldAny()) return planks
+  return bot.inventory.items().find(i => ARENA_FILLER.test(i.name) && !(steady && FALLING.has(i.name))) || null
 }
 
 // A promise that cannot hang the intent. bot.placeBlock waits for a block
@@ -104,11 +106,19 @@ function withTimeout (p, ms, message = 'ответа от сервера нет'
 const REPLACEABLE = /^(air|cave_air|void_air|water|lava|short_grass|fern|dead_bush|bush|short_dry_grass|tall_dry_grass|seagrass|tall_seagrass|fire|soul_fire|snow|vine|glow_lichen|resin_clump|light|tall_grass|large_fern|structure_void|bubble_column|warped_roots|nether_sprouts|crimson_roots|leaf_litter|hanging_roots)$/
 const unreplaceable = b => !!b && b.boundingBox === 'empty' && b.hardness === 0 && !REPLACEABLE.test(b.name) && !/portal|gateway/.test(b.name)
 
-// The two blocks our own body occupies. Placing into them is rejected by the
-// server, and on the rare occasion it lands the bot suffocates.
-function isOurOwnSpace (bot, pos) {
-  const feet = bot.entity.position.floored()
-  return pos.equals(feet) || pos.equals(feet.offset(0, 1, 0))
+// Before a click the placement face and neighbours can still select a different slab, stair or ladder state.
+// Refuse only when all possible collision shapes overlap our current body.
+function isOurOwnSpace (bot, pos, item = 'cobblestone') {
+  const e = bot.entity, p = e.position, half = (e.width ?? .6) / 2
+  const x = p.x - pos.x, y = p.y - pos.y, z = p.z - pos.z, eps = 1e-7
+  if (x + half <= eps || x - half >= 1 - eps || z + half <= eps || z - half >= 1 - eps || y >= 1.5 - eps) return false
+  const height = e._ndPoseHeight ?? (require('./pick') as typeof import('./pick')).hitboxOf(bot, e).h
+  if (y + height <= eps) return false
+  const shapes = bot.registry?.blockCollisionShapes ?? (require('minecraft-data') as typeof import('minecraft-data'))(bot.version || '1.21.11').blockCollisionShapes
+  const states = shapes.blocks[item || 'cobblestone']
+  const overlaps = id => shapes.shapes[id]?.some(s => x + half > s[0] + eps && x - half < s[3] - eps &&
+    y + height > s[1] + eps && y < s[4] - eps && z + half > s[2] + eps && z - half < s[5] - eps) === true
+  return Array.isArray(states) ? states.length > 0 && states.every(overlaps) : overlaps(states)
 }
 
 // Poll for a block to actually exist. Used where we fire a placement packet
@@ -131,14 +141,16 @@ async function waitForBlock (bot, pos, ms = 900) {
 // (байткод AreaEffectCloud, paper-1.21.11) — ставить блок в его клетку можно.
 const IGNORED_ENTITIES = new Set(['item', 'experience_orb', 'arrow', 'spectral_arrow', 'item_frame', 'painting', 'area_effect_cloud'])
 
-function occupiedByEntity (bot, pos) {
-  for (const e of ((Object.values(bot.entities) as any[]) as any)) {
+function occupiedByEntity (bot, pos, { entities = Object.values(bot.entities || {}) as any[], visibleOnly = false } = {}) {
+  for (const e of entities) {
     if (!e || e === bot.entity || !e.position || IGNORED_ENTITIES.has(e.name)) continue
     const p = e.position
     const half = (e.width || 0.6) / 2
     if (p.x + half <= pos.x || p.x - half >= pos.x + 1) continue
     if (p.z + half <= pos.z || p.z - half >= pos.z + 1) continue
     if (p.y + (e.height || 1.8) <= pos.y || p.y >= pos.y + 1) continue
+    if (visibleOnly && (e.isValid === false || bot.players?.[e.username]?.gamemode === 3 ||
+      !(require('./pvp/last-seen') as typeof import('./pvp/last-seen')).seesPlayer(bot, e))) continue
     return e.name || 'кто-то'
   }
   return null
@@ -230,16 +242,15 @@ const isNeighbour = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.a
 //
 // `steady` keeps sand and gravel out of the hand: a block meant to hang over
 // air must not be one that falls.
-async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady = false, prop = null, honest = false, exactAim = false, ctl = null }: any = {}) {
+async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady = false, prop = null, honest = false, exactAim = false, visibleOccupantsOnly = false, ctl = null, onClick = null }: any = {}) {
   if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   const target = bot.blockAt(pos)
   if (!target) return { ok: false, reason: 'блок вне прогруженного мира' }
   if (item && target.name === item) return { ok: true, already: target.name }
   if (target.boundingBox !== 'empty') return { ok: true, already: target.name }
-  // Факел без коллизии законно стоит там же, где тело (как lightNiche).
-  if (isOurOwnSpace(bot, pos) && item !== 'torch') return { ok: false, reason: 'это моя же клетка' }
-  const squatter = occupiedByEntity(bot, pos)
-  if (squatter) return { ok: false, reason: `в клетке стоит ${squatter}` }
+  if (isOurOwnSpace(bot, pos, item)) return { ok: false, selfOccupied: true, reason: 'это моя же клетка' }
+  const squatter = occupiedByEntity(bot, pos, { visibleOnly: visibleOccupantsOnly })
+  if (squatter) return { ok: false, occupiedByEntity: true, reason: `в клетке стоит ${squatter}` }
   // Незаменимое с пустой рамкой (факел, цветок, саженец): сервер в такую клетку не ставит и не отвечает (canBeReplaced,
   // тег minecraft:replaceable 1.21.11) — «ответа от сервера нет» у коробки (sr27 full: 520+). Сорвать, как игрок.
   if (unreplaceable(target) && item !== 'torch') {
@@ -252,10 +263,10 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   if (cannot) return { ok: false, reason: cannot }
   if (ctl?.aborted) return { ok: false, reason: 'прервано' }
   const trapped = alliedExitBlocked(bot, pos)
-  if (trapped) return { ok: false, reason: `перекрою последний выход своему ${trapped}` }
+  if (trapped) return { ok: false, exitBlocked: trapped, reason: `перекрою последний выход своему ${trapped}` }
 
-  const first = await againstFaces(bot, pos, timeoutMs, { honest, exactAim, ctl })
-  if (first.ok) return first
+  const first = await againstFaces(bot, pos, timeoutMs, { honest, exactAim, ctl, onClick })
+  if (first.ok || first.selfOccupied) return first
   if (first.refs) return { ok: false, refused: first.refused, reason: first.reason }
   // Open air on all six sides. Nothing about the bag, the tool or the server:
   // mineflayer can only place *against* something, and there is no something.
@@ -264,7 +275,7 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   if (!prop || !isNeighbour(pos, prop)) return { ok: false, noFooting: true, reason: NO_FACE }
 
   const at = xyz(prop)
-  const under = await placeBlockAt(bot, prop, { item, timeoutMs, steady, honest, exactAim, ctl })
+  const under = await placeBlockAt(bot, prop, { item, timeoutMs, steady, honest, exactAim, visibleOccupantsOnly, ctl })
   if (!under.ok) {
     return {
       ok: false,
@@ -276,7 +287,7 @@ async function placeBlockAt (bot, pos, { item = null, timeoutMs = 5000, steady =
   const propped = { at, placed: under.placed || under.already, face: under.face }
   const again = await holdFiller(bot, item, steady)
   if (again) return { ok: false, prop: propped, reason: `подпорку поставил, а на сам блок: ${again}` }
-  const second = await againstFaces(bot, pos, timeoutMs, { honest, exactAim, ctl })
+  const second = await againstFaces(bot, pos, timeoutMs, { honest, exactAim, ctl, onClick })
   if (second.ok) return { ...second, prop: propped }
   return { ok: false, prop: propped, refused: second.refused, reason: second.reason }
 }
@@ -290,7 +301,7 @@ const faceKind = f => (f.y < 0 ? 'bottom' : f.y > 0 ? 'top' : 'side')
 // honest — только грани, которые видно из глаз (pick.faceAim): блок у
 // противника (ловушка, опора наковальни) не ставится сквозь стенку, за которой
 // грани не видно, — клиент игры так не может (2026-09-26, «чит WH»).
-async function againstFaces (bot, pos, timeoutMs, { honest = false, exactAim = false, ctl = null }: any = {}) {
+async function againstFaces (bot, pos, timeoutMs, { honest = false, exactAim = false, ctl = null, onClick = null }: any = {}) {
   const until = exactAim ? gameClock.now() + timeoutMs : Infinity
   const torch = bot.heldItem?.name === 'torch'
   const expected = bot.heldItem?.name
@@ -331,8 +342,10 @@ async function againstFaces (bot, pos, timeoutMs, { honest = false, exactAim = f
       const aim = exactAim ? hit : ref.position.offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5)
       await bot.lookAt(aim, true)
       if (ctl?.aborted) return { ok: false, refs, reason: 'прервано' }
+      if (isOurOwnSpace(bot, pos, expected)) return { ok: false, refs, selfOccupied: true, reason: 'это моя же клетка' }
       // A cancellable call has already aimed; avoid another async look inside
       // generic_place between the cancellation check and the actual packet.
+      onClick?.(ref, face, aim)
       await withTimeout((ctl || exactAim) && bot._placeBlockWithOptions
         ? bot._placeBlockWithOptions(ref, face, { forceLook: 'ignore', swingArm: 'right', ...(exactAim ? { delta: aim.minus(ref.position) } : {}) })
         : bot.placeBlock(ref, face), exactAim ? Math.max(1, until - gameClock.now()) : timeoutMs)
@@ -671,9 +684,9 @@ async function escapePit (bot, ctl, { maxClimb = 24, mcData = null, session = nu
 
 module.exports = {
   FACES, FILLER, FALLING, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
-  isFree, occupiedByEntity, alliedExitBlocked, inPit, escapePit
+  isFree, REPLACEABLE, isOurOwnSpace, occupiedByEntity, alliedExitBlocked, inPit, escapePit
 }
 export {
   FACES, FILLER, FALLING, ARENA_FILLER, pickFiller, withTimeout, waitForBlock, placeBlockAt, placeMany, towerUp, digUp,
-  isFree, occupiedByEntity, alliedExitBlocked, inPit, escapePit
+  isFree, REPLACEABLE, isOurOwnSpace, occupiedByEntity, alliedExitBlocked, inPit, escapePit
 }

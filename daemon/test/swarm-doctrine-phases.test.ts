@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { SwarmBoard, planPvp, type SwarmMember } from '../src/swarm'
+import { knownEnemies } from '../src/swarm/board'
 import { shoveValue } from '../src/swarm/shove'
 
 const p = (x = 0, y = 64, z = 0) => ({ x, y, z })
@@ -97,6 +98,22 @@ test('false weakness: one flank per side waits ahead of the pocket and strikes o
   for (const id of ['L', 'R']) { assert.equal(strike.get(id)!.kind, 'fight'); assert.equal(strike.get(id)!.data!.target, 'red') }
 })
 
+test('automatic cocoon prices the speed of the opponent the builders will surround', () => {
+  const team = Array.from({ length: 7 }, (_, i) => member('B' + i, { position: p(i % 3 - 1, 64, Math.floor(i / 3) - 1),
+    role: i < 4 ? 'miner-builder' : i === 4 ? 'flank' : 'fighter', inventory: i < 4 ? { cobblestone: 32 } : {} }))
+  for (const [nearSpeed, farSpeed, expected] of [[0, 0, 'cocoon'], [0, .2, 'cocoon'], [.2, 0, 'hunt']] as const) {
+    const f = scene(team)
+    f.see('Far', p(48.5, 64, .5), { velocity: { x: farSpeed, y: 0, z: 0 } })
+    f.see('Near', p(8.5, 64, .5), { velocity: { x: nearSpeed, y: 0, z: 0 } })
+    const plan = planPvp(f.board, team, { quorum: 2 })
+    assert.equal(f.board.doctrineState()?.doctrine, expected, `near ${nearSpeed}, far ${farSpeed}`)
+    for (const m of team.slice(0, 4)) {
+      assert.equal(plan.get(m.id)?.data?.buildKind, expected === 'cocoon' ? 'cocoon' : 'cutoff')
+      assert.equal(plan.get(m.id)?.data?.target, 'Near')
+    }
+  }
+})
+
 test('hunt and cocoon: every builder shares one site while the target stays, a moved target gets a new one', () => {
   const builders = (extra = {}) => [member('m1', { role: 'miner-builder', inventory: { cobblestone: 64, netherite_sword: 1 }, ...extra }), member('m2', { role: 'miner-builder', position: p(0, 64, 3), inventory: { cobblestone: 64, netherite_sword: 1 } }), member('f1'), member('f2')]
   const team = builders()
@@ -110,6 +127,24 @@ test('hunt and cocoon: every builder shares one site while the target stays, a m
   f.see('red', p(14, 64, .5))
   const ahead = planPvp(f.board, team, { doctrine: 'hunt', quorum: 2 }).get('m1')!.data!.origin
   assert.ok(ahead.x > 14, 'a target that already ran past the wall gets a new wall ahead of it, even an unfinished one')
+})
+
+test('hunt preserves an in-flight placement and a partial cutoff on the returning runner’s lane', () => {
+  const team = ['m1', 'm2'].map(id => member(id, { role: 'miner-builder', inventory: { cobblestone: 16 } }))
+  const f = scene(team), plan = () => planPvp(f.board, team, { doctrine: 'hunt', quorum: 2 }).get('m2')?.data?.origin
+  f.see('red', p(8.5, 64, .5), { velocity: p(.2, 0, 0) })
+  const site = plan()
+  assert.deepEqual(site, p(14))
+  const blueprint = 'cutoff:14,64,0'
+  for (const z of [0, 1]) f.board.upsert({ id: 'work' + z, kind: 'build', position: p(14, 64, z), data: { blueprint, block: 'cobblestone' } })
+  const active = f.board.claim('work0', 'm1')!
+  f.at(1200); f.see('red', p(8.5, 64, 16.5), { velocity: p(0, 0, .2) })
+  assert.deepEqual(plan(), site, 'a pending native receipt keeps its fenced cell')
+  assert.equal(f.board.ack('work0', 'm1', { token: active.claim.token, confirmed: true, position: site, block: 'cobblestone' }), true)
+  f.at(1500); f.see('red', p(1.5, 64, .5), { velocity: p(.2, 0, 0) })
+  assert.deepEqual(plan(), site, 'the observed runner is entering build range again')
+  f.at(2000); f.see('red', p(8.5, 64, 16.5), { velocity: p(0, 0, .2) })
+  assert.deepEqual(plan(), p(8, 64, 22), 'the same partial wall releases miners after an observed turn away')
 })
 
 test('cocoon: until sealed nobody strikes the target, guards stand at the slit exits; sealed — they strike', () => {
@@ -535,7 +570,7 @@ test('ямы: быстрые цели первыми, по 1–2 копател�
   assert.equal(digs(planPvp(solo.board, team, options)).length, 4)
 })
 
-test('натиск: после первого сундука (кожа, каменный меч) на незеритового не идёт — уходит; загнанный дерётся; алмазный — в бою', () => {
+test('натиск: после первого сундука слабый проверяет отход и вблизи незеритового, алмазный остаётся в бою', () => {
   const human = { equipment: { weapon: 'netherite_sword', armor: NETHERITE, enchanted: true } }
   const leather = { weapon: 'stone_sword', armor: ['leather_helmet', 'leather_chestplate'], ench: { protection: 0, sharpness: 0 }, inventory: { stone_sword: 1 } }
   const diamond = { weapon: 'diamond_sword', armor: ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots'], ench: { protection: 0, sharpness: 5 }, inventory: { diamond_sword: 1 } }
@@ -546,7 +581,7 @@ test('натиск: после первого сундука (кожа, каме
   const plan = planPvp(f.board, team, { quorum: 1, aggressive: true, hideouts: [p(-30), p(40)] })
   assert.notEqual(plan.get('l')!.kind, 'fight', 'кожа с каменным мечом в 14 бл. от незерита — не в бой')
   assert.ok(['flee', 'loot'].includes(plan.get('l')!.kind))
-  assert.equal(plan.get('lc')!.kind, 'fight', 'в 3 бл. не убежать — драться')
+  assert.equal(plan.get('lc')!.kind, 'flee', 'в трёх блоках выход ещё может быть открыт')
   for (const id of ['d1', 'd2', 'd3', 'd4']) assert.equal(plan.get(id)!.kind, 'fight', `${id}: алмаз против незерита — бой`)
   assert.ok(!f.board.assault?.voters.includes('l'), 'переигранный за штурм не голосует')
 })
@@ -676,6 +711,27 @@ test('assault: neither 45 seconds nor loss of sightings ends the episode', () =>
   f.at(122000); f.see('human', p(60), f.human)
   planPvp(f.board, f.members, f.options)
   assert.equal(f.board.assault, null, 'a fresh target outside every original voter\'s reach ends the assault')
+})
+
+test('public elimination frees the assault for the next opponent and closes the previous life', () => {
+  const f = assaultScene()
+  f.at(1800)
+  f.see('other', p(15))
+  f.board.forget('other')
+  assert.equal(f.board.assault?.target, 'human')
+  f.at(2000)
+  f.board.forget('human')
+  assert.equal(f.board.assault, null)
+  assert.deepEqual(f.board.assaultEnded, { target: 'human', why: 'цель выбыла', at: 2000, seconds: 1, lost: 0 })
+  assert.equal(f.board.observe('a0', 1900, { id: 'human', visible: true, position: p(10) }), false)
+  f.at(2001)
+  f.see('other', p(15))
+  planPvp(f.board, f.members, f.options)
+  assert.equal(f.board.assault?.target, 'other')
+  assert.ok(f.board.observe('a0', 2001, { id: 'human', visible: true, position: p(20) }))
+  assert.equal(knownEnemies(f.board).find(e => e.id === 'human')?.equipment?.weapon, undefined)
+  planPvp(f.board, f.members, f.options)
+  assert.equal(f.board.assault?.target, 'other')
 })
 
 test('assault: losses without modeled damage abort; a hit buys continuation, not perpetual permission', () => {

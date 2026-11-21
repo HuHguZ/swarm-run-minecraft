@@ -1,8 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import * as clock from '../src/game-clock'
-import { acquireTarget } from '../src/pvp/search'
+import { createLastSeen } from '../src/pvp/last-seen'
+import { acquireTarget, observedCollision } from '../src/pvp/search'
+import { targetTurn } from '../src/pvp/turn-target'
 
 function scene (t) {
   const time = new clock.GameClock({ manual: true, epoch: 1000 }); clock.activate(time)
@@ -69,6 +72,280 @@ test('PvP immediate visibility leaves path controls alone', async t => {
   assert.strictEqual(result.entity, f.seen)
   assert.equal(f.goals.length, 0)
   assert.equal(result.search.legs, 0)
+})
+
+test('a scout can step onto one visible adjacent block to look around a corner', async t => {
+  const f = scene(t), open = f.bot.blockAt
+  f.bot.blockAt = p => p.y < 0 && !(p.z === 0 && (p.x === 0 || p.x === 1))
+    ? { name: 'air', position: p.floored(), boundingBox: 'empty', shapes: [] } : open(p)
+  const run = acquireTarget(f.bot, f.ctl, f.vision, f.raw, { deadline: 2500 })
+  const first = f.goals[0]
+  assert.ok(first, 'the only visible foothold is one block away')
+  assert.equal(first.isEnd(f.bot.entity.position.floored()), false, 'the first step must actually leave cover')
+  assert.equal(first.isEnd(new Vec3(1, 0, 0)), true)
+  await f.tick(2)
+  assert.equal(f.goals.length, 1, 'waiting for movement retains the same route')
+  f.bot.entity.position.x += 1
+  f.show(); await f.tick(2)
+  assert.strictEqual((await run).entity, f.seen)
+})
+
+test('a stationary scout does not raycast the same void every two ticks and reacts when a floor appears', async t => {
+  const f = scene(t), bot: any = Object.assign(new EventEmitter(), f.bot)
+  const open = bot.blockAt
+  let floor = false, reads = 0, observations = 0
+  bot.blockAt = p => {
+    reads++
+    if (p.y >= 0 || (p.z === 0 && (p.x === 0 || floor && p.x === 1))) return open(p)
+    return { name: 'air', position: p.floored(), boundingBox: 'empty', shapes: [] }
+  }
+  const run = acquireTarget(bot, f.ctl, { observe: () => { observations++; return f.vision.observe() } }, f.raw, { deadline: 3500 })
+  const firstScan = reads
+  assert.ok(firstScan > 0)
+  for (let i = 0; i < 8; i++) await f.tick(2)
+  assert.equal(reads, firstScan)
+  assert.ok(observations >= 9, 'checks for a visible player continue')
+  floor = true
+  const p = new Vec3(1, -1, 0)
+  bot.emit('blockUpdate', null, open(p))
+  await f.tick(2)
+  assert.ok(f.goals.some(Boolean))
+  f.show(); await f.tick(2); await run
+  assert.equal(bot.listenerCount('blockUpdate'), 0)
+  assert.equal(bot.listenerCount('chunkColumnLoad'), 0)
+})
+
+for (const closed of [false, true]) test(`native scout retraces the blind branch and ${closed ? 'stops after exploring both ends' : 'sees the player around the other corner'}`, async t => {
+  const { worldOf, drive } = require('./parkour-fixture')
+  const { fakeBot } = require('../scenes/infra/try-astar-bench')
+  const cells = [[3, 0, 4, 'stone']]
+  const floor = closed ? 'stone_slab' : 'stone'
+  for (let x = 0; x <= 3; x++) cells.push([x, 0, 0, floor])
+  for (let z = 1; z <= 3; z++) cells.push([0, 0, z, floor])
+  for (let y = 1; y <= 4; y++) {
+    for (let x = 1; x <= 4; x++) cells.push([x, y, 1, 'bedrock'])
+    cells.push([1, y, 2, 'bedrock'])
+    if (closed) cells.push([1, y, 3, 'bedrock'], [1, y, 4, 'bedrock'])
+  }
+  const { bot: body, world } = worldOf(cells)
+  const surface = closed ? .5 : 1
+  body.entity.position.y = surface
+  world.raycast = require('prismarine-world/src/worldsync').prototype.raycast
+  const bot = fakeBot(world, { at: body.entity.position, kit: [] })
+  Object.assign(bot.entity, body.entity)
+  bot.physics = body.physics
+  bot.pathfinder.movements.canDig = false
+  drive(bot, world)
+  const f = scene(t), enemy = { id: 8, username: 'Foe', isValid: true, type: 'player',
+    position: new Vec3(3.5, 1, 4.5), width: .6, height: 1.8, equipment: [], metadata: [] }
+  bot.players = { Foe: { entity: enemy } }; bot.entities = { 8: enemy }
+  const vision = createLastSeen(bot)
+  t.after(() => vision.close())
+  assert.ok(!vision.observe(enemy)?._ndVisible)
+  const goals = [], entered = []
+  bot.on('goal_updated', goal => { if (goal) goals.push(goal) })
+  const run = acquireTarget(bot, f.ctl, vision, enemy, { deadline: clock.now() + 6500 })
+  assert.equal(goals[0]?.x, 3)
+  assert.equal(goals[0].y, 1, 'A* targets the node above either support')
+  assert.equal(goals[0].isEnd(new Vec3(2, 1, 0)), false)
+  for (let i = 0; i < 132; i++) {
+    await bot.waitForTicks(1); await f.tick(1)
+    const cell = bot.entity.position.floored().toString()
+    if (cell !== entered.at(-1)) entered.push(cell)
+  }
+  const result = await run
+  const y = Math.floor(surface)
+  const eastFirst = entered[1] === new Vec3(1, y, 0).toString()
+  const position = (out, side) => new Vec3(eastFirst ? out : side, y, eastFirst ? side : out).toString()
+  const secondBranch = closed ? [1, 2, 3, 2, 1, 0] : [1, 2, 3]
+  assert.deepEqual(entered, [...[0, 1, 2, 3, 2, 1, 0].map(n => position(n, 0)), ...secondBranch.map(n => position(0, n))])
+  assert.equal(result.entity?.username ?? null, closed ? null : 'Foe')
+})
+
+test('only an empty terminal result for the current search route makes the scout try another viewpoint', async t => {
+  const f = scene(t), bot: any = Object.assign(new EventEmitter(), f.bot)
+  bot.pathfinder.setGoal = goal => { f.goals.push(goal); bot.pathfinder.goal = goal }
+  const run = acquireTarget(bot, f.ctl, f.vision, f.raw, { deadline: 5000 })
+  const first = bot.pathfinder.goal
+  bot.emit('path_update', { status: 'partial', path: [] })
+  bot.emit('path_update', { status: 'timeout', path: [{ x: 1, y: 0, z: 1 }] })
+  await f.tick(2)
+  assert.equal(bot.pathfinder.goal, first)
+  bot.emit('path_update', { status: 'noPath', path: [] })
+  await f.tick(2)
+  const second = bot.pathfinder.goal
+  assert.notDeepEqual(second, first)
+  assert.equal(f.goals.filter(Boolean).length, 2)
+  f.show(); await f.tick(2); await run
+  assert.equal(bot.listenerCount('path_update'), 0)
+})
+
+test('crossing the edge of a viewpoint waits for native arrival, and an emergency route keeps its controls', async t => {
+  const f = scene(t), bot: any = Object.assign(new EventEmitter(), f.bot)
+  let clears = 0
+  bot.clearControlStates = () => { clears++ }
+  bot.pathfinder.setGoal = goal => { f.goals.push(goal); bot.pathfinder.goal = goal; bot.emit('goal_updated', goal) }
+  const run = acquireTarget(bot, f.ctl, f.vision, f.raw, { deadline: 3000 })
+  const first = bot.pathfinder.goal
+  bot.entity.position.set(first.x + .02, first.y, first.z + .02)
+  await f.tick(2)
+  assert.equal(bot.pathfinder.goal, first, 'native movement is still approaching the viewpoint')
+  bot.emit('goal_reached', first); bot.pathfinder.goal = null
+  await f.tick(2)
+  assert.ok(bot.pathfinder.goal && bot.pathfinder.goal !== first)
+  const emergency = { escape: true }, before = clears
+  bot.pathfinder.setGoal(emergency)
+  await f.tick(2)
+  assert.equal((await run).entity, null)
+  assert.equal(bot.pathfinder.goal, emergency)
+  assert.equal(clears, before)
+  assert.equal(bot.listenerCount('goal_reached') + bot.listenerCount('goal_updated'), 0)
+})
+
+test('hidden block updates do not reopen an unreachable viewpoint and a visible change permits a retry', async t => {
+  const f = scene(t), bot: any = Object.assign(new EventEmitter(), f.bot)
+  const open = bot.blockAt, hidden = new Vec3(3, 0, 0), visible = new Vec3(-1, -1, 0)
+  const stone = position => ({ position, name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] })
+  bot.blockAt = p => {
+    if (p.x === 2 || p.equals(hidden)) return stone(p)
+    if (p.y >= 0 || (p.z === 0 && (p.x === 0 || p.x === -1))) return open(p)
+    return { name: 'air', position: p, boundingBox: 'empty', shapes: [] }
+  }
+  bot.pathfinder.setGoal = goal => { f.goals.push(goal); bot.pathfinder.goal = goal }
+  const run = acquireTarget(bot, f.ctl, f.vision, f.raw, { deadline: 3000 })
+  const first = bot.pathfinder.goal
+  assert.ok(first?.isEnd(new Vec3(-1, 0, 0)))
+  bot.emit('path_update', { status: 'noPath', path: [] })
+  await f.tick(2)
+  assert.equal(bot.pathfinder.goal, null)
+  bot.emit('blockUpdate', open(hidden), stone(hidden))
+  await f.tick(2)
+  assert.equal(bot.pathfinder.goal, null, 'a packet behind the wall grants no new route')
+  bot.emit('blockUpdate', { ...stone(visible), name: 'dirt' }, stone(visible))
+  await f.tick(2)
+  assert.deepEqual(bot.pathfinder.goal, first)
+  f.show(); await f.tick(2); await run
+})
+
+function lostPlayer(t) {
+  const f = scene(t)
+  const bot: any = Object.assign(new EventEmitter(), f.bot)
+  const raw: any = Object.assign(new EventEmitter(), { id: 2, type: 'player', username: 'Foe', isValid: true,
+    position: new Vec3(6.5, 0, .5), height: 1.8, width: .6, equipment: [], metadata: [] })
+  bot.players = { Foe: { entity: raw } }; bot.entities = { 2: raw }
+  const open = bot.blockAt
+  bot.blockAt = p => p.floored().x === 8 && p.y >= 0 ? { name: 'stone', position: p.floored(),
+    boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : open(p)
+  const source = createLastSeen(bot)
+  const last = source.observe(raw)
+  assert.equal(last?._ndVisible, true)
+  raw.position = new Vec3(13.5, 0, .5)
+  bot.emit('physicsTick')
+  assert.equal(last._ndVisible, false)
+  assert.equal(last.position.x, 6.5)
+  t.after(() => source.close())
+  return { ...f, bot, raw, last, source }
+}
+
+test('a solo duel searches toward its last public sighting when another observer still remembers the hidden player', async t => {
+  const f = lostPlayer(t)
+  const duel = require('../src/pvp').duel
+  const running = duel({ bot: f.bot }, f.ctl, f.raw, { timeoutSeconds: .2, guard: { safety: {} } })
+    .then(result => ({ result }), error => ({ error }))
+  await f.tick(4)
+  const out = await running
+  assert.ok(f.goals[0]?.x > f.bot.entity.position.x + 2, 'search visible ground toward the last sighting')
+  assert.ok(f.goals[0].x < 8, 'do not route to the hidden packet position behind the wall')
+  assert.equal(out.result?.search.legs, 1, out.error?.message)
+  assert.match(out.result.lost, /не найден/)
+  assert.equal(f.goals.at(-1), null)
+})
+
+test('solo search keeps following a distant sighting until the scout can inspect it', async t => {
+  async function nextLeg(edge: number | null, hiddenZ = 5, behindCorner: boolean | null = null) {
+    const f = lostPlayer(t), { bot, raw, source } = f
+    const last = new Vec3(-17.5, 0, .5)
+    raw.position = last.clone()
+    assert.equal(source.observe(raw)._ndVisible, true)
+    const terrain = bot.blockAt
+    bot.blockAt = p => {
+      const { x, y, z } = p.floored()
+      const wall = edge !== null && x === -11 && z >= edge && z < 2
+      const corner = behindCorner !== null && x === -9 && z >= 1 && z <= 4
+      const extension = behindCorner === true && x === -11 && z === 2
+      return (wall || corner || extension) && y >= 0 && y < 4
+        ? { name: 'stone', position: p.floored(), boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : terrain(p)
+    }
+    raw.position = new Vec3(15.5, 0, hiddenZ) // Behind the permanent eastern wall.
+    assert.equal(source.observe(raw)._ndVisible, false)
+    const running = acquireTarget(bot, f.ctl, source, raw, { deadline: 5000 })
+    const first = f.goals[0]
+    assert.ok(first.x < -4)
+    bot.entity.position.set(first.x + .5, first.y, first.z + .5)
+    if (behindCorner !== null) assert.equal(observedCollision(bot).blockAt(new Vec3(-11, 1, 2)), null)
+    await f.tick(2)
+    const second = f.goals.at(-1)
+    f.ctl.aborted = true; f.ctl.onAbort.forEach(cancel => cancel())
+    assert.equal((await running).search.legs, 2)
+    const next = new Vec3(second.x + .5, second.y, second.z + .5)
+    if (edge !== null) assert.ok(next.distanceTo(last) < bot.entity.position.distanceTo(last), 'an intermediate stop still cannot see the old position')
+    return { x: second.x, z: second.z }
+  }
+  const shortWall = await nextLeg(-1)
+  assert.deepEqual(shortWall, await nextLeg(-1, -9), 'two unseen packet positions yield the same search')
+  assert.notDeepEqual(shortWall, await nextLeg(null), 'seeing the empty position frees the next leg to explore')
+  assert.ok((await nextLeg(-8)).z > 0, 'the observed opening gives a shorter way to look behind the wall')
+  assert.deepEqual(await nextLeg(-8, 5, true), await nextLeg(-8, 5, false), 'an unseen opening and an unseen wall yield the same search')
+})
+
+function unloadedDuel(t) {
+  const f = lostPlayer(t)
+  f.raw.isValid = false; f.bot.emit('entityGone', f.raw)
+  delete f.bot.entities[2]; f.bot.players.Foe.entity = null
+  const ctx: any = { bot: f.bot, ctl: f.ctl, entity: f.last, deadline: 2000, prof: { player: true }, opts: {},
+    vision: f.source, edgeTally() {}, kills: [], label: 'Foe', st: {}, clear() {}, pathTo() {}, otherAttacker: () => null,
+    finish: result => result, retarget: e => { ctx.entity = e }, async holdWeapon() {} }
+  return { ...f, ctx }
+}
+
+test('an active solo duel searches after entityGone and reacquires a reloaded player only when visible', async t => {
+  const f = unloadedDuel(t), { ctx } = f
+  let settled = false
+  const running = targetTurn(ctx, {} as any).then(result => { settled = true; return result })
+  const next = Object.assign(new EventEmitter(), { id: 3, type: 'player', username: 'Foe', isValid: true,
+    position: new Vec3(17.5, 0, .5), height: 1.8, width: .6, metadata: [], equipment: [] })
+  f.bot.players.Foe.entity = next; f.bot.entities[3] = next
+  await f.tick(2)
+  assert.equal(settled, false, 'packet-only entity reload does not finish the search')
+  assert.ok(f.goals[0]?.x > 2)
+  next.position = new Vec3(4.5, 0, .5)
+  await f.tick(2)
+  assert.equal(await running, 'next')
+  assert.equal(ctx.entity.id, next.id)
+  assert.equal(ctx.entity._ndVisible, true)
+  assert.equal(ctx.st.search.legs, 1)
+  assert.equal(f.goals.at(-1), null)
+})
+
+for (const cause of ['public death', 'left server', 'other attacker', 'abort']) test(`solo reacquisition yields to ${cause}`, async t => {
+  const f = unloadedDuel(t), { ctx } = f
+  let attacker = null
+  ctx.otherAttacker = () => attacker
+  const running = targetTurn(ctx, {} as any)
+  assert.ok(f.goals[0])
+  if (cause === 'public death') ctx.killed = true
+  if (cause === 'left server') delete f.bot.players.Foe
+  if (cause === 'other attacker') attacker = { e: { id: 7, username: 'Visible attacker' } }
+  if (cause === 'abort') {
+    f.ctl.aborted = true
+    f.ctl.onAbort.forEach(cancel => cancel())
+  } else await f.tick(2)
+  const result: any = await running
+  if (cause === 'left server') assert.match(result.end.lost, /пропал из виду/)
+  else assert.equal(result, 'next')
+  assert.equal(ctx.entity.id, cause === 'other attacker' ? 7 : 2)
+  assert.equal(f.goals.at(-1), null)
+  assert.equal(f.ctl.onAbort.length, 0)
 })
 
 test('PvP acquisition observes the same named player after an entity reload', async t => {
@@ -153,6 +430,32 @@ test('PvP acquisition and route costs cannot inspect a hidden ceiling above visi
   assert.deepEqual(results[0], results[1], 'an unseen roof must not alter the viewpoint or path geometry')
   assert.ok(results[0].goal, 'still searches the visible alternative')
   assert.equal(results[0].ceiling, null)
+})
+
+test('an existing burn cost uses only visible lava during acquisition and restores its ordinary cost', async t => {
+  const { priceBurnSteps } = require('../src/pvp/movement')
+  for (const covered of [true, false]) {
+    const f = scene(t), open = f.bot.blockAt
+    const lava = new Vec3(2, -1, 0), cover = lava.offset(0, 1, 0)
+    f.bot.blockAt = p => {
+      if (p.equals(lava)) return { name: 'lava', position: p, boundingBox: 'empty', shapes: [] }
+      if (covered && p.equals(cover)) return { name: 'stone', position: p, boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] }
+      return open(p)
+    }
+    const mv: any = { getBlock(pos, x, y, z) { return this.bot.blockAt(pos.offset(x,y,z)) }, bot: f.bot,
+      exclusionAreasStep: [], exclusionAreasBreak: [], getNeighbors: () => [] }
+    ;(f.bot.pathfinder as any).movements = mv
+    ;(f.bot as any)._ndFastBlocks = { live: true, ver: 1 }
+    const strip = priceBurnSteps(f.bot, mv) // ordinary arena navigation installs the price before a duel
+    const next = open(new Vec3(1, 0, 0)), cost = () => mv.exclusionAreasStep.reduce((sum, price) => sum + price(next), 0)
+    assert.equal(cost(), 30)
+    const running = acquireTarget(f.bot, f.ctl, f.vision, f.raw, { deadline: 3000 })
+    const during = cost()
+    f.show(); await f.tick(2); await running
+    assert.equal(during, covered ? 0 : 30)
+    assert.equal(cost(), 30)
+    strip()
+  }
 })
 
 test('PvP acquisition hides cached packet geometry from fastblocks route candidates and restores the cache', async t => {

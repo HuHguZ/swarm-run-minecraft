@@ -11,7 +11,7 @@ function upperResourceFight(extra: Record<string, any> = {}) {
   const task: any = { kind: 'fight', position: { x: 635.1936338631134, y: 150.875, z: 612.2475696717926 }, data: { target: foe.id, committed: true, ...extra } }
   const calls: any[] = [], b: any = { name: 'NeuroFarm31e', swarmTask: task, c: { async call(method, params) { calls.push({ method, params }); return { status: 'done', detail: { landed: 1, swings: 1 } } } } }
   const sw: any = { generation: 0, now: () => 1794574773049, bots: [b], pos: { [b.name]: { p: at } }, alive: () => true,
-    log() {}, home: () => at, teamOf: () => 'blue', onslaught: () => false, rangedAdvantage: () => false, cooldown: new Map(),
+    log() {}, home: () => at, bounded: p => p, teamOf: () => 'blue', onslaught: () => false, rangedAdvantage: () => false, cooldown: new Map(),
     detail: r => r.detail, go: async (_b, point, range) => { calls.push({ method: 'goto', params: { ...point, range } }); return { status: 'done', detail: { arrived: point } } } }
   const tc: any = { b, board: {}, task, round: 0, m: { p: at, inv: { stone_axe: 2 } }, enemies: [foe], context: { members: [] }, foe, contact: false }
   return { calls, sw, tc, api: swarmTurnWork(sw), foe, task }
@@ -44,6 +44,39 @@ test('search goto still follows the assigned search point rather than the fight 
   f.task.kind = 'goto'
   await f.api.turnGoto(f.tc)
   assert.deepEqual({ x: f.calls[0].params.x, y: f.calls[0].params.y, z: f.calls[0].params.z }, f.task.data.searchAt)
+})
+
+test('standing directly below the missing player does not complete a gallery search', async () => {
+  const f = upperResourceFight({ search: true, hunt: true })
+  f.task.data.searchAt = { ...f.tc.m.p, y: f.tc.m.p.y + 3 }
+  f.task.data.enemyPosition = f.task.data.searchAt
+  f.sw.search = async () => f.calls.push({ method: 'sweep' })
+  await swarmTurnWork(f.sw).turnGoto(f.tc)
+  assert.equal(f.calls[0].method, 'goto')
+  assert.equal(f.calls[0].params.y, f.task.data.searchAt.y)
+  assert.ok(f.calls[0].params.range < 2)
+})
+
+test('a failed hunt approach changes direction, while an interrupted approach never starts a breach', async () => {
+  for (const interrupted of [true, false]) {
+    const f = upperResourceFight({ search: true, hunt: true, finishing: true })
+    f.task.data.enemyPosition = f.task.data.searchAt = { ...f.tc.m.p, x: f.tc.m.p.x + 8 }
+    f.sw.go = async () => {
+      f.calls.push({ method: 'goto' })
+      return interrupted ? { status: 'interrupted', detail: {} } :
+        { status: 'done', detail: { stopped: 'время вышло', at: { ...f.tc.m.p } } }
+    }
+    f.sw.breach = async () => { f.calls.push({ method: 'breach' }); return false }
+    f.sw.search = async () => f.calls.push({ method: 'sweep' })
+    const api = swarmTurnWork(f.sw)
+    await api.turnGoto(f.tc)
+    if (interrupted) assert.deepEqual(f.calls.map(c => c.method), ['goto'])
+    else {
+      await api.turnGoto(f.tc)
+      assert.equal(f.calls.filter(c => c.method === 'goto').length, 1, 'do not immediately retry the same approach from the same feet')
+      assert.equal(f.calls.at(-1).method, 'sweep')
+    }
+  }
 })
 
 function liveFight() {

@@ -5,7 +5,7 @@ import type { PvpPlan } from './plan-frame'
 import { markFled, pvpState } from './board'
 import { distance, ratio, count, cellKey } from './common'
 import { assessSwarmFight, assessTeamFight, groupOf, TEAM_LINK, REINFORCE_LINK } from './fight'
-import { retreatWhy, retreatStep, retreatHolds, inContact, alliesNear, caughtBy, nearestGap, SAFE } from './retreat'
+import { retreatWhy, retreatStep, retreatCatcher, retreatHolds, inContact, alliesNear, caughtBy, nearestGap, SAFE } from './retreat'
 import { behindRace } from './race'
 
 // Срок до укрытия: ходьба спринтом 5.6 бл/с + 1 с на блок подъёма (как travelCost драйвера) против подлёта летуна. Для крыши
@@ -30,14 +30,47 @@ const boxBlocks = (m: SwarmMember) => {
   return Object.entries(inv).filter(([n]) => ok.test(n)).reduce((s, [, c]) => s + (c as number), 0)
 }
 export const visiblyWeakened = (foe: SharedEnemy, now: number) => (foe.hpEstimate ?? 20) <= 10 && now - foe.seenAt < 3000
+
+// Время до полноценного удара: полный натяг лука — 20 тиков, заряженный арбалет стреляет сразу.
+function firstHuntHit(m: SwarmMember, gap: number, travel = gap / 5.6): number {
+  const inv = m.inventory || {}
+  const melee = Object.entries(inv).some(([item, n]) => n > 0 && damage.isMeleeWeapon(item))
+  let seconds = melee ? Math.max(0, travel - 3 / 5.6) : Infinity
+  if (inv.trident) seconds = Math.min(seconds, .5 + gap / (2.5 * 20))
+  const arrows = m.attackArrows ?? count(inv, 'arrow') + count(inv, 'spectral_arrow')
+  if (m.loadedCrossbow) seconds = Math.min(seconds, gap / (damage.CROSSBOW_ARROW_SPEED * 20))
+  if (inv.crossbow && arrows > 0) seconds = Math.min(seconds, damage.crossbowChargeTicks() / 20 + gap / (damage.CROSSBOW_ARROW_SPEED * 20))
+  if (inv.bow && arrows > 0) seconds = Math.min(seconds, damage.BOW_FULL_TICKS / 20 + gap / (3 * 20))
+  return seconds
+}
+
+export function closingSpeed(m: SwarmMember, foe: SharedEnemy, gap: number): number {
+  return ((m.position.x - foe.position.x) * (foe.velocity?.x || 0) + (m.position.z - foe.position.z) * (foe.velocity?.z || 0)) / (gap || 1)
+}
+
+export function fleePursuit(S: PvpPlan, m: SwarmMember, foe: SharedEnemy, gap: number, ranged: boolean): void {
+  // От лучника и тарана — под крышу; от рукопашника — к своим или в отрыв. Тупик проверяет тело.
+  const rammer = foe.threat === 'aerial', perch = rammer ? null : S.perchFor(m)
+  const cover = !perch && (ranged || rammer) ? S.hideoutFor(m) : null
+  const group = !perch && !cover && S.rallyFor(m, foe)
+  markFled(S.board, m.id)
+  S.put(m, 'flee', { target: foe.id, enemyPosition: foe.position, panic: true, pursuit: true, ...(perch ? { perch: true } : cover ? { hide: true } : { kite: true, regroup: !!group }), reason: `ухожу от ${cover ? 'лучника за укрытие' : 'погони'} (враг в ${Math.round(gap)} бл.)` }, perch || cover || group || m.position)
+}
+
 export function pvpFlee(S: PvpPlan): void {
-  const { board, team, enemies, aggressive, assault, forward, groups, futile, outnumbered, hopeless, put, weak, outclassed, perchFor, rallyFor, hideoutFor, archer, threatReach } = S
+  const { board, team, enemies, aggressive, assault, forward, groups, futile, outnumbered, hopeless, put, weak, outclassed, perchFor, hideoutFor, archer, threatReach } = S
   // Ва-банк (пользователь 14.10: «когда мало хп, я начинаю убегать, а они не гонятся добивать — если чувствуют слабость,
   // должны ва-банк идти и добивать»): цель с оценкой хп ≤ 10 (по нашим попаданиям и видимому лечению, не метаданные),
-  // виденная за 3 с, — добивание: все, у кого есть оружие, в 32 бл. — прямо на неё; бегства и лечения у них нет, кроме
-  // смертельного залпа.
+  // виденная за 3 с, — добивание для вооружённых в 32 бл., пока они успевают ударить до перехвата.
   const prey = aggressive ? enemies.filter(e => visiblyWeakened(e, board.now())).sort((a, b) => (a.hpEstimate ?? 20) - (b.hpEstimate ?? 20))[0] : undefined
-  const hunting = (m: SwarmMember) => !!prey && distance(m.position, prey.position) <= 32 && Object.keys(m.inventory || {}).some(n => count(m.inventory, n) > 0 && (damage.isMeleeWeapon(n) || /^(bow|crossbow|trident)$/.test(n)))
+  const huntTimes = new Map<string, number>()
+  if (prey) for (const m of team) {
+    const gap = distance(m.position, prey.position)
+    if (gap > 32) continue
+    const hit = firstHuntHit(m, gap)
+    if (Number.isFinite(hit)) huntTimes.set(m.id, hit)
+  }
+  const hunting = (m: SwarmMember) => huntTimes.has(m.id)
   const retreats = pvpState(board).retreats
   for (const [i, m] of team.entries()) {
     // Финал — последний бой, не сохранение команды в укрытии. Рана остаётся фазе pvpRecover; аварии — телу.
@@ -51,14 +84,26 @@ export function pvpFlee(S: PvpPlan): void {
       put(m, 'flee', { target: risk.target, perch: true, panic: true, risk, reason: 'воздушный отход, ' + risk.reason }, airExit)
       continue
     }
-    if (hunting(m) && !risk.lethal) continue
     // Погоня за слабым или переигранным (стенд rush 15.10: «прячусь» вело в тупик-камеру, он догонял — бой 1–2 удара и смерть):
     // к своим (и слабым — толпа бьёт его со спины) или в отрыв по открытому (smartFlee тела сам обходит тупики); последний
     // бой — только физически зажатым (исполнитель: cornered); оторвался дальше 22 — лут (Codex 15.10).
-    const near = aggressive ? [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0] : undefined
+    const near = aggressive ? enemies.find(e => e.id === risk.target) : undefined
     const gap = near ? distance(m.position, near.position) : Infinity
     const v = near?.velocity
-    const coming = !!near && board.now() - near.seenAt < 1000 && ((m.position.x - near.position.x) * (v?.x || 0) + (m.position.z - near.position.z) * (v?.z || 0)) / (gap || 1) > .1
+    const closing = near ? closingSpeed(m, near, gap) : 0
+    const coming = !!near && board.now() - near.seenAt < 1000 && closing > .1
+    // За раненым выгодно идти, пока есть время его достать; быстрый путь (например, полёт) может окупить погоню.
+    let firstHit = huntTimes.get(m.id)
+    if (prey && near && near.id !== prey.id && coming && !near.nametag && !near.glowing && risk.unsafe &&
+        firstHit !== undefined && outclassed(m, near)) {
+      const preyGap = distance(m.position, prey.position)
+      if (S.options.travelSeconds && preyGap > 3 && firstHuntHit(m, preyGap, Infinity) > risk.survivalSeconds) {
+        const travel = S.options.travelSeconds(m, m.position, prey.position)
+        firstHit = firstHuntHit(m, preyGap, Number.isFinite(travel) && travel >= 0 ? travel : Infinity)
+      }
+      if (firstHit > risk.survivalSeconds) huntTimes.delete(m.id)
+    }
+    if (hunting(m) && !risk.lethal) continue
     // Лучник в виду — уже погоня: ему не нужно подходить (стенд 21.10: стрелы на бегу в 11–14 бл.). Только издали (> 8 бл.):
     // вплотную лучник — тот же рукопашник, а бег «за укрытие» в 0–1 бл. от него — смерть спиной (игра пользователя 21.10:
     // у людей лук в наборе — 19 из 38 смертей от меча с «ухожу от лучника за укрытие (враг в 1 бл.)»).
@@ -82,16 +127,10 @@ export function pvpFlee(S: PvpPlan): void {
     const escapes = (inv.ender_pearl || 0) > 0 || (inv.wind_charge || 0) > 0 || (inv.chorus_fruit || 0) > 0 || (!!inv.elytra || Object.values(m.armor || {}).includes('elytra')) && (inv.firework_rocket || 0) >= 5
     // Когда догонит — по его скорости на меня против моего спринта (0.28 бл/т): до удара (3 бл.) за t = (gap − 3)/(vк − 0.28).
     // Меньше 3 с — бегом не уйти (пользователь 25.10: «по вектору скорости моему и своему считать, когда догоню»).
-    const closing = near ? ((m.position.x - near.position.x) * (v?.x || 0) + (m.position.z - near.position.z) * (v?.z || 0)) / (gap || 1) : 0
     const catchS = closing > .28 ? Math.max(0, gap - 3) / (closing - .28) / 20 : Infinity
     const outrun = catchS < 3 && !escapes && Object.keys(inv).some(k => /_sword$|_axe$|^mace$|_spear$/.test(k))
     if (near && gap <= (prevKind === 'loot' ? far : far + 6) && pursuing && !outrun && !(prevKind === 'fight' && gap <= 6) && !assault?.voters.includes(m.id) && (weak(m) || outclassed(m, near))) {
-      // От лучника — за укрытие (стена ломает линию выстрела), иначе к своим или в отрыв.
-      // От лучника и от тарана — за укрытие (стена ломает выстрел и луч копья); к летуну на насест не лететь.
-      const rammer = near.threat === 'aerial', perch = rammer ? null : perchFor(m), den = !perch && (ranged || rammer) ? hideoutFor(m) : null
-      const cover = den || null, group = !perch && !cover && rallyFor(m, near)
-      markFled(board, m.id)
-      put(m, 'flee', { target: near.id, enemyPosition: near.position, panic: true, pursuit: true, ...(perch ? { perch: true } : cover ? { hide: true } : { kite: true, regroup: !!group }), reason: `ухожу от ${cover ? 'лучника за укрытие' : 'погони'} (враг в ${Math.round(gap)} бл.)` }, perch || cover || group || m.position)
+      fleePursuit(S, m, near, gap, ranged)
       continue
     }
     // Отход по миру (retreat.ts): начатый держится, пока мир его не кончит (догнал, оторвался, дошёл до своих, зажило),
@@ -110,12 +149,17 @@ export function pvpFlee(S: PvpPlan): void {
     const holds = !!held && retreatHolds(held, assessSwarmFight(m, was || [], team), { score: assessTeamFight(mine, was || []), allies, shelter: !!shelter, alone: group === 1 })
     const still = !!held && (unseen ? !!shelter && held.why !== 'рана' && held.why !== 'залп' && (held.why !== 'один' || holds) : holds)
     const wasTurned = held?.turned
-    const step = held && !assault ? retreatStep(m, held, enemies, { allies, group, still, blast: verdict.blast }) : 'end'
+    const catcher = held && !assault && retreatCatcher(board, m, held, enemies)
+    let step = held && !assault ? retreatStep(m, held, enemies, { allies, group, still, blast: verdict.blast, catcher: catcher?.id }) : 'end'
+    const freshWhy = !assault && (step === 'end' || step === 'turn' && risk.unsafe)
+      ? retreatWhy(m, risk, { ...verdict, contact: inContact(m, enemies, prevKind === 'fight', aggressive), caught: caughtBy(m, enemies), headstart: nearestGap(m, enemies) }) : null
+    // Догнавший мог сменить оружие или получить подкрепление. Тогда у разворота та же цена, что у нового боя.
+    if (step === 'turn' && (freshWhy === 'пустой размен' || freshWhy === 'рана')) step = 'end'
     if (held && (step === 'end' || step === 'turn' && !wasTurned) && process.env.ND_SWARM_TRACE) console.log(`[${new Date().toTimeString().slice(0, 8)}] 🔚 ${m.id}: ${held.why} → ${step}${assault ? ' (штурм)' : ''} still=${still} gap=${nearestGap(m, enemies).toFixed(1)} group=${group}/${held.group} allies=${allies} hp=${Math.round(ratio(m) * 100)}%${held.turned ? ' turned' : ''}`)
     if (held && step === 'end') { retreats.delete(m.id); held = undefined }
     // Догнали — бой с догнавшим сразу (иначе фаза раненых уводила его «в середину» спиной к нему; DeepSeek, ревью 21.10).
-    if (step === 'turn') { const catcher = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]; if (catcher) put(m, 'fight', { target: catcher.id, enemyPosition: catcher.position, turned: true }, catcher.position); continue }
-    const why = held?.why ?? (assault ? null : retreatWhy(m, risk, { ...verdict, contact: inContact(m, enemies, prevKind === 'fight', aggressive), caught: caughtBy(m, enemies), headstart: nearestGap(m, enemies) }))
+    if (step === 'turn' && catcher) { put(m, 'fight', { target: catcher.id, enemyPosition: catcher.position, turned: true }, catcher.position); continue }
+    const why = held?.why ?? freshWhy
     if (!why) continue
     // Враги отхода — те же, по кому вынесен приговор: группе — враги у любого из группы (groupVerdict), себе — в 16 бл.
     // (стенд 21.10: пустой размен начинался по 15 врагам группы, держался по четверым у бота — и кончался через секунду).

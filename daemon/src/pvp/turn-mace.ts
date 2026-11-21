@@ -181,7 +181,7 @@ export async function smashSetupTurn (ctx: DuelCtx, turn: TurnFrame) {
   turn.closing = (vel.x * (me.x - ctx.entity.position.x) + vel.z * (me.z - ctx.entity.position.z)) / Math.max(d, 0.1)
 
   turn.smashSetup = false
-  if (ctx.prof.player && !ctx.perch && !ctx.fort && !meInWeb && hp > 6 && mace.smashPlan(bot, ctx.entity)) {
+  if (ctx.prof.player && !ctx.perch && !ctx.fort && !meInWeb && hp > 6 && mace.smashPlan(bot, ctx.entity, { frame: turn, arena: ctx.arena, velocity: () => vel })) {
     const pinned = inWeb || busyFoe || theyEat || read.effectsOf(bot, ctx.entity).has('slowness')
     if (!pinned) {
       const webS = findItem(bot, i => i.name === 'cobweb')
@@ -207,12 +207,13 @@ export async function smashTurn (ctx: DuelCtx, turn: TurnFrame) {
     // а взлёт отменялся по любому его взмаху и натянутому луку — «не взлетаю» 31 раз за шесть раундов, удар с падения — дважды.
     const atMe = looksAtBody(bot, ctx.entity, 0.8)
     const hitSoon = atMe && ((theirR <= tempo.PLAYER_REACH && readyM < 2 * TICK_MS) || theyBow) || !!aimedCb || (duo.active() && duo.secondThreat())
-    const sp0 = hitSoon ? null : mace.smashPlan(bot, ctx.entity)
+    const probe = { frame: turn, arena: ctx.arena, velocity: () => ctx.track.vel() }
+    const sp0 = hitSoon ? null : mace.smashPlan(bot, ctx.entity, probe)
     // Взлёт с булавой — если граф (калькулятор: булава с падения против удара/топора/копья) его не отверг.
     const sp = sp0 && gate('smash') ? sp0 : null
-    if (hitSoon && ready('smashWaitNote') && mace.smashPlan(bot, ctx.entity)) { rest('smashWaitNote', 4000); used('булава: не взлетаю — его удар или выстрел собьёт взлёт') }
+    if (hitSoon && ready('smashWaitNote') && mace.smashPlan(bot, ctx.entity, probe)) { rest('smashWaitNote', 4000); used('булава: не взлетаю — его удар или выстрел собьёт взлёт') }
     // Булава и заряд есть, а взлёта нет — почему (smashCheck), раз в 4 с: отказ молчал, и взлётов за раунд было по одному.
-    else if (!sp0 && ready('smashWhyNote') && findItem(bot, i => i.name === 'mace')) { const why = mace.smashCheck?.(bot, ctx.entity)?.why; if (why) { rest('smashWhyNote', 4000); used('булава: не взлетаю — ' + why) } }
+    else if (!sp0 && ready('smashWhyNote') && findItem(bot, i => i.name === 'mace')) { const why = mace.smashCheck?.(bot, ctx.entity, probe)?.why; if (why) { rest('smashWhyNote', 4000); used('булава: не взлетаю — ' + why) } }
     // Нет заряда для взлёта — «Тягун» трезубцем вместо него (дождь/вода), удар булавой с падения.
     if (!sp0 && !hitSoon && (ctx as any).util?.riptideSmash) {
       if (guard) await guard.raise(false)

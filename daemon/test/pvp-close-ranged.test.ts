@@ -8,8 +8,10 @@ import combat = require('../src/combat')
 import bow = require('../src/bow')
 import pick = require('../src/pick')
 import * as tempo from '../src/tempo'
+import * as cover from '../src/pvp/archer-cover'
+import { native } from './parkour-fixture'
 
-function scene(t, { distance = 4.3, wallHeight = 1, hand = 'diamond_sword', screen = false, onTick = null }: any = {}) {
+function scene(t, { distance = 4.3, wallHeight = 1, hand = 'diamond_sword', screen = false, terrain = null, onTick = null }: any = {}) {
   const time = new clock.GameClock({ manual: true, epoch: 10000 }); clock.activate(time)
   t.mock.method(Math, 'random', () => .5)
   t.mock.method(console, 'log', () => {})
@@ -33,7 +35,7 @@ function scene(t, { distance = 4.3, wallHeight = 1, hand = 'diamond_sword', scre
     p = p.floored()
     const wall = p.x === 1 && p.y < (typeof wallHeight === 'function' ? wallHeight() : wallHeight) && Math.abs(p.z) <= 1
     const lowRoof = p.x === 0 && p.y === 2 && Math.abs(p.z) <= 1
-    const name = p.y < 0 ? 'stone' : wall || lowRoof ? 'bedrock' : (typeof screen === 'function' ? screen() : screen) && p.x === 2 && p.y === 1 ? 'glass' : 'air'
+    const name = terrain ? terrain(p) : p.y < 0 ? 'stone' : wall || lowRoof ? 'bedrock' : (typeof screen === 'function' ? screen() : screen) && p.x === 2 && p.y === 1 ? 'glass' : 'air'
     const b = Block.fromStateId(data.blocksByName[name].defaultState, 0); b.position = p; return b
   }
   bot.world = { getBlock: p => bot.blockAt(p), raycast(from, direction, length) {
@@ -111,6 +113,60 @@ test('actual PvP uses a clear close bow shot after a failed route leaves melee u
   assert.ok(out.draws > 0, 'the observed obstacle already makes the direct melee approach unavailable')
   assert.ok(out.result.arrows > 0, JSON.stringify({ arrows: out.result.arrows, draws: out.draws, paths: out.paths, tricks: out.result.tricks }))
   assert.ok(out.releases > 0, 'the real bow executor releases a natively confirmed charge')
+})
+
+test('solo fight runs behind a column when a visible loaded crossbow is aimed without an active draw', async t => {
+  for (const mode of ['aimed', 'offhand', 'empty', 'turned', 'hidden']) await t.test(mode, async t => {
+    let movedToCover = false, covered = false, hiddenReads = 0
+    const terrain = p => p.y < 0 || p.x === 3 && p.z === 2 && p.y < 3 || mode === 'hidden' && p.x === 6 && p.y < 4 ? 'stone' : 'air'
+    const f = scene(t, { distance: 13, hand: 'crossbow', terrain, onTick: ({ bot, foe, ctl, age }) => {
+      bot.physics.simulatePlayer(new native.PlayerState(bot, bot.controlState), bot.world).apply(bot)
+      assert.ok(Number.isFinite(bot.entity.position.x) && bot.entity.position.y > -1)
+      const delta = bot.entity.position.minus(foe.position)
+      foe.yaw = Math.atan2(-delta.x, -delta.z) + (mode === 'turned' ? Math.PI : 0)
+      if (movedToCover) covered = cover.archerCovered(bot, foe.position.offset(0, 1.62, 0))
+      if (covered) {
+        const eye = foe.position.offset(0, 1.62, 0)
+        for (const x of [-.29, .29]) for (const z of [-.29, .29]) {
+          const ray = bot.entity.position.offset(x, 1, z).minus(eye), length = ray.norm()
+          assert.ok(pick.blockOnRay(bot, eye, ray.scaled(1 / length), length), 'exposed corner ' + x + ',' + z)
+        }
+        t.diagnostic('Укрытие на тике ' + (age - 1000) + ', позиция ' + bot.entity.position)
+      }
+      if (covered || age > 1040) ctl.abort()
+    } })
+    const { bot, foe } = f
+    bot.physics = native.Physics(bot.registry, bot.world)
+    Object.assign(bot.controlState, { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false })
+    Object.assign(bot, { jumpTicks: 0, jumpQueued: false, fireworkRocketDuration: 0 })
+    bot.entity.attributes = {}; bot.inventory.slots[37] = bot.inventory.slots[38] = null
+    Object.assign(foe.equipment[0], { componentMap: mode === 'empty' ? new Map() :
+      new Map([['charged_projectiles', { data: { projectiles: [{ itemId: bot.registry.itemsByName.arrow.id, itemCount: 1 }] } }]]) })
+    if (mode === 'offhand') { foe.equipment[1] = foe.equipment[0]; foe.equipment[0] = { name: 'crossbow', componentMap: new Map() } }
+    if (mode === 'turned') foe.yaw += Math.PI
+    if (mode === 'hidden') Object.defineProperty(foe.equipment, 0, { get() { hiddenReads++; return null } })
+    const steer = cover.steerArcherCover
+    t.mock.method(cover, 'steerArcherCover', (body, plan) => {
+      const active = steer(body, plan)
+      if (active) movedToCover = true
+      return active
+    })
+    await f.run()
+    const threatened = mode === 'aimed' || mode === 'offhand'
+    assert.equal(movedToCover, threatened, 'use the public loaded model and barrel direction')
+    assert.equal(covered, threatened, 'native movement takes the entire body out of the observed shot line')
+    assert.equal(hiddenReads, 0, 'the opaque wall conceals the held item')
+  })
+})
+
+test('a visible head does not refresh a previously loaded crossbow hidden below the ledge', t => {
+  const { heldCrossbowInfo }: typeof import('../src/read') = require('../src/read')
+  const { bot, foe } = scene(t)
+  const visible = { ...foe, _ndGearVisible: [false, true], equipment: [] }
+  Object.defineProperty(visible.equipment, 0, { get() { assert.fail('the main hand is hidden') } })
+  assert.equal(heldCrossbowInfo(bot, visible), null)
+  visible.equipment[1] = { name: 'crossbow', componentMap: new Map([['charged_projectiles', { data: { projectiles: [{ name: 'unknown' }] } }]]) }
+  assert.ok(heldCrossbowInfo(bot, visible)?.loaded)
 })
 
 test('close bow keeps physical projectile clearance through a visible glass screen', async t => {
@@ -255,12 +311,12 @@ test('a real blocked approach selects the already clear close shot without aging
 function projectileTurn() {
   const me = new Vec3(0, 0, 0), projectile = { id: 10, position: new Vec3(8, 1, 0) }
   const ctx: any = { bot: { entity: { position: me, yaw: 0 }, entities: { 10: projectile } }, me, inc: [],
-    entity: { id: 2, position: new Vec3(8, 0, 0), yaw: Math.PI / 2 },
+    entity: { id: 2, position: new Vec3(8, 0, 0), yaw: Math.PI / 2, equipment: [{ name: 'crossbow' }] },
     prof: { player: true }, seesBody: true, r: 8, d: 8, FAR: 7, HIT_REACH: 2.9, now: 1000,
     dodgeKey: null, dodgeUntil: 0, dodgeLine: null, cbShieldUntil: 0, strafeKey: 'left', st: { dodges: 0 },
     sawRelease: () => false, stepSafe: () => true, keyDir: (_b, k) => k,
     threats: (require('../src/threats') as typeof import('../src/threats')), foe: { aimedAtMe: () => null },
-    read: { crossbowInfo: () => ({ loaded: false, piercing: false }) }, guard: { stats: { worn: true } },
+    read: require('../src/read'), guard: { stats: { worn: true } },
     ready: () => true, rest() {}, used() {} }
   const nativeDodge = ctx.threats.dodgeKey
   ctx.threats = { dodgeKey: nativeDodge }

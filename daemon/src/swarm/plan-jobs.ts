@@ -3,7 +3,7 @@
 import { aimingAt } from '../pvp/crowd'
 import type { SwarmPosition, SwarmMember, SharedEnemy, DigSite } from './types'
 import type { PvpPlan } from './plan-frame'
-import { distance, cellKey, count, ratio } from './common'
+import { distance, cellKey, count, ratio, bowScreenStep, buildBlock } from './common'
 import { shoveValue, SHOVE, type Edge } from './shove'
 import { MELEE_CAP } from './race'
 import { attackSeconds, digSeconds, dislodgeSeconds } from './dislodge'
@@ -55,37 +55,72 @@ export function pvpSectors(S: PvpPlan): void {
 }
 
 export function pvpGather(S: PvpPlan): void {
-  const { board, team, enemies, aggressive, options, weak } = S
+  const { team, enemies, aggressive, options, weak } = S
   // Работа на команду (пользователь 14.10: «блоков нет — слабых, необутанных отправить добывать песок, несколько, чтобы
   // быстрее; любая задача оценивается в число игроков, которые будут её решать»): цель наверху, лезущим не хватает блоков
   // (дефицит считает драйвер по их нуждам) — рабочих дефицит / 32, до 4; из слабых, кто дальше 10 бл. от врагов, ближние к
   // месту добычи. Добытое разносят передачи (нужды бойцов).
-  const gatherers = new Set(aggressive && options.gather && options.gather.deficit > 0
+  S.gatherers = new Set(aggressive && options.gather && options.gather.deficit > 0
     ? team.filter(m => weak(m) && enemies.every(e => distance(e.position, m.position) > 10)).sort((a, b) => distance(a.position, options.gather!.spot) - distance(b.position, options.gather!.spot))
       .slice(0, Math.min(4, Math.ceil(options.gather.deficit / 32))).map(m => m.id) : [])
-  // Охота (пользователь 14.10: бой должен кончаться): врагов не видно — к месту, где их видели последним (60 с), а там
-  // прочёсывать; лут — только тому, кому нечем драться.
-  // Последнее место врага — с его высотой (по ней прокоп к замуровавшемуся; высота своих уводила прокоп в пол) и на 3 мин.:
-  // человек в коробке сидит дольше минуты (пользователь 15.10: «уничтожение кемпера с поиском»).
-  // Место — самого свежего врага, а не середина нескольких (Codex 15.10: враги по бокам — середина под ботом, прокоп под себя).
-  if (enemies.length) board.recordFact(team[0].id, board.now(), { id: 'last-enemy', kind: 'mark', position: { ...[...enemies].sort((a, c) => c.seenAt - a.seenAt)[0].position } }, 180000)
-  const lastEnemy = enemies.length ? undefined : board.facts().find(f => f.id === 'last-enemy')
-  Object.assign(S, { gatherers, lastEnemy })
 }
 
 export function coverHurt(S: PvpPlan): void {
-  const { board, team, enemies, plan, aggressive, hurt, untouchable, meanStrength, spots, loads, put, weak } = S
+  const { team, enemies, plan, aggressive, hurt, untouchable, meanStrength, spots, loads, put, weak, outclassed } = S
+  const inSight = (e: SharedEnemy) => !e.nametag && !e.glowing && S.now - e.seenAt <= 500
   // Прижатый (враг в 4 бл., хп < 80 %) — тоже под прикрытие: в натиске раненым он не считается, и в углу его забивали в
   // одиночку (пользователь 25.10: «союзники прикрывать должны»).
-  const pinned = S.doctrine === 'line' ? [] : team.filter(m => !hurt.includes(m) && ratio(m) < .8 && enemies.some(e => !untouchable.has(e.id) && distance(e.position, m.position) <= 4))
+  const pinned = team.filter(m => !hurt.includes(m) && (ratio(m) < .8 || m.workingBlocks) && (m.bowAims?.length ||
+    (m.workingBlocks || S.doctrine !== 'line') && enemies.some(e => !untouchable.has(e.id) && inSight(e) && distance(e.position, m.position) <= 4))).sort((a, b) => ratio(a) - ratio(b))
   for (const ally of [...hurt, ...pinned]) {
-    const foe = enemies.filter(e => !untouchable.has(e.id) && (aimingAt({ name: e.id, p: e.position, v: e.velocity }, { name: ally.id, p: ally.position }) || distance(e.position, ally.position) < 12)).sort((a, b) => distance(a.position, ally.position) - distance(b.position, ally.position))[0]
+    let foe: SharedEnemy | undefined, bestRank = Infinity, bestGap = Infinity
+    for (const e of enemies) {
+      if (untouchable.has(e.id)) continue
+      const gap = distance(e.position, ally.position), visible = inSight(e)
+      const pursuing = visible && aimingAt({ name: e.id, p: e.position, v: e.velocity }, { name: ally.id, p: ally.position })
+      if (!pursuing && gap >= 12) continue
+      // Прикрывать от того, кто уже в контакте или бежит к раненому. Последнее место годится для поиска.
+      const rank = pursuing ? 0 : visible ? 1 : 2
+      if (rank < bestRank || rank === bestRank && gap < bestGap) { foe = e; bestRank = rank; bestGap = gap }
+    }
+    let screen: SwarmMember | undefined
+    let coverWall = false
+    if (ally.bowAims?.length && (!foe || !inSight(foe) || bestGap > 4)) {
+      const bows = ally.bowAims.flatMap(aim => {
+        const archer = enemies.find(e => e.id === aim.name && !untouchable.has(e.id) && inSight(e))
+        return archer ? [{ aim, archer }] : []
+      })
+      let stepDistance = Infinity
+      for (const { aim, archer } of bows) for (const m of team) {
+        if (m === ally || m.offHand !== 'shield' || m.workingBlocks || plan.has(m.id)) continue
+        const spot = bowScreenStep(m.position, ally.position, aim.at)
+        if (!spot) continue
+        const walk = distance(m.position, spot)
+        if (walk < stepDistance && S.options.canCoverShield?.(m, ally, aim) !== false &&
+            !enemies.some(e => inSight(e) && distance(m.position, e.position) <= 4)) {
+          screen = m; foe = archer; stepDistance = walk
+        }
+      }
+      if (!screen && bows.length) {
+        const builders = team.filter(m => m.id !== ally.id && !m.workingBlocks && !plan.has(m.id) && distance(m.position, ally.position) <= 3 && buildBlock(m) &&
+          !enemies.some(e => inSight(e) && distance(m.position, e.position) <= 4))
+          .sort((a, b) => distance(a.position, ally.position) - distance(b.position, ally.position))
+        for (const builder of builders) {
+          const bow = bows.find(({ aim }) => S.options.canCoverWall?.(builder, ally, aim) !== false)
+          if (bow) { screen = builder; foe = bow.archer; coverWall = true; break }
+        }
+      }
+    }
     // Защитник — другой: сам себе прикрытием он не бывает (Kimi AUDIT 27.10: «31v → 31i для 31v #cover»); свой бой
     // без защитника решает общая оценка, без метки cover.
-    const guard = foe && team.filter(m => m.id !== ally.id && !plan.has(m.id) && !(aggressive && weak(m))).sort((a, b) => (b.strength / meanStrength) * 6 - distance(b.position, ally.position) - ((a.strength / meanStrength) * 6 - distance(a.position, ally.position)))[0]
+    const guardValue = (m: SwarmMember) => (m.strength / meanStrength) * 6 - distance(m.position, ally.position)
+    const exposedWorker = ally.workingBlocks && !hurt.includes(ally) && ratio(ally) >= .8
+    const guard = screen || foe && team.filter(m => m.id !== ally.id && !m.workingBlocks && !plan.has(m.id) && !(aggressive && weak(m)) &&
+      (!exposedWorker || inSight(foe) && bestGap <= 4 && distance(m.position, foe.position) <= 4.5))
+      .sort((a, b) => guardValue(b) - guardValue(a)).find(m => !outclassed(m, foe))
     if (guard && foe) {
-      const search = board.now() - foe.seenAt > 500
-      put(guard, search ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, cover: ally.id, search }, search ? foe.position : spots.get(guard.id))
+      const search = !screen && !inSight(foe)
+      put(guard, search ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, cover: ally.id, search, ...(screen && (coverWall ? { coverWall: true } : { coverShield: true })), ...(search ? { searchEnemy: foe.id, searchSeenAt: foe.seenAt } : {}) }, search ? foe.position : spots.get(guard.id))
       loads.set(foe.id, (loads.get(foe.id) || 0) + guard.strength / meanStrength)
     }
   }
@@ -166,7 +201,7 @@ export function pvpDiggers(S: PvpPlan): void {
       const old = was.get(m.id), job = jobs.find(j => j.undermine && j.foe.id === old?.data?.target)
       const site = job?.sites.find(s => cellKey(s) === cellKey(old!.position!))
       const stand = old?.data?.stands?.find(q => (site as any)?.stands?.some(t => cellKey(q) === cellKey(t)) && canDigTrap(q, site!) && !clearedTop.some(s => under(q, s)))
-      if (site && stand && !plan.has(m.id) && !job!.guards.has(m.id) && pickTier(m) >= ((site as any).tier || 0)) reserved.set(m.id, { site, stand })
+      if (site && stand && (S.confirmed(job!.foe.id) || S.witnesses.get(job!.foe.id)?.has(m.id)) && !plan.has(m.id) && !job!.guards.has(m.id) && pickTier(m) >= ((site as any).tier || 0)) reserved.set(m.id, { site, stand })
     }
     const freeStand = (q: SwarmPosition, id: string) => !clearedTop.some(s => under(q, s)) && !taken.some(t => underDig(q, t)) && !stands.some(t => distance(q, t) < .6) &&
       ![...reserved].some(([who, r]) => underDig(q, r.site) || who !== id && distance(q, r.stand) < .6) && ![...vacate].some(([who, t]) => who !== id && distance(q, t) < .6)
@@ -178,7 +213,7 @@ export function pvpDiggers(S: PvpPlan): void {
     for (const pass of passes) for (let round = 0; round < (!pass.demolition && pass.jobs.length > 1 ? 2 : pass.limit); round++) for (const { foe, sites, deadly, undermine, guards } of pass.jobs) {
       if (diggers.size >= pass.limit) break
       // Обычную яму копаем с места вне контакта; смертельную при сбросе — и с подходом на проверенную стойку.
-      const pool = team.filter(m => !plan.has(m.id) && !diggers.has(m.id) && (undermine ? pickTier(m) > 0 && !guards.has(m.id) : (was.has(m.id) || !weak(m)) && enemies.every(e => distance(e.position, m.position) > 3.5)))
+      const pool = team.filter(m => (S.confirmed(foe.id) || S.witnesses.get(foe.id)?.has(m.id)) && !plan.has(m.id) && !diggers.has(m.id) && (undermine ? pickTier(m) > 0 && !guards.has(m.id) : (was.has(m.id) || !weak(m)) && enemies.every(e => distance(e.position, m.position) > 3.5)))
         .sort((a, b) => Number(was.get(b.id)?.data?.target === foe.id) - Number(was.get(a.id)?.data?.target === foe.id) || pickTier(b) - pickTier(a) || distance(a.position, foe.position) - distance(b.position, foe.position))
       for (const m of pool) {
         // Без кирки — руками (песчаник 0.8: 4 с на блок, яма в два — 8 с): кирки первыми, но яма не ждёт кирку. Обсидиан

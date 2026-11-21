@@ -5,6 +5,15 @@ import { swarmMoves } from './swarm/swarm-driver/moves'
 import { swarmPosition } from './swarm/swarm-driver/position'
 import { swarmTurn } from './swarm/swarm-driver/turn'
 import { withinArena } from '../daemon/src/navigation/parkour/model'
+import { executeJump, navigate } from '../daemon/src/navigation/parkour'
+import { drive, worldOf } from '../daemon/test/parkour-fixture'
+import { once, EventEmitter } from 'node:events'
+import { WebSocketServer } from '../daemon/node_modules/ws'
+import { attachClients } from '../daemon/src/rpc/server'
+import { intentMethods } from '../daemon/src/rpc/intents'
+import { goto } from '../daemon/src/session/goto'
+import { client } from './arena/fleet'
+import { installSight } from './arena/watch'
 
 const start = { x: 628.8202165818514, y: 120, z: 576.5580213039 }
 const arena = { x: 600.5, y: 120, z: 600.5, r: 80, killY: 113, ellipse: { a: 77, b: 65 } }
@@ -51,6 +60,63 @@ function fixture(at = start, enemies = threats) {
   return { b, sw, calls, pos, context, turn: swarmTurn(sw) }
 }
 
+test('native goto admission reaches a pressured looter through the arena WebSocket without admitting an unsafe target', async t => {
+  const f = fixture(), target = { x: 621.3654609622405, y: 120, z: 573.6551574331888 }
+  const bounds = f.sw.lootArena(f.b), { bot: body } = worldOf([])
+  body.entity.position.set(start.x, start.y, start.z)
+  assert.equal(withinArena(body, target, arena), true)
+  assert.equal(withinArena(body, target, bounds), false)
+  const escapes: any[] = [], admissions: string[] = []
+  let fault = false, afterStart = false
+  const session: any = {
+    require: () => { if (fault) throw new Error('goto target is outside arena bounds'); return body },
+    goto(p) { return goto.call(this, p) },
+    runIntent(name) {
+      admissions.push(name)
+      return Promise.resolve(afterStart ? { status: 'failed', code: 'ARENA_BOUNDARY', error: 'next physical step leaves arena bounds' } : { status: 'done' })
+    },
+    flee: async p => { escapes.push(p); return { status: 'done' } }
+  }
+  const gameClock = { changes: new EventEmitter(), wall: { setInterval: () => 0, clearInterval() {} }, snapshot: () => ({}) }
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+  t.after(() => new Promise<void>(resolve => { for (const ws of server.clients) ws.terminate(); server.close(() => resolve()) }))
+  attachClients(server, { session, gameClock, methods: intentMethods({ session } as any), state: { dangerWatch: null }, log() {} })
+  await once(server, 'listening')
+  const rpc = client(`ws://127.0.0.1:${(server.address() as { port: number }).port}`)
+  await rpc.ready
+  f.b.c = { call: rpc.call.bind(rpc) }
+  installSight({ i: 31, bots: [f.b], names: ['A'], pos: f.pos, round: 1, X: 600, Y: 120, Z: 600, R: 80,
+    alive: () => true, humans: {}, log() {} } as any)
+  await assert.rejects(rpc.call('goto', { ...target, arena: bounds }), { code: 'ARENA_BOUNDARY', notStarted: true })
+  const refused = await f.sw.go(f.b, target, 2, 4, bounds)
+  assert.deepEqual([refused.status, refused.code, refused.notStarted], ['failed', 'ARENA_BOUNDARY', true])
+  assert.deepEqual(admissions, [])
+  assert.deepEqual(escapes.map(e => e.from), [['nearest', 'second']])
+  assert.deepEqual(escapes[0].arena.avoid, bounds.avoid)
+  const shield = { round: 1, m: 'swarm_hold', pending: true, p: { shield: true } }
+  f.b.last = shield
+  await f.sw.go(f.b, target, 2, 4, bounds)
+  assert.equal(f.b.last, shield, 'a preflight rejection leaves the active native action in charge')
+  assert.equal(escapes.length, 1)
+  shield.pending = false
+  const below = await f.sw.go(f.b, { ...target, y: arena.killY }, 2, 4, arena)
+  assert.equal(below.notStarted, true)
+  assert.deepEqual(admissions, []); assert.equal(escapes.length, 1)
+  fault = true
+  await assert.rejects(f.sw.go(f.b, target, 2, 4, bounds), e => e instanceof Error && e.message === 'goto target is outside arena bounds' && !('code' in e))
+  assert.equal(escapes.length, 1)
+  fault = false
+  f.context.board.enemies = () => []
+  assert.equal((await f.sw.go(f.b, target, 2, 4, bounds)).notStarted, true)
+  assert.equal(escapes.length, 1, 'an expired report cannot cause a flee without a remembered pursuer')
+  f.context.board.enemies = () => threats.slice(0, 1)
+  assert.equal((await f.sw.go(f.b, target)).status, 'done', 'the second foe left the public report')
+  afterStart = true
+  const stopped = await rpc.call('goto', { ...target, arena })
+  assert.equal(stopped.code, 'ARENA_BOUNDARY'); assert.equal(stopped.notStarted, undefined)
+  assert.deepEqual(admissions, ['goto', 'goto'])
+})
+
 test('captured loot retreat avoids both threats instead of repeating the same rejected away point', async () => {
   const f = fixture(), oldTarget = { x: 621.3654609622405, y: 120, z: 573.6551574331888 }
   assert.equal(withinArena(f.b, oldTarget, f.sw.lootArena(f.b)), false, 'match G: away from nearest enters the second exclusion')
@@ -96,6 +162,112 @@ test('a rejected search route uses existing badSpots until the actor moves', asy
   } }).search
   for (let i = 0; i < 12; i++) await search(f.b, f.context)
   assert.ok(targets.size > 1 && targets.size <= 8)
+})
+
+test('a scout on a short gallery can search a visible step after all eight long approaches fail', async () => {
+  const origin = { x: 600.5, y: 120, z: 600.5 }, f = fixture(origin, [])
+  const { bot, world } = worldOf([[600,119,600,'stone'], [601,119,600,'stone'], [602,119,600,'stone'], [603,120,600,'stone']])
+  bot.entity.position.set(origin.x, origin.y, origin.z)
+  drive(bot, world)
+  let failures = 0, scans = 0, reached = false
+  f.b.c.call = async (method, p) => {
+    assert.equal(method, 'parkour'); assert.equal(p.mode, 'options'); scans++
+    return { status: 'done', detail: await navigate(bot, { aborted: false }, p) }
+  }
+  const search = swarmPosition({ ...f.sw, go: async (_b, at, range, _sec, limits) => {
+    if (Math.hypot(at.x - origin.x, at.z - origin.z) > 5) { failures++; return { status: 'failed' } }
+    assert.equal(at.y, 121)
+    const move = await executeJump(bot, { aborted: false }, at, { allowWalk: true, maxFallDamage: 0, arena: limits })
+    assert.equal(move.ok, true, move.why)
+    reached = bot.entity.position.distanceTo(at) <= range
+    f.pos.A.p = { ...bot.entity.position }
+    return { status: 'done', detail: { arrived: f.pos.A.p } }
+  } }).search
+  for (let n = 0; n < 9; n++) await search(f.b, f.context)
+  assert.equal(failures, 8)
+  assert.equal(scans, 1)
+  assert.equal(reached, true)
+})
+
+test('losing the scout RPC before movement leaves the same sector available', async () => {
+  const f = fixture(start, []), targets = []
+  const search = swarmPosition({ ...f.sw, go: async (_b, at) => {
+    targets.push(at)
+    if (targets.length === 1) throw new Error('disconnected')
+    if (targets.length === 2) return { status: 'failed', notStarted: true }
+    return { status: 'done', detail: { arrived: at } }
+  } }).search
+  await search(f.b, f.context); await search(f.b, f.context)
+  assert.equal(await search(f.b, f.context), true)
+  assert.deepEqual(targets, [targets[0], targets[0], targets[0]])
+})
+
+test('a temporarily blocked visible step can be tried again from the same gallery', async () => {
+  const origin = { x: 600.5, y: 120, z: 600.5 }, f = fixture(origin, [])
+  const step = { ...origin, x: 603.5, y: 121 }
+  let time = 1000, scans = 0, attempts = 0
+  f.b.c.call = async () => {
+    scans++
+    return { status: 'done', detail: { options: [{ target: step }] } }
+  }
+  const search = swarmPosition({ ...f.sw, now: () => time, go: async (_b, at) => {
+    if (at.y !== step.y || ++attempts === 1) return { status: 'failed' }
+    return { status: 'done', detail: { arrived: at } }
+  } }).search
+  for (let n = 0; n < 9; n++) await search(f.b, f.context)
+  await search(f.b, f.context)
+  assert.deepEqual([scans, attempts], [1, 1])
+  time += 4000
+  assert.equal(await search(f.b, f.context), true)
+  assert.deepEqual([scans, attempts], [2, 2])
+})
+
+test('a local search discards a delayed lookout after a new order and bounds scans of a closed gallery', async () => {
+  const origin = { x: 600, y: 120, z: 600 }, f = fixture(origin, [])
+  let time = 1000, scans = 0, walks = 0, answer
+  f.b.c.call = async () => { scans++; return new Promise(resolve => { answer = resolve }) }
+  const search = swarmPosition({ ...f.sw, now: () => time, go: async () => { walks++; return { status: 'failed' } } }).search
+  for (let n = 0; n < 8; n++) await search(f.b, f.context)
+  const pending = search(f.b, f.context)
+  assert.equal(scans, 1)
+  f.b.swarmTask = { kind: 'flee', data: { panic: true } }
+  answer({ status: 'done', detail: { options: [{ target: { ...origin, x: 603, y: 121 } }] } })
+  await pending
+  assert.equal(walks, 8)
+  f.b.swarmTask = f.context.task
+  await search(f.b, f.context)
+  assert.equal(scans, 1)
+  time += 4000
+  const next = search(f.b, f.context)
+  answer({ status: 'done', detail: { options: [{ target: { ...origin, x: 604, y: 112 } }] } })
+  await next
+  assert.equal(scans, 2)
+  assert.equal(walks, 8, 'a point reported below the death plane stays ineligible')
+})
+
+test('scouts split pending paths and release unvisited ground to a different approach', async () => {
+  const origin = { x: 600, y: 120, z: 600 }, f = fixture(origin, [])
+  const scouts = ['A', 'B', 'C'].map(name => ({ name, team: 'blue' }))
+  const pending = new Map<string, (reply: any) => void>(), goals = new Map<string, typeof origin>()
+  const sw = { ...f.sw, go: async (b, at) => {
+    goals.set(b.name, at)
+    return new Promise(resolve => pending.set(b.name, resolve))
+  } }
+  const search = swarmPosition(sw).search
+  const start = (b, y = 120) => {
+    sw.pos[b.name] = { p: { ...origin, y }, inv: {}, hp: 20 }
+    return search(b, { members: [{ id: b.name }] })
+  }
+  const a = start(scouts[0]), b = start(scouts[1])
+  assert.notDeepEqual(goals.get('A'), goals.get('B'), 'the first sweep is still underway')
+  pending.get('A')!({ status: 'failed', detail: {} }); await a
+  const c = start(scouts[2])
+  assert.deepEqual(goals.get('C'), goals.get('A'), 'A never got there, B is still searching its own sector')
+  for (const name of ['B', 'C']) pending.get(name)!({ status: 'done', detail: { arrived: goals.get(name) } })
+  await Promise.all([b, c])
+  const upper = start(scouts[2], 128)
+  assert.deepEqual(goals.get('C'), { ...goals.get('A'), y: 128 }, 'the gallery above the inspected floor is unexplored')
+  pending.get('C')!({ status: 'done', detail: { arrived: goals.get('C') } }); await upper
 })
 
 test('all captured exclusions hand off to the existing risk-based body escape without losing loot ownership', async () => {

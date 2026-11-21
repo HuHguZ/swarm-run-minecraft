@@ -4,10 +4,13 @@ import { bodyClear, dimensions, groundedHazardClear, standPositions, supportAt, 
 import { detour } from '../shape-detour'
 import { hasFallMitigation, landingDamage } from '../landing'
 import { onClimbable, climbColumn } from '../support-route'
-import { worldOf, simulator, geometryOf, PlayerState, controls, fallBudget, chainApex, flat, clone, withinArena, onTarget, rest, reboundApex } from './model'
+import { worldOf, simulator, geometryOf, PlayerState, controls, fallBudget, chainApex, flat, clone, withinArena, onTarget, rest, reboundApex, visibleLanding } from './model'
 import type { MovementBot, JumpOptions, JumpPlan, Step, State, PlanningDiagnostics, Cancellation } from './model'
 
-function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world: ReturnType<typeof worldOf>, route: ReturnType<typeof detour>): Generator<void, JumpPlan | null> {
+export const LOCAL_JUMP_REACH = 6
+
+type DirectOptions = JumpOptions & { firstRunway?: Generator<void, JumpPlan | null>; forecastTarget?: Point }
+function* directSearch(bot: MovementBot, target: Point, opts: DirectOptions, world: ReturnType<typeof worldOf>, route: ReturnType<typeof detour>): Generator<void, JumpPlan | null> {
   const sim = simulator(bot); const geometry = geometryOf(bot, world)
   const base = new PlayerState(bot, controls()); let slice = performance.now() + .25
   const budget = fallBudget(bot, opts.maxFallDamage)
@@ -75,7 +78,22 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
   const runups = extended ? [0, 2, 4, 6, 1, 3, 5, 7, 8, 10] : [0, 2, 4, 6]
   const nearEdge = [Math.max(0, edgeRunup - 1), edgeRunup]
   const orderedRunups = opts.bounce ? [...new Set([...nearEdge, ...runups])] : runups
-  for (const jump of opts.bounce ? [true, false].filter(jump => springLaunch.includes(jump)) : launches) for (const runup of jump ? orderedRunups : [0]) for (const sprint of opts.bounce || powderPath ? [true, false] : [false, true]) for (const airSprint of extended ? opts.bounce ? [true, false] : [false, true] : [false]) for (const coast of extended ? opts.bounce ? [0, 2, 4, 6, 8, 1] : [2, 4, 6, 8, 0, 1] : [2, 4, 6, 8]) {
+  const airSprints = extended ? opts.bounce ? [true, false] : [false, true] : [false]
+  const coasts = extended ? opts.bounce ? [0, 2, 4, 6, 8, 1] : [2, 4, 6, 8, 0, 1] : [2, 4, 6, 8]
+  const allCoasts = [coasts]
+  // Try each immediate launch speed before further braking profiles. A distant
+  // rising gap can justify gaining momentum on a visible runway behind the bot.
+  const standingCoasts = opts.firstRunway && opts.sprint !== false && (bot.food ?? 20) > 6 && extended && !contact && !powderPath
+    && target.y > base.pos.y + (bot.physics.stepHeight ?? 0) ? [[coasts[0]], coasts.slice(1)] : allCoasts
+  let firstRunway = opts.firstRunway
+  for (const jump of opts.bounce ? [true, false].filter(jump => springLaunch.includes(jump)) : launches) for (const runup of jump ? orderedRunups : [0])
+  for (const group of runup ? allCoasts : standingCoasts) for (const sprint of opts.bounce || powderPath ? [true, false] : [false, true])
+  for (const airSprint of sprint ? airSprints : [false]) for (const coast of group) {
+    if (firstRunway && group === standingCoasts[1]) {
+      const runway = yield* firstRunway
+      firstRunway = undefined
+      if (runway) return runway
+    }
     if (opts.diagnostics) opts.diagnostics.profiles++
     if (sprint && (opts.sprint === false || (bot.food ?? 20) <= 6)) continue
     const state = clone(base); const steps: Step[] = []; const states: State[] = []
@@ -99,8 +117,8 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
       const step = { yaw, control: controls({ forward: Math.hypot(dx, dz) > .025, sprint: sprint && (!airborne || airSprint) && !settled && !damping, sneak: settledOutside || damping,
         jump: jump && tick === runup || !!opts.climb && onClimbable(geometry, state.pos) }) }
       const previous = state.pos.clone(); state.yaw = yaw; state.control = step.control; sim(state, world)
-      noteForecast(opts.diagnostics, state, target)
-      if (!withinArena(bot, state.pos, opts.arena)) break
+      noteForecast(opts.diagnostics, state, opts.forecastTarget ?? target)
+      if (!withinArena(bot, state.pos, opts.arena, previous)) break
       airborne ||= !state.onGround; fallDistance += Math.max(0, previous.y - state.pos.y)
       if (opts.climb && onClimbable(geometry, state.pos)) { contacted = true; fallDistance = 0 }
       // LivingEntity.handleOnClimbable and Entity.makeStuckInBlock reset the fall.
@@ -160,11 +178,11 @@ function* directSearch(bot: MovementBot, target: Point, opts: JumpOptions, world
   return quickest
 }
 
-function* momentumSearch(bot: MovementBot, target: Point, opts: JumpOptions, world: ReturnType<typeof worldOf>): Generator<void, JumpPlan | null> {
+function* momentumRunways(bot: MovementBot, target: Point, opts: JumpOptions, world: ReturnType<typeof worldOf>): Generator<void, Vec3[]> {
   const base = new PlayerState(bot, controls()); const span = flat(base.pos, target)
-  if (!opts.allowWalk || opts.bounce || opts.climb || opts.sprint === false || (bot.food ?? 20) <= 6 || target.y <= base.pos.y + .2 || span < 3) return null
-  const geometry = geometryOf(bot, world); const sim = simulator(bot); const targetSupport = supportAt(geometry, target, .04)
-  if (!targetSupport) return null
+  if (!opts.allowWalk || opts.bounce || opts.climb || opts.sprint === false || (bot.food ?? 20) <= 6 || target.y <= base.pos.y + .2 || span < 3) return []
+  const geometry = geometryOf(bot, world)
+  if (!visibleLanding(bot, target, geometry)) return []
   // Stopping on every floor center discards momentum. A loaded, supported
   // runway may instead earn two native jumps in one forecast; only the final
   // requested landing must stop. Never invent the intermediate velocity.
@@ -173,21 +191,27 @@ function* momentumSearch(bot: MovementBot, target: Point, opts: JumpOptions, wor
     if (performance.now() >= slice) { yield; slice = performance.now() + .25 }
     for (const at of standPositions(geometry, { x: Math.floor(base.pos.x) + dx, y: base.pos.y, z: Math.floor(base.pos.z) + dz }, { rise: .03, drop: .03 })) {
       const distance = flat(base.pos, at)
-      if (distance < 1 || distance > 3.5 || flat(at, target) < span + .75) continue
+      if (distance < 1 || distance > 3.5 || flat(at, target) < span + .75 || !withinArena(bot, at, opts.arena, base.pos)) continue
       let connected = true
       for (let i = 1, count = Math.ceil(distance * 4); connected && i <= count; i++) {
         const t = i / count; const p = new Vec3(base.pos.x + (at.x - base.pos.x) * t, base.pos.y, base.pos.z + (at.z - base.pos.z) * t)
         connected = !!supportAt(geometry, p, .04) && bodyClear(geometry, p)
       }
-      if (connected) runways.push(at)
+      if (connected && visibleLanding(bot, at, geometry)) runways.push(at)
     }
   }
-  runways.sort((a, b) => flat(b, target) - flat(a, target))
+  return runways.sort((a, b) => flat(b, target) - flat(a, target)).slice(0, 3)
+}
+
+function* momentumSearch(bot: MovementBot, target: Point, opts: JumpOptions, world: ReturnType<typeof worldOf>, runways: Vec3[]): Generator<void, JumpPlan | null> {
+  if (!runways.length) return null
+  const base = new PlayerState(bot, controls()), geometry = geometryOf(bot, world), sim = simulator(bot)
+  const targetSupport = supportAt(geometry, target, .04)
+  if (!targetSupport) return null
+  let slice = performance.now() + .25
   const { half } = dimensions(geometry); const box = targetSupport.box
-  for (const runway of runways.slice(0, 3)) {
-    const approachStats: PlanningDiagnostics | undefined = opts.diagnostics ? { frames: 0, profiles: 0 } : undefined
-    const approach = yield* directSearch(bot, runway, { ...opts, allowWalk: true, diagnostics: approachStats }, world, detour(geometry, base.pos, runway))
-    if (opts.diagnostics && approachStats) { opts.diagnostics.frames += approachStats.frames; opts.diagnostics.profiles += approachStats.profiles }
+  for (const runway of runways) {
+    const approach = yield* directSearch(bot, runway, { ...opts, forecastTarget: target }, world, detour(geometry, base.pos, runway))
     if (!approach) continue
     const initial = approach.states[approach.states.length - 1]
     // Aim for the exposed part of the real support first, then center while
@@ -196,41 +220,60 @@ function* momentumSearch(bot: MovementBot, target: Point, opts: JumpOptions, wor
     const entry = new Vec3(clamp(initial.pos.x, box.minX - half + .15, box.maxX + half - .15), target.y,
       clamp(initial.pos.z, box.minZ - half + .15, box.maxZ + half - .15))
     if (!bodyClear(geometry, entry) || !supportAt(geometry, entry, .04)) continue
-    for (const runup of [0, 1, 2, 4]) for (const firstCoast of [0, 2, 4]) for (const coast of [0, 2, 4]) {
-      if (opts.diagnostics) opts.diagnostics.profiles++
-      const state = clone(initial); const steps: Step[] = [...approach.steps]; const states: State[] = [...approach.states]
-      let airborne = false; let contacted = false; let secondAir = false; let jumpNext = false; let fallDistance = 0; let contact: Point | undefined; let contactTick = -1
-      const maxTicks = Math.min(90, (opts.maxTicks ?? 38) * 2)
-      for (let tick = 0; steps.length < maxTicks; tick++) {
-        if (performance.now() >= slice) { yield; slice = performance.now() + .25 }
-        const centered = contacted && secondAir && state.onGround && Math.abs(state.pos.y - target.y) < .03
-        const waypoint = centered ? target : entry; const braking = centered ? 1 : contacted ? coast : firstCoast
-        const dx = waypoint.x - state.pos.x - state.vel.x * braking; const dz = waypoint.z - state.pos.z - state.vel.z * braking
-        const step = { yaw: Math.atan2(-dx, -dz), control: controls({ forward: Math.hypot(dx, dz) > .025, sprint: !centered, sneak: centered, jump: jumpNext || tick === runup }) }
-        jumpNext = false; const previous = state.pos.clone(); state.yaw = step.yaw; state.control = step.control; sim(state, world)
-        noteForecast(opts.diagnostics, state, target); airborne ||= !state.onGround
-        if (!withinArena(bot, state.pos, opts.arena)) break
-        fallDistance += Math.max(0, previous.y - state.pos.y)
-        if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < base.pos.y - .4 || !bodyClear(geometry, state.pos, { web: opts.web, powder: true, from: previous }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
-        if (state.onGround && state.vel.y <= 0) {
-          // Native SELF movement clips Y before horizontal travel. Its real
-          // contact can carry the body past the edge in that same tick; verify
-          // the collided floor under the previous footprint as well.
-          const support = supportAt(geometry, state.pos, .04) ?? supportAt(geometry, previous, Math.max(.04, previous.y - state.pos.y + .03))
-          if (!support || Math.abs(support.top - state.pos.y) > .03 || landingDamage(support.block, fallDistance, bot.entity.attributes) > 0) break
-          if (!contacted && airborne && state.isCollidedVertically && Math.abs(state.pos.y - initial.pos.y) < .03) { contacted = true; jumpNext = true; contact = { ...state.pos }; contactTick = steps.length }
-          else if (contacted && secondAir && Math.abs(state.pos.y - target.y) > .03) break
-          fallDistance = 0
-        }
-        if (contacted && !state.onGround) secondAir = true
-        steps.push(step); states.push(clone(state))
-        if (secondAir && state.vel.y <= 0 && onTarget(geometry, state, target, opts.tolerance ?? .22)) {
-          const stopping = rest(bot, state, world, opts.tolerance ?? .22, target, opts.arena)
-          if (stopping) {
-            if (opts.diagnostics && contact) opts.diagnostics.momentum = { runway: { ...initial.pos }, entry: { ...entry }, contact, contactTick }
-            return { steps: [...steps, ...stopping.steps], states: [...states, ...stopping.states], target: { ...target }, ticks: steps.length + stopping.steps.length }
+    // The first jump needs to carry speed into its landing. Try its launch
+    // delays at full forward input before steering against that velocity.
+    for (const firstCoast of [0, 2, 4]) for (const runup of [0, 1, 2, 4]) {
+      // All three continuations use identical controls until the first real floor collision.
+      let firstLanding: Pick<JumpPlan, 'steps' | 'states'> | undefined
+      for (const coast of [0, 2, 4]) {
+        if (opts.diagnostics) opts.diagnostics.profiles++
+        const source = firstLanding ?? approach
+        const state = clone(source.states[source.states.length - 1])
+        const steps = source.steps.slice(), states = source.states.slice()
+        let airborne = false, contacted = !!firstLanding, jumpNext = contacted, secondAir = false, fallDistance = 0
+        const maxTicks = Math.min(90, (opts.maxTicks ?? 38) * 2)
+        for (let tick = steps.length - approach.steps.length; steps.length < maxTicks; tick++) {
+          if (performance.now() >= slice) { yield; slice = performance.now() + .25 }
+          const centered = contacted && secondAir && state.onGround && Math.abs(state.pos.y - target.y) < .03
+          const waypoint = centered ? target : entry; const braking = centered ? 1 : contacted ? coast : firstCoast
+          const dx = waypoint.x - state.pos.x - state.vel.x * braking; const dz = waypoint.z - state.pos.z - state.vel.z * braking
+          const step = { yaw: Math.atan2(-dx, -dz), control: controls({ forward: Math.hypot(dx, dz) > .025, sprint: !centered, sneak: centered, jump: jumpNext || tick === runup }) }
+          jumpNext = false; const previous = state.pos.clone(); state.yaw = step.yaw; state.control = step.control; sim(state, world)
+          noteForecast(opts.diagnostics, state, target); airborne ||= !state.onGround
+          if (!withinArena(bot, state.pos, opts.arena, previous)) break
+          fallDistance += Math.max(0, previous.y - state.pos.y)
+          if (state.isInLava || state.isInWater || !opts.web && state.isInWeb || state.pos.y < base.pos.y - .4 || !bodyClear(geometry, state.pos, { web: opts.web, powder: true, from: previous }) || !groundedHazardClear(geometry, state.pos, state.vel.y, state.onGround)) break
+          if (state.onGround && state.vel.y <= 0) {
+            // Native SELF movement clips Y before horizontal travel. Its real
+            // contact can carry the body past the edge in that same tick; verify
+            // the collided floor under the previous footprint as well.
+            const support = supportAt(geometry, state.pos, .04) ?? supportAt(geometry, previous, Math.max(.04, previous.y - state.pos.y + .03))
+            if (!support || Math.abs(support.top - state.pos.y) > .03 || landingDamage(support.block, fallDistance, bot.entity.attributes) > 0) break
+            if (!contacted && airborne && state.isCollidedVertically && Math.abs(state.pos.y - initial.pos.y) < .03) {
+              const floor = support.box
+              const touch = new Vec3(clamp(state.pos.x, floor.minX + 1e-4, floor.maxX - 1e-4), support.top,
+                clamp(state.pos.z, floor.minZ + 1e-4, floor.maxZ - 1e-4))
+              if (!visibleLanding(bot, touch, geometry)) break
+              contacted = true; jumpNext = true
+            }
+            else if (contacted && secondAir && Math.abs(state.pos.y - target.y) > .03) break
+            fallDistance = 0
+          }
+          if (contacted && !state.onGround) secondAir = true
+          steps.push(step); states.push(clone(state))
+          if (contacted && !firstLanding) firstLanding = { steps: steps.slice(), states: states.slice() }
+          if (secondAir && state.vel.y <= 0 && onTarget(geometry, state, target, opts.tolerance ?? .22)) {
+            const stopping = rest(bot, state, world, opts.tolerance ?? .22, target, opts.arena)
+            if (stopping) {
+              if (opts.diagnostics && firstLanding) {
+                const contactTick = firstLanding.steps.length - 1
+                opts.diagnostics.momentum = { runway: { ...initial.pos }, entry: { ...entry }, contact: { ...firstLanding.states[contactTick].pos }, contactTick }
+              }
+              return { steps: [...steps, ...stopping.steps], states: [...states, ...stopping.states], target: { ...target }, ticks: steps.length + stopping.steps.length }
+            }
           }
         }
+        if (!firstLanding) break
       }
     }
   }
@@ -304,16 +347,21 @@ function* jumpSearch(bot: MovementBot, target: Point, opts: JumpOptions = {}, ca
   if (!withinArena(bot, bot.entity.position, opts.arena) || !withinArena(bot, target, opts.arena)) { if (opts.diagnostics) opts.diagnostics.why = 'outside_arena'; return null }
   const column = opts.climb ? climbColumn(bot, opts.climb, cancelled, opts.planningMs) : null
   const springs = opts.bounce ? [opts.bounce, ...(opts.chain ?? [])] : []
-  if (flat(bot.entity.position, target) > (opts.bounce ? 6 + 8 * springs.length : 6) || !opts.climb && target.y - bot.entity.position.y > 1.25 || !supportAt(bot, target, .04) || !bodyClear(bot, target) || springs.some(spring => supportAt(bot, spring, .04)?.block.name !== 'slime_block' || !bodyClear(bot, spring)) || opts.climb && (!column || column.top < Math.floor(target.y) || !bodyClear(bot, opts.climb))) { if (opts.diagnostics) opts.diagnostics.why = 'unsupported_or_obstructed_target'; return null }
+  if (flat(bot.entity.position, target) > LOCAL_JUMP_REACH + 8 * springs.length || !opts.climb && target.y - bot.entity.position.y > 1.25 || !supportAt(bot, target, .04) || !bodyClear(bot, target) || springs.some(spring => supportAt(bot, spring, .04)?.block.name !== 'slime_block' || !bodyClear(bot, spring)) || opts.climb && (!column || column.top < Math.floor(target.y) || !bodyClear(bot, opts.climb))) { if (opts.diagnostics) opts.diagnostics.why = 'unsupported_or_obstructed_target'; return null }
   const tolerance = opts.tolerance ?? .22
   const world = worldOf(bot); const sim = simulator(bot)
   const geometry = geometryOf(bot, world); const route = detour(geometry, bot.entity.position, target)
-  const direct = yield* directSearch(bot, target, opts, world, route)
+  let runways: Vec3[] | undefined
+  function* fromRunway(firstOnly: boolean): Generator<void, JumpPlan | null> {
+    runways ??= yield* momentumRunways(bot, target, opts, world)
+    return yield* momentumSearch(bot, target, opts, world, firstOnly ? runways.splice(0, 1) : runways)
+  }
+  const direct = yield* directSearch(bot, target, { ...opts, firstRunway: opts.allowWalk ? fromRunway(true) : undefined }, world, route)
   if (direct) return direct
   if (opts.bounce || opts.climb) return null
   const ledge = yield* ledgeSearch(bot, target, opts, world)
   if (ledge) return ledge
-  const momentum = yield* momentumSearch(bot, target, opts, world)
+  const momentum = yield* fromRunway(false)
   if (momentum) return momentum
   interface Node { state: State; steps: Step[]; states: State[]; jumped: boolean; airTicks: number; fallDistance: number; score: number }
   let nodes: Node[] = [{ state: new PlayerState(bot, controls()), steps: [], states: [], jumped: false, airTicks: 0, fallDistance: 0, score: flat(bot.entity.position, target) }]
@@ -413,14 +461,35 @@ export function reboundCeiling(bot: MovementBot, from: Point, spring: Point): nu
 export async function planJumpAsync(bot: MovementBot, ctl: Cancellation, target: Point, opts: JumpOptions = {}): Promise<JumpPlan | null> {
   const diagnostics = opts.diagnostics ?? { frames: 0, profiles: 0 }
   const search = jumpSearch(bot, target, { ...opts, diagnostics }, () => ctl.aborted)
-  let workMs = 0
-  for (;;) {
-    if (ctl.aborted || workMs > (opts.planningMs ?? Infinity) || diagnostics.frames > (opts.maxFrames ?? Infinity)) { diagnostics.why = ctl.aborted ? 'interrupted' : 'planning_budget'; return null }
-    const began = performance.now(); const step = search.next(); workMs += performance.now() - began
+  const budget = opts.planningMs ?? Infinity, frames = opts.maxFrames ?? Infinity
+  const cpu = Number.isFinite(budget) ? process.threadCpuUsage : undefined
+  const launch = cpu ? new PlayerState(bot, controls()) : null, hp = bot.health
+  // Windows charges thread time in 15–16 ms ticks. Only discount time clearly outside that uncertainty.
+  const precisionMs = process.platform === 'win32' ? 16 : 1
+  let workMs = 0, pausedMs = 0
+  const inBudget = () => !ctl.aborted && workMs <= budget && diagnostics.frames <= frames
+  while (inBudget()) {
+    const stamp = cpu && pausedMs < budget ? cpu() : null
+    const began = performance.now(), step = search.next(), elapsed = performance.now() - began
+    workMs += elapsed
+    if (stamp && elapsed > precisionMs) {
+      const used = cpu(stamp)
+      const pause = Math.min(budget - pausedMs, Math.max(0, elapsed - (used.user + used.system) / 1000 - precisionMs))
+      pausedMs += pause; workMs -= pause
+      diagnostics.pausedMs = pausedMs
+    }
     diagnostics.workMs = workMs
+    if (!inBudget()) break
+    // A paused request gets at most one extra budget. Its launch must still agree with the observed body.
+    if (pausedMs && (bot.entity.position.distanceTo(launch.pos) > .1 || bot.entity.velocity.distanceTo(launch.vel) > .1 ||
+        bot.entity.onGround !== launch.onGround || bot.health !== hp)) {
+      diagnostics.why = 'forecast_start_changed'; return null
+    }
     if (step.done) return step.value
     await new Promise<void>(resolve => setImmediate(resolve))
   }
+  diagnostics.why = ctl.aborted ? 'interrupted' : 'planning_budget'
+  return null
 }
 
 function noteForecast(stats: PlanningDiagnostics | undefined, state: State, target: Point): void {

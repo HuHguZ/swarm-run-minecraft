@@ -2,6 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { swarmMethods } from '../daemon/src/rpc/swarm'
 import { Block, data, testBot } from '../daemon/test/tick-plugins-fixture'
+import { drive, native } from '../daemon/test/parkour-fixture'
+import { hazardMethods } from '../daemon/src/rpc/hazards'
+import { dangers } from '../daemon/src/threats'
 import { installDangers } from './arena/dangers'
 
 const settle = () => new Promise(resolve => setImmediate(resolve))
@@ -74,12 +77,13 @@ test('the cloud driver retries a genuinely observed opening through the real RPC
     return { status: 'done', detail: actions.filter(a => a.m === 'evade').length === 1
       ? { ok: false, why: 'некуда: стены, обрыв или лава со всех сторон' } : { ok: true } }
   } }
-  const ctx: any = { round: 1, bots: [b], pos: { A: { p, inv: {} } }, busy: new Set(), out: new Set(), deadNow: new Set(), enemiesOf: () => [], log() {} }
+  const ctx: any = { round: 1, X: 0, Y: 64, Z: 0, R: 20, arms: true, L: { y0: -4 }, bots: [b], pos: { A: { p, inv: {} } }, busy: new Set(), out: new Set(), deadNow: new Set(), enemiesOf: () => [], log() {} }
   installDangers(ctx)
   let observedAt = 1000
   const report = () => b.c.onDanger({ pos: p, observedAt: ++observedAt, dangers: { clouds: [{ at: { x: .1, y: 64, z: .1 }, r: 3 }] } })
   report(); await settle(); await settle()
   assert.deepEqual(actions.map(a => a.m), ['evade', 'dig_to'])
+  assert.deepEqual(actions[1].p.arena, { x: .5, y: 64, z: .5, r: 20, killY: 57, ellipse: undefined })
   for (let i = 0; i < 8; i++) { report(); await settle() }
   assert.equal(actions.length, 2, 'fresh identical cloud receipts cannot spam a physically blocked exit')
   f.cells.set('3,64,3', 'diamond_block'); report(); await settle()
@@ -89,4 +93,63 @@ test('the cloud driver retries a genuinely observed opening through the real RPC
   assert.equal(inspections.length, 11, 'one bounded RPC per failure inspection/receipt, not nineteen')
   assert.ok(inspections.every(p => p.inspectOnly && p.cells.length <= 64 && !p.at))
   report(); await settle(); assert.equal(actions.length, 3, 'confirmed success consumes the unchanged cloud')
+})
+
+test('a visible side doorway reopens a failed floor escape while the same support is still cracking', async t => {
+  const { bot, cells, rpc } = room()
+  cells.set('0,63,0', 'stone')
+  cells.set('0,63,2', 'stone')
+  const world = { getBlock: p => bot.blockAt(p) }
+  bot.world = world; bot.physics = native.Physics(bot.registry, world)
+  bot.version = '1.21.11'; bot.entity.width = .6; bot.entity.onGround = true; bot.health = bot.food = 20
+  drive(bot, world)
+  let frames = 0, now = 13000, random = 0
+  t.mock.method(Date, 'now', () => now)
+  t.mock.method(Math, 'random', () => random)
+  const body = hazardMethods({ session: { require: () => bot,
+    runIntent: async (_name, worker) => ({ status: 'done', detail: await worker({ aborted: false }) }) },
+  gameClock: { sleep: async () => {
+    const state = new native.PlayerState(bot, bot.controlState)
+    bot.physics.simulatePlayer(state, world); state.apply(bot); frames++
+  } } } as any)
+  const escapes: any[] = [], inspections: number[] = []
+  const b: any = { name: 'A', team: 'blue', last: { m: 'idle', pending: false }, dodgeStyle: { jumpy: 0 },
+    c: { call: async (method, params) => {
+      if (method === 'swarm_pose') { inspections.push(params.cells.length); return rpc.swarm_pose(params) }
+      assert.equal(method, 'evade')
+      const result = await body.evade(params)
+      escapes.push(result.detail); return result
+    } } }
+  const ctx: any = { round: 1, X: 0, Y: 64, Z: 0, R: 20, arms: true, L: { y0: -4 }, bots: [b],
+    pos: { A: { p: bot.entity.position, inv: {} } }, busy: new Set(), out: new Set(), deadNow: new Set(), enemiesOf: () => [], log() {} }
+  installDangers(ctx)
+  assert.deepEqual(dangers(bot, { foes: [] }).floor, [])
+  const report = async (cracking = true) => {
+    now += 1600
+    if (cracking) bot.emit('blockBreakProgressObserved', bot.blockAt(bot.entity.position.offset(0, -1, 0)), 2, { id: 77 })
+    const floor = cracking ? dangers(bot, { foes: [] }).floor : []
+    if (cracking) assert.equal(floor[0]?.signal, 'sight')
+    const p = ctx.pos.A.p = bot.entity.position.clone()
+    b.c.onDanger({ pos: p, observedAt: now, dangers: { floor } }); await settle()
+  }
+  await report()
+  assert.match(escapes[0].why, /стены, обрыв/)
+  assert.equal(frames, 0)
+  await report(false)
+  random = .5 // A new crack receipt has no preferred compass heading while the bot stands over its centre.
+  await report()
+  cells.set('0,64,2', 'diamond_block')
+  await report()
+  assert.equal(escapes.length, 1, 'a hidden change behind the side wall or a new random angle cannot restart the same blocked run')
+  cells.delete('0,64,2')
+  for (const y of [64, 65]) cells.set(`0,${y},1`, 'air')
+  await report()
+  assert.equal(escapes.length, 2, 'opening the side door during the continuing visible crack must reach the native escape again')
+  assert.deepEqual(escapes[1], { ok: true, dir: { x: 0, z: 1 } })
+  assert.equal(bot.entity.position.y, 64); assert.ok(bot.entity.position.z > 2); assert.equal(frames, 9)
+  assert.equal(inspections.length, 4, 'one body sight query per relevant receipt, including the initial failure')
+  assert.ok(inspections.every(n => n > 0 && n <= 64))
+  await report()
+  assert.equal(escapes.length, 3, 'the fresh crack on the new support starts its own escape')
+  assert.equal(escapes[2].ok, true)
 })

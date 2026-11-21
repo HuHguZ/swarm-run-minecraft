@@ -5,11 +5,10 @@ import { createDriverState } from './swarm/swarm-driver/state'
 import { swarmLoot } from './swarm/swarm-driver/loot'
 import { swarmMoves } from './swarm/swarm-driver/moves'
 
-function scene() {
+function scene(chest = { x: 12, y: 64, z: 0 }) {
   let clock = 1000
-  const chest = { x: 12, y: 64, z: 0 }
-  const places = [12.5, 18.5].map(x => ({ x, y: 64, z: .5, tier: 3 }))
-  const world = { contents: { iron_sword: 1 } as Record<string, number> }
+  const places = [.5, 6.5].map(dx => ({ x: chest.x + dx, y: chest.y, z: chest.z + .5, tier: 3 }))
+  const world: { contents: Record<string, number>; found?: (name: string) => any[]; take?: (name: string) => any } = { contents: { iron_sword: 1 } }
   const calls: any[] = []
   const pos: any = {}
   const bots = ['Scout', 'Courier', 'Reserve', 'Rival'].map(name => {
@@ -17,8 +16,9 @@ function scene() {
     pos[name] = { p, hp: 20, inv: {}, armor: {} }
     return { name, team: name === 'Rival' ? 'red' : 'blue', c: { async call(method, params) {
       calls.push({ name, method, params })
-      if (method === 'blocks_around') return { detail: { found: [chest] } }
+      if (method === 'blocks_around') return { detail: { found: world.found?.(name) || [chest] } }
       if (method === 'chest_take') {
+        if (world.take) return world.take(name)
         const took = name === 'Courier' ? { ...world.contents } : {}
         for (const [item, count] of Object.entries(took)) {
           pos[name].inv[item] = (pos[name].inv[item] || 0) + count
@@ -34,7 +34,7 @@ function scene() {
     } } }
   })
   const sw = createDriverState({ bots, pos, alive: () => true, arms: true, now: () => clock,
-    arena: { x: 0, y: 64, z: 0, r: 100 }, chestTops: places, log() {} })
+    arena: { x: chest.x - 12, y: chest.y, z: chest.z, r: 100 }, chestTops: places, log() {} })
   const boards = new Map(['red', 'blue'].map(t => {
     const board = new SwarmBoard(t, sw.now)
     board.setMembers(bots.filter(b => b.team === t).map(b => ({ id: b.name, team: t,
@@ -81,6 +81,87 @@ test('a confirmed empty chest is shared only between allies until refill', async
   assert.deepEqual(f.offer(f.courier), f.places[0])
 })
 
+// Fields from NeuroFarm31y's own chest_take reply at 1794575448485 in match Q.
+const upper = { x: 664, y: 150, z: 578 }
+const upperItems = { bow: 1, arrow: 32, trident: 1, netherite_sword: 1, netherite_boots: 1, netherite_helmet: 1,
+  diamond_chestplate: 1, netherite_leggings: 1, tipped_arrow: 8, milk_bucket: 1, honey_bottle: 2, golden_apple: 4,
+  ender_pearl: 2, tnt: 3, fire_charge: 4, flint_and_steel: 1, water_bucket: 1, cobweb: 4, splash_potion: 2 }
+const partial = (at, contents) => ({ status: 'interrupted', by: { type: 'cancelled', by: 'stop' }, partial: true,
+  detail: { at, kind: 'chest', contents, full: true, took: {}, free: 6 } })
+const report = f => f.sw.knownChests.get('blue')?.get(`chest:${f.chest.x},${f.chest.y},${f.chest.z}`)?.report
+
+test('the guard remembers the actual Q window after a cancelled transfer without continuing the action', async () => {
+  for (const cancelOwner of [true, false]) {
+    const f = scene(upper), b: any = f.scout
+    b.swarmTurnOwner = { cancelled: false }
+    f.world.take = () => {
+      b.swarmTurnOwner.cancelled = cancelOwner
+      return partial(upper, upperItems)
+    }
+    assert.equal(await f.sw.loot(b, f.sw.boardOf(b), true), false)
+    assert.deepEqual(report(f)?.items, Object.keys(upperItems))
+    assert.equal(report(f)?.by, b.name)
+    assert.deepEqual(f.calls.map(c => c.method), ['blocks_around', 'chest_take'])
+    assert.equal(f.sw.fullFor.size, 0, 'an interrupted visit must not suppress another visit on the same bag')
+  }
+})
+
+test('partial windows distinguish an empty chest from an unknown, different or obsolete window', async () => {
+  for (const mode of ['empty', 'missing', 'different', 'fractional', 'malformed', 'round', 'refill']) {
+    const f = scene(upper)
+    f.world.take = () => {
+      if (mode === 'round') f.sw.generation++
+      if (mode === 'refill') f.sw.refill(upper)
+      const at = { ...upper, x: upper.x + (mode === 'different' ? 1 : mode === 'fractional' ? .5 : 0) }
+      return partial(at, mode === 'empty' ? {} : mode === 'missing' ? undefined : mode === 'malformed' ? [] : upperItems)
+    }
+    await f.sw.loot(f.scout, f.sw.boardOf(f.scout), true)
+    assert.deepEqual(report(f)?.items, mode === 'empty' ? [] : undefined, mode)
+  }
+})
+
+async function delayedUpperVisit(status: string) {
+  const f = scene(upper), board = f.sw.boardOf(f.scout)
+  let reached: () => void, close: () => void
+  const opened = new Promise<void>(r => { reached = r })
+  const old = new Promise<void>(r => { close = r })
+  f.pos.Courier.p = { ...f.places[0] }
+  f.world.take = async name => {
+    if (name === f.courier.name) return { status: 'done', detail: { at: upper, contents: {}, took: {} } }
+    reached()
+    await old
+    return { ...partial(upper, upperItems), status }
+  }
+  const earlier = f.sw.loot(f.scout, board, true)
+  await opened
+  f.advance(60000)
+  await f.sw.loot(f.courier, board, true)
+  assert.deepEqual(report(f)?.items, [])
+  close()
+  await earlier
+  assert.equal(report(f)?.by, f.courier.name)
+  assert.deepEqual(report(f)?.items, [])
+}
+
+test('a slower Q window cannot replace a newer observation after the first claim expires', async () => {
+  await delayedUpperVisit('interrupted')
+  await delayedUpperVisit('done')
+})
+
+test('refill while dressing prevents a second withdrawal based on the previous window', async () => {
+  const f = scene(upper)
+  f.places[0].tier = 4
+  f.world.take = () => ({ status: 'done', detail: { at: upper, full: true, contents: upperItems, took: {} } })
+  const call = f.scout.c.call
+  f.scout.c.call = async (method, params) => {
+    if (method === 'armor') f.sw.refill(upper)
+    return call(method, params)
+  }
+  await f.sw.loot(f.scout, f.sw.boardOf(f.scout), true)
+  assert.deepEqual(f.calls.map(c => c.method), ['blocks_around', 'chest_take', 'armor'])
+  assert.equal(report(f), undefined)
+})
+
 test('a teammate report never overrides an active reservation, arrow fire or a nearby seen enemy', async () => {
   const f = scene()
   await f.seen()
@@ -108,4 +189,35 @@ test('forty loot offers reuse one public threat snapshot per bot across 32 possi
     assert.deepEqual(f.offer(b), f.places[0])
   }
   assert.deepEqual({ observations, prices }, { observations: 40, prices: 40 * 32 })
+})
+
+test('an older report through a former half cannot restore the old double stock after a new pair or a refill', async () => {
+  for (const mode of ['repaired', 'refilled while first opening']) {
+    const f = scene(upper), a = upper, b = { ...a, x: a.x + 1 }, c = { ...a, z: a.z + 1 }
+    const cells = { Scout: a, Courier: c, Reserve: b }
+    const at = (p) => 'chest:' + [p.x, p.y, p.z].join(',')
+    const receipt = (point, partner, item) => ({ status: 'interrupted', detail: { at: point, chestPartner: partner, chestSlots: 54, contents: { [item]: 1 }, took: {} } })
+    f.world.found = name => [cells[name]]
+    for (const name of ['Scout', 'Reserve', 'Courier']) f.pos[name].p = { ...cells[name], x: cells[name].x + .5 }
+    const scan = bot => f.sw.loot(bot, f.sw.boardOf(bot), true)
+    let resume, entered
+    const pending = new Promise<void>(r => { entered = r })
+    f.world.take = async name => {
+      if (name === 'Reserve') { entered(); await new Promise(r => { resume = r }); return receipt(b, a, 'mace') }
+      return name === 'Scout' ? receipt(a, b, 'trident') : receipt(c, a, 'diamond_sword')
+    }
+    if (mode === 'repaired') await scan(f.scout)
+    const late = scan(f.reserve); await pending
+    if (mode === 'repaired') await scan(f.courier)
+    else f.sw.refill(a)
+    resume(); await late
+    const memory = f.sw.knownChests.get('blue')
+    assert.equal(memory.get(at(b))?.report, undefined, mode)
+    assert.equal(memory.get(at(b))?.partner, undefined, mode)
+    if (mode === 'repaired') {
+      assert.deepEqual(memory.get(at(a))?.partner, c)
+      assert.deepEqual(memory.get(at(c))?.partner, a)
+      assert.deepEqual(memory.get(at(a))?.report?.items, ['diamond_sword'])
+    }
+  }
 })

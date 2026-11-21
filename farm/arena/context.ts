@@ -16,7 +16,16 @@ export const SOLO = process.env.ARMS_SOLO === '1'
 // синих»): первый бот — красный, набор и баффы человека соло, бой — дуэльным движком демона; 29 синих — рой как есть.
 export const CHAMP = process.env.ARMS_CHAMP === '1'
 
+export type RoundCommand = { current: () => boolean; channel?: 'death-plane' | 'arena-edge' | 'round-announcement' }
+
 type Fn = (...a: any[]) => any
+export const arenaDeathY = ({ arms, Y, L }: ArenaContext) => arms && L ? Y + L.y0 - 3 : undefined
+export const belowArenaFloor = (ctx: ArenaContext, p?: { y: number }) =>
+  !!p && p.y < (arenaDeathY(ctx) ?? -Infinity)
+export function arenaBounds(ctx: ArenaContext) {
+  const { X, Y, Z, R, L } = ctx
+  return { x: X + .5, y: Y, z: Z + .5, r: R, killY: arenaDeathY(ctx), ellipse: L?.ellipse }
+}
 export interface ArenaContext {
   // запуск: слот, набор, режим; карта гонки (модуль раскладки и сама раскладка) и центр поля
   i: number; kit: string; teams: boolean; arms: boolean
@@ -25,7 +34,7 @@ export interface ArenaContext {
   // бойцы
   bots: any[]; N: number; names: string[]; teamOf: Fn
   // ввод-вывод: в бою — настоящие, в тестах — подмена
-  rcon: (i: number, cmd: string, timeoutMs?: number) => Promise<any>
+  rcon: (i: number, cmd: string, timeoutMs?: number, round?: RoundCommand) => Promise<any>
   log: Fn
   sleep: (ms: number) => Promise<any>
   // журнал сервера, стоп-файл, габарит уборки, команда человека

@@ -6,6 +6,9 @@ import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import * as clock from '../src/game-clock'
 import { observeTactics, TacticalSystem } from '../src/tactics/minecraft'
+import { Autopilot } from '../src/autopilot'
+import { DAMAGE_TYPES } from '../src/gamedata'
+import { worldOf } from './parkour-fixture'
 
 function field() {
   const bot: any = new EventEmitter()
@@ -32,6 +35,27 @@ test('Q24 actual hot_floor damage on magma selects an escape despite no burning,
   for (const previous of ['Heal', 'Eat', 'Fight', 'BlockOff'] as const) assert.equal(graph.candidates(state, previous)[0]?.id, 'Flee')
 })
 
+test('31y damage_event at the rim enters Flee when the centre is dry above lava and the feet rest on adjacent magma', () => {
+  const session: any = field(), { bot } = session
+  bot.entity.position = new Vec3(592.9177, 120, 612.8569)
+  bot.game.dimension = 'overworld'
+  const { world } = worldOf([[592, 119, 612, 'lava'], [592, 119, 613, 'magma_block'], [593, 119, 612, 'magma_block']])
+  bot.blockAt = p => world.getBlock(p)
+  bot._client = new EventEmitter()
+  session.autopilot = new Autopilot(session, {})
+  session.autopilot.hookDamage(bot)
+  const hit = id => bot._client.emit('damage_event', { entityId: id, sourceTypeId: DAMAGE_TYPES.indexOf('hot_floor'), sourceCauseId: 0 })
+  hit(bot.entity.id + 1)
+  assert.equal(!!observeTactics(session).hotFloor, false)
+  hit(bot.entity.id)
+  const state = observeTactics(session)
+  assert.equal(state.lava, false)
+  assert.equal(state.hotFloor, true)
+  assert.equal(new TacticalGraph().candidates(state, 'Fight')[0]?.id, 'Flee')
+  bot.entity.position = new Vec3(592.5, 120.5, 612.5)
+  assert.equal(!!observeTactics(session).hotFloor, false)
+})
+
 test('old hot_floor receipts do not cause flight after leaving magma, a world change or expiry', () => {
   for (const change of [
     (s: any) => { s.bot.entity.position = new Vec3(52.5, 26, -126.5) },
@@ -44,7 +68,7 @@ test('old hot_floor receipts do not cause flight after leaving magma, a world ch
   }
 })
 
-function campfireField(name = 'campfire', lit = true) {
+function campfireField(name = 'campfire', lit: boolean | string = true) {
   const session = field(), bot = session.bot
   bot.game.dimension = 'overworld'
   bot.entity.position = new Vec3(-275.5, 68.4375, -442.5)
@@ -68,6 +92,7 @@ for (const name of ['campfire', 'soul_campfire']) test(`actual campfire damage o
 test('an extinguished campfire or ended campfire contact cannot retain a hot-floor alarm', () => {
   for (const change of [
     (s: any) => { s.bot.blockAt = campfireField('campfire', false).bot.blockAt },
+    (s: any) => { s.bot.blockAt = campfireField('campfire', 'false').bot.blockAt },
     (s: any) => { s.autopilot.lastHurt.at -= 10000 },
     (s: any) => { s.autopilot.lastHurt.type = 'hot_floor' },
     (s: any) => { delete s.autopilot.lastHurt },

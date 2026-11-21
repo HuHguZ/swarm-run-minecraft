@@ -189,6 +189,24 @@ test('снаряд при goto добавляет боковой шаг и со�
   assert.equal(f.keys.left, false); assert.equal(f.keys.right, false); assert.equal(f.keys.forward, false, 'не восстанавливаем старое намерение')
 })
 
+test('a guard keeps its protected lane and dodges a simultaneous uncovered arrow or potion', t => {
+  const f = scene(t, true)
+  f.bot.setControlState('forward', false)
+  const front = f.arrow
+  f.session.current = { name: 'swarm_hold', coveredBow: p => p === front, ctl: { aborted: false } }
+  const stepping = () => !!(f.keys.left || f.keys.right || f.keys.forward || f.keys.back)
+  f.set({ arrows: [front] }); f.tick()
+  assert.equal(stepping(), false)
+  const other = { ...front, id: 9, ticks: front.ticks + 1, from: { x: 8, y: 65, z: 0 }, side: { x: 0, z: 1 } }
+  f.set({ arrows: [front, other] }); f.tick()
+  assert.equal(stepping(), true, 'the earlier shielded arrow cannot hide the second shot')
+  f.set({ arrows: [front], potions: [{ ...other, name: 'splash_potion', blockable: false }] }); f.tick()
+  assert.equal(stepping(), true)
+  f.set({ arrows: [front] }); f.tick()
+  assert.equal(stepping(), false)
+  f.bot.emit('end')
+})
+
 test('натянутый лук не отменяет лестницу, бой или подбор', t => {
   const f = scene(t)
   for (const name of ['ladder_up', 'fight', 'assist']) {

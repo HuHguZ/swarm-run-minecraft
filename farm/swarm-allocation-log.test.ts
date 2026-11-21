@@ -5,7 +5,7 @@ import { swarmTeam } from './swarm/swarm-driver/team'
 
 test('allocation log reports changed roles and targets without delaying plans or repeating unchanged allocation', () => {
   let now = 1000
-  const logs: string[] = [], bots = Array.from({ length: 8 }, (_, k) => ({ name: 'B' + k, team: 'blue' }))
+  const logs: string[] = [], bots = Array.from({ length: 12 }, (_, k) => ({ name: 'B' + k, team: 'blue' }))
   const pos = Object.fromEntries(bots.map(b => [b.name, { p: { x: 0, y: 64, z: 0 }, hp: 20, inv: {}, armor: {} }]))
   const sw = createDriverState({ bots, pos, alive: () => true, now: () => now,
     log: text => { if (text.startsWith('🐜 blue: распределение —')) logs.push(text) } })
@@ -18,7 +18,11 @@ test('allocation log reports changed roles and targets without delaying plans or
     ['B4', { kind: 'flee', data: { target: 'E', hide: true, rearm: true } }],
     ['B5', { kind: 'flee', data: { target: 'E', perch: true, rearm: true } }],
     ['B6', { kind: 'goto', data: { camp: '2,64,2' } }],
-    ['B7', { kind: 'goto', data: { target: 'E', rearm: true } }]
+    ['B7', { kind: 'goto', data: { target: 'E', rearm: true } }],
+    ['B8', { kind: 'goto', data: { target: 'E' } }],
+    ['B9', { kind: 'goto', data: { target: 'E', search: true } }],
+    ['B10', { kind: 'goto', data: { search: true, searchEnemy: 'E' } }],
+    ['B11', { kind: 'goto', data: { reserve: true, sentry: true } }]
   ])
   sw.planned.set('blue', tasks)
   const refresh = () => { sw.plannedAt.set('blue', now); return sw.refresh(bots[0]) }
@@ -27,8 +31,7 @@ test('allocation log reports changed roles and targets without delaying plans or
   try {
     refresh()
     assert.equal(logs.length, 1, 'ordinary arena log requires no trace flag')
-    assert.match(logs[0], /бой 1, сброс\/подкоп 2, лут\/укрытие 5/)
-    assert.match(logs[0], /E/)
+    assert.equal(logs[0], '🐜 blue: распределение — бой 1, сброс/подкоп 2, лут/укрытие 5, манёвр по цели 1, поиск 2, другое 1; цели E; роли fighter')
     tasks.set('B0', { kind: 'fight', data: { target: 'F', role: 'fighter' } })
     now += 500
     assert.equal(refresh().task.data.target, 'F', 'new plan remains available during log throttle')
@@ -48,6 +51,11 @@ test('allocation log reports changed roles and targets without delaying plans or
     refresh()
     assert.equal(logs.length, 4, 'changed count is logged')
     assert.match(logs[3], /бой 0, сброс\/подкоп 2, лут\/укрытие 5/)
+    tasks.get('B8').data.search = true
+    now += 3000
+    refresh()
+    assert.equal(logs.length, 5, 'losing sight changes the allocation even with the same target and goto method')
+    assert.match(logs[4], /манёвр по цели 0, поиск 3, другое 1/)
   } finally {
     if (trace === undefined) delete process.env.ND_SWARM_TRACE
     else process.env.ND_SWARM_TRACE = trace

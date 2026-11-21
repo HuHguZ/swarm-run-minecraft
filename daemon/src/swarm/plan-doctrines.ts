@@ -19,7 +19,15 @@ export function pricedLoot(S: PvpPlan, m: SwarmMember, foe?: SharedEnemy, fight?
   const lootPrice = offer.seconds / (1 + offer.tier) / improvement
   const fightPrice = fight ? distance(m.position, foe!.position) / 5.6 + fight.attackSeconds * (1 + fight.attackSeconds / Math.max(.05, fight.survival)) : Infinity
   if (lootPrice >= fightPrice) return false
-  S.put(m, 'loot', { improvement, weak: S.weak(m), lootTier: offer.tier, ...(S.endgame ? { rearm: true } : {}), reason: `верхний лут: ярус ${offer.tier}, путь и сбор ≈${Math.ceil(offer.seconds)}с` }, offer.position)
+  if (!S.endgame && foe && S.assault?.target === foe.id && S.assault.voters.includes(m.id) && m.inventory?.bow && !S.weak(m)) {
+    const shot = S.options.assaultShotBeforeLoot?.(m, foe, offer, improvement, S.enemies)
+    if (shot) {
+      S.put(m, 'fight', { target: foe.id, enemyPosition: shot.position, assault: true, perchShot: shot.signature, stablePost: true,
+        reason: 'вижу цель штурма с яруса ниже, успеваю выстрелить до похода за лутом' }, shot.at)
+      return true
+    }
+  }
+  S.put(m, 'loot', { improvement, weak: S.weak(m), lootTier: offer.tier, lootSeconds: offer.seconds, ...(S.endgame ? { rearm: true } : {}), reason: `верхний лут: ярус ${offer.tier}, путь и сбор ≈${Math.ceil(offer.seconds)}с` }, offer.position)
   return true
 }
 
@@ -28,17 +36,13 @@ export function pvpLoot(S: PvpPlan): void {
 }
 
 export function pvpTargets(S: PvpPlan): void {
-  const { board, team, enemies, plan, center, forward } = S
+  const { board, team, enemies, plan } = S
   const loads = new Map(enemies.map(e => [e.id, 0]))
   // Цели, которых сейчас трогать нельзя (замуровываемая в коконе): общий бой их не выбирает.
   const untouchable = new Set<string>()
   const available = team.filter(m => !plan.has(m.id))
   const now = board.now()
-  const sideVec = { x: -forward.z, y: 0, z: forward.x }
-  const sideOf = (p: SwarmPosition, from: SwarmPosition = center) => (p.x - from.x) * sideVec.x + (p.z - from.z) * sideVec.z
-  // Главная цель приёма — ближайшая к своим из свежих (виденных за секунду), а не первая по имени.
-  const primary = [...enemies].sort((a, b) => Number(now - a.seenAt > 1000) - Number(now - b.seenAt > 1000) || distance(a.position, center) - distance(b.position, center))[0]
-  Object.assign(S, { loads, untouchable, available, now, primary })
+  Object.assign(S, { loads, untouchable, available, now })
 }
 
 export function ringShields(S: PvpPlan): void {
@@ -72,8 +76,7 @@ export function pvpBuilders(S: PvpPlan): void {
       const offset = doctrine === 'hunt' ? (running ? Math.min(9, Math.max(3, speed * 1.5)) : 3) : 0
       const fresh = { x: Math.floor(primary.position.x + axis.x * offset), y: Math.floor(primary.position.y), z: Math.floor(primary.position.z + axis.z * offset) }
       // Одна стройка на команду: все строители кладут один чертёж (раньше у каждого был свой центр от живой позиции
-      // цели, и второй строитель натыкался на чужие клетки — лаборатория 13.10, загон: стену клал один). Новое место —
-      // только когда цель ушла: из клетки кокона или дальше 10 бл. от стены загона (и та стена готова или не начата).
+      // цели, и второй строитель натыкался на чужие клетки — лаборатория 13.10, загон: стену клал один).
       const id = 'build-site:' + doctrine, axisId = 'build-axis:' + doctrine
       let site = board.facts().find(f => f.id === id), siteAxis = board.facts().find(f => f.id === axisId)
       // Цель уже за стенкой загона (по оси стенки дальше 1.5 бл.) — стенка бесполезна и переносится, даже начатая.
@@ -81,10 +84,13 @@ export function pvpBuilders(S: PvpPlan): void {
       const gone = !site || (doctrine === 'cocoon'
         ? Math.floor(primary.position.x) !== site.position.x || Math.floor(primary.position.z) !== site.position.z || Math.abs(primary.position.y - site.position.y) > 1
         : passed || distance(primary.position, site.position) > 10 && (() => {
-          // Начатую стенку загона достраивают: перенос бросал готовую на 60 % стену ради новой за убегающей целью
-          // (лаборатория 14.10: вторую стену клал один строитель). Переносится только готовая или не начатая.
           const cells = board.tasks().filter(t => t.kind === 'build' && t.data?.blueprint === `cutoff:${cellKey(site!.position)}`)
-          return !cells.length || cells.every(t => t.status === 'done')
+          // Дать занятому кладчику закончить попытку. Одна разметка после отмены не удерживает сменщика.
+          if (cells.some(t => t.status === 'claimed')) return false
+          const partial = cells.some(t => t.status === 'done') && cells.some(t => t.status === 'pending')
+          // У частичной стены есть смысл подождать, если видимый бегун по уже рассчитанному упреждению
+          // возвращается в радиус кладки. Вне него turnBuildSite не может положить следующую клетку.
+          return !(partial && running && !primary.nametag && !primary.glowing && distance(fresh, site!.position) <= 10)
         })())
       // Кокон закладывается только вокруг стоящей цели: в прыжке клетка ног на блок выше, и кокон висел в воздухе (разбор 13.10).
       const standing = doctrine !== 'cocoon' || Math.abs(primary.position.y - Math.round(primary.position.y)) < .05
@@ -169,7 +175,7 @@ export function fountain(S: PvpPlan): void {
   const { board, team, doctrine, primary, now, center, available, plan, loads, put } = S
   // Фонтан: при рывке хищника строй расходится в стороны, пропуская его по коридору, а когда он проскочил середину —
   // смыкается вокруг него со всех сторон, со спины первым. Ось и середина рывка запоминаются на доске, пока он идёт.
-  if (doctrine === 'fountain' && primary && now - primary.seenAt <= 1000) {
+  if (doctrine === 'fountain' && primary && S.committed && now - primary.seenAt <= 1000) {
     const v = primary.velocity || { x: 0, y: 0, z: 0 }, speed = Math.hypot(v.x, v.z)
     const charging = speed * 20 > 2.5 && v.x * (center.x - primary.position.x) + v.z * (center.z - primary.position.z) > 0
     let anchor = board.facts().find(f => f.id === 'fountain-anchor'), heading = board.facts().find(f => f.id === 'fountain-axis')

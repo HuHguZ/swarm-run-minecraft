@@ -16,6 +16,7 @@ import * as armor from './armor'
 // turns the head toward a player and the code that refuses to swing at one
 // must never disagree about the same body.
 import { isPlayerEntity } from './social'
+import { createLastSeen } from './pvp/last-seen'
 import * as pvp from './pvp'
 import * as flee from './flee'
 import { decideFight } from './play-policy'
@@ -49,15 +50,15 @@ const ARMOR_GAP = 6
 // надетое, а таймер автопилота до боя не подошёл. То есть исключение не
 // размывает правило, а достаёт из него ровно один случай — и ровно один
 // момент, когда это дёшево: пока моб ещё идёт к нам.
-async function dressForFight (session, ctl, entity) {
+async function dressForFight (session, ctl, currentTarget, player: boolean) {
   const bot = session.bot
-  let gap = Infinity
-  try { gap = entity.position.distanceTo(bot.entity.position) } catch {}
+  const targetGap = () => currentTarget()?.position?.distanceTo(bot.entity.position) ?? Infinity
+  const gap = targetGap()
   // Голым — одеваться даже вплотную: секунда кликов дешевле боя с защитой 0
   // (арена 2026-09-25: бот раз за разом дрался без брони, полный комплект в рюкзаке).
-  const naked = [5, 6, 7, 8].every(s => !bot.inventory.slots[s])
+  const naked = () => [5, 6, 7, 8].every(s => !bot.inventory.slots[s])
   const hasArmor = bot.inventory.items().some(i => /_(helmet|chestplate|leggings|boots)$/.test(i.name))
-  if (gap <= ARMOR_GAP && !(naked && hasArmor)) return { skipped: `вплотную (${Math.round(gap)} бл.) — дерусь в чём есть` }
+  if (gap <= ARMOR_GAP && !(naked() && hasArmor)) return { skipped: `вплотную (${Math.round(gap)} бл.) — дерусь в чём есть` }
   // Рот и руки — один курсор: actions.eat таскает еду через bot.equip
   // (actions.js:1103). armor.js теперь проверяет этот же флаг у себя, но
   // спросить до кликов дешевле, чем получить отказ после.
@@ -66,7 +67,8 @@ async function dressForFight (session, ctl, entity) {
   const t0 = gameClock.now()
   let r
   try {
-    r = await armor.equipBestArmor(session, ctl, { confirmMs: 400 })
+    const dressCtl = player ? { get aborted() { return ctl.aborted || ((!naked() || !hasArmor) && targetGap() <= ARMOR_GAP) } } : ctl
+    r = await armor.equipBestArmor(session, dressCtl, { confirmMs: 400 })
   } catch (err) {
     // Одеться не вышло — это не причина не драться. Мозг увидит причину
     // словами и решит сам, стоит ли отступать.
@@ -242,11 +244,11 @@ async function fight (session, ctl, opts: any = {}) {
 interface FightCtx {
   session: any; ctl: any; guard: any; bot: any; entity: any; decision: any; label: string; ranged: boolean
   retreatAtHealth: number; reach: number; timeoutSeconds: number; calmAfterMs: number; arena: any; allowRanged: any
-  lastStand: boolean; repelLava: boolean; engaged: boolean; roundScope: any; strategicYield: any; targets: any[]; relocateTo: any
+  lastStand: boolean; repelLava: boolean; engaged: boolean; roundScope: any; strategicYield: any; targets: any[]; maceOpponents: string[]; relocateTo: any
   potionFirst: boolean; wasWet: boolean; weapon: any; collectSafeDrops: (radius: number) => Promise<any>
 }
 
-async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null, strategicYield = null, targets = [], relocateTo = null, potionFirst = false }: any = {}, guard) {
+async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3.2, timeoutSeconds = 60, allowPlayer = false, calmAfterMs = 0, clearArea, arena = null, purpose, resourceGoal, allowRanged, lastStand = false, repelLava = false, engaged = false, roundScope = null, strategicYield = null, targets = [], maceOpponents = [], relocateTo = null, potionFirst = false }: any = {}, guard) {
   const bot = session.bot
   // Зачистка большой площадки: искать первого по всему её радиусу.
   const entity = findTarget(bot, target, session, { allowPlayer, radius: Math.max(24, clearArea || 0) })
@@ -267,11 +269,18 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
   const label = entity.username || entity.name
   const ranged = !!(entity.name && RANGED.has(entity.name))
   const fb: FightCtx = { session, ctl, guard, bot, entity, decision, label, ranged, retreatAtHealth, reach, timeoutSeconds, calmAfterMs,
-    arena, allowRanged, lastStand, repelLava, engaged, roundScope, strategicYield, targets, relocateTo, potionFirst,
+    arena, allowRanged, lastStand, repelLava, engaged, roundScope, strategicYield, targets, maceOpponents, relocateTo, potionFirst,
     wasWet: false, weapon: null, collectSafeDrops }
-  const early = await fightPrepare(fb)
-  if (early) return early
-  if (isPlayerEntity(entity)) return fightPlayer(fb)
+  const sight = isPlayerEntity(entity) ? createLastSeen(bot) : null
+  const currentTarget = sight ? () => {
+    const view = sight.observe(bot.players?.[entity.username]?.entity || entity)
+    return view?._ndVisible ? view : null
+  } : () => entity
+  try {
+    const early = await fightPrepare(fb, currentTarget)
+    if (early) return early
+    if (sight) return await fightPlayer(fb)
+  } finally { sight?.close() }
   if (fightsInOpen({ lastStand, repelLava, ranged }, () => corridorShape(bot, threatPoint(entity)).corridor)) return fightOpen(fb)
   const sealed = await fightSealFirst(fb)
   if (sealed) return sealed
@@ -279,7 +288,7 @@ async function fightBody (session, ctl, { target, retreatAtHealth = 6, reach = 3
 }
 
 // Вода, оружие, броня и щит, затем проверка начала боя: не годится — отход (результат), годится — ничего.
-async function fightPrepare (fb: FightCtx) {
+async function fightPrepare (fb: FightCtx, currentTarget) {
   const { session, ctl, guard, bot, entity, retreatAtHealth, reach, arena, lastStand, repelLava, engaged } = fb
   // Fighting from the water is not fighting: pathfinder will not swim to the
   // target and the body just floats there being shot.
@@ -294,13 +303,13 @@ async function fightPrepare (fb: FightCtx) {
   // Порядок не случаен: armor.js кладёт щит в свободную левую руку последним
   // шагом своего плана, так что после него guard.wear() чаще всего находит
   // щит уже надетым и не кликает второй раз.
-  guard.pre = await dressForFight(session, ctl, entity)
+  guard.pre = await dressForFight(session, ctl, currentTarget, isPlayerEntity(entity))
 
   // A shield in the off-hand is the difference between trading with a skeleton
   // and being pincushioned on the approach. It goes on for every fight and not
   // only against shooters: the clicks cost two hundred milliseconds once, and
   // a bot that equips it mid-fight equips it while being shot at.
-  guard.watch(entity, reach)
+  guard.watch(currentTarget(), reach)
   guard.sawMobs(countHostiles(bot, 8))
   await guard.wear()
 
@@ -310,13 +319,13 @@ async function fightPrepare (fb: FightCtx) {
   // engaged (S4d, tactics/minecraft.ts Fight; ND_S4D=0 — прежнее): тактика уже взвесила бой у тела (размен/«дёшево»), и проверка
   // начала боя («нет запаса еды после восстановления сытости») не отменяет его — 60 из 3135 тактических Fight живой телеметрии
   // кончились «skipped» без единого взмаха, тактика выбирала их снова. Остаётся проверка продолжения боя (phase continue).
-  const preparation = guard.safety.check({ target: entity, phase: engaged && process.env.ND_S4D !== '0' ? 'continue' : 'start', minHealth: Math.max(8, retreatAtHealth), instantHeal: potionHeal, repelLava })
+  const preparation = guard.safety.check({ target: currentTarget(), phase: engaged && process.env.ND_S4D !== '0' ? 'continue' : 'start', minHealth: Math.max(8, retreatAtHealth), instantHeal: potionHeal, repelLava })
   // Арена с игроком (arena задан): бой до конца, как arenaStay в pvp.duel — без оружия и еды тоже (гонка вооружений, s7).
   const arenaDuel = !!arena && isPlayerEntity(entity) && preparation.action !== 'dead'
   if (!lastStand && !arenaDuel && preparation.action !== 'fight') {
     await guard.raise(false)
     if (FIGHT_NOAVOID()) bot._ndNoMobAvoid = false
-    const escape = await survival.disengage(session, ctl, () => [entity, ...flee.hostilesAround(bot, 16).map(h => h.e)])
+    const escape = await survival.disengage(session, ctl, () => [currentTarget(), ...flee.hostilesAround(bot, 16).map(h => h.e)].filter(Boolean))
     return { skipped: true, lowHealth: preparation.action === 'recover', stopped: preparation.reason, safety: preparation, escape }
   }
 }
@@ -327,7 +336,7 @@ async function fightPrepare (fb: FightCtx) {
 // ударов бота против 20). Вся тактика — в pvp.js.
 async function fightPlayer (fb: FightCtx) {
   const { session, ctl, guard, bot, entity, decision, retreatAtHealth, timeoutSeconds, calmAfterMs, arena, allowRanged, lastStand, repelLava,
-    roundScope, strategicYield, targets, relocateTo, potionFirst } = fb
+    roundScope, strategicYield, targets, maceOpponents, relocateTo, potionFirst } = fb
   const r = await pvp.duel(session, ctl, entity, {
     retreatAtHealth,
     timeoutSeconds,
@@ -339,7 +348,7 @@ async function fightPlayer (fb: FightCtx) {
     purpose: decision.purpose,
     roundScope,
     strategicYield,
-    targets, relocateTo, potionFirst,
+    targets, maceOpponents, relocateTo, potionFirst,
     // Поле арены (arena.js): не уходить с него за соперником, вернуться, если выпал.
     arena
   })

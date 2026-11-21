@@ -6,13 +6,29 @@ import * as pick from '../pick'
 import { REACH, SMASH_MIN, SWAP, KEYS, yawTo } from './consts'
 import { findItem, healthOf, slamHit, afterPacket, windReady, fireWind, selfWindAim } from './hands'
 import { reachFrom, floorTop, landing, NO_KEYS, AIR_KEYS, fallCost } from './world'
+import { supportAt } from '../navigation/geometry'
+
+/** Steer to the near side of the target, subtracting the body's own coasting distance. */
+export function descentSteering(p, v, target, motion, lastYaw) {
+  let ticks = 0, y = p.y, vy = v.y
+  while (ticks < 40 && !(vy < 0 && y <= target.y + 1)) { y += vy; vy = (vy - .08) * .98; ticks++ }
+  ticks = Math.max(1, ticks)
+  const dh = Math.hypot(target.x - p.x, target.z - p.z)
+  const yaw = dh > .25 ? yawTo(p, target) : lastYaw
+  const sin = Math.sin(yaw), cos = Math.cos(yaw)
+  const drift = (1 - .91 ** ticks) / .09
+  const dx = target.x + motion.x * ticks + sin * .6 - (p.x + v.x * drift)
+  const dz = target.z + motion.z * ticks + cos * .6 - (p.z + v.z * drift)
+  const forward = -dx * sin - dz * cos, right = dx * cos - dz * sin
+  return { yaw, dh, keys: { ...NO_KEYS, forward: forward > .3, back: forward < -.3, right: right > .3, left: right < -.3 } }
+}
 
 // Спуск на цель: рулить в воздухе к точке, где он будет, и ударить булавой в
 // последний тик, когда ещё достаём (дальше — земля или он выйдет из руки):
 // бонус растёт с высотой. Своей скоростью по вертикали и сносом по
 // горизонтали считаем, где окажемся; клавиши — относительно взгляда на него.
 // Без спринта: спринт снимает крит.
-export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e), chain = null, initialHit = null, ready = null }: any = {}) {
+export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap = SWAP, maxMs = 3500, windMlg = true, stats = null, telemetryHp = e => healthOf(bot, e), chain = null, initialHit = null, ready = null, upperApproach = false }: any = {}) {
   return new Promise<any>(resolve => {
     const t0 = gameClock.now()
     let peak = bot.entity.position.y
@@ -24,6 +40,8 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
     let lastYaw = bot.entity.yaw
     let lastPos = bot.entity.position.clone()
     let mlgFired = false
+    const floorView = upperApproach && (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot)
+    const landingOptions = upperApproach ? { observed: true, arena: chain?.arena } : undefined
     const set = (k, v) => { try { bot.setControlState(k, v) } catch {} }
     // Сторож ведра (edges.installFallGuard) видит спуск и бросает воду только в
     // последний тик, а наш удар этого тика делает первым (bot._ndSmashNow) —
@@ -39,11 +57,11 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
       if (bot.entity.onGround || bot.entity.isInWater) return (burnPlan = null)
       const cur = { ...NO_KEYS }
       for (const k of ['forward', 'back', 'left', 'right']) cur[k] = bot.getControlState(k)
-      const here = landing(bot, cur)
+      const here = landing(bot, cur, landingOptions)
       if (!here || !here.burn) return (burnPlan = null)
       let best = null
       for (const c of AIR_KEYS) {
-        const l = landing(bot, c)
+        const l = landing(bot, c, landingOptions)
         if (!l || l.burn) continue
         const d = e && e.position ? Math.hypot(l.at.x - e.position.x, l.at.z - e.position.z) : 0
         if (!best || d < best.d) best = { keys: c, d }
@@ -55,15 +73,30 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
     const finish = (why) => {
       if (done) return
       done = true
-      if (bot._ndDescend === mark) bot._ndDescend = null
       bot.removeListener('physicsTick', onT)
-      for (const k of KEYS) set(k, false)
+      if (bot._ndDescend === mark) {
+        bot._ndDescend = null
+        for (const k of KEYS) set(k, false)
+      }
       resolve({ peak, hit: hits[0] || hit, hits, why, relocated: !!relocation, ms: gameClock.now() - t0 })
+    }
+    // При промахе или потере цели спуск всё ещё может кончиться уроном от падения.
+    const tryWindLanding = (p, v, top, moved) => {
+      const w = bot._ndWind
+      const h = p.y - top
+      const hurtFall = w && gameClock.now() < w.until ? (w.impactY - top) : (fallPeak - top)
+      if (windMlg && !mlgFired && v.y < -0.35 && hurtFall > 3.6 && h > 1.0 && h < 3.2 && !findItem(bot, 'water_bucket') && windReady(bot)) {
+        mlgFired = true
+        fireWind(bot, () => !ctl.aborted && selfWindAim(bot, { moved }), { swap: true, immediate: true }).then((r : any) => {
+          if (r.fired) { bot._ndWind = { impactY: bot.entity.position.y, until: gameClock.now() + 2000 }; if (stats) stats.mlg++ }
+          else mlgFired = false
+        })
+      }
     }
     const onT = () => {
       try {
         if (done) return
-        if (ctl.aborted || !bot.entity || (bot.health ?? 0) <= 0) return finish('прервали')
+        if (bot._ndDescend !== mark || ctl.aborted || !bot.entity || (bot.health ?? 0) <= 0) return finish('прервали')
         const b = bot.entity
         const p = b.position
         const moved = p.minus(lastPos); lastPos = p.clone()
@@ -74,14 +107,17 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
         if (b.isInWater) return finish('в воде')
         if (gameClock.now() > endAt || chain?.deadline && gameClock.now() >= chain.deadline) return finish('долго')
         const v = b.velocity
-        const top = floorTop(bot, p)
+        // Only the next step for the swing, or a charge within 3.2 blocks of touchdown, needs a floor here.
+        const top = floorView ? supportAt(floorView, p, Math.max(3.2, .05 - v.y))?.top ?? -Infinity : floorTop(bot, p)
+        // The first wind-assisted flight can lose its original target before any smash.
+        if (chain && !hit && e && (e.isValid === false || e._ndVisible === false)) { e = null; choiceAt = 0 }
         // Посадка в лаву или огонь (2026-09-26): он вылил лаву или поджёг
         // место, куда мы сядем, пока летим, — рулить прочь (в воздухе клавиши
         // дают ~0.02 б/т², за 10–20 тиков до блока в сторону). Раз в 100 мс
         // прогон физики до земли с нынешними клавишами; в огонь — восемь
         // сторон, берём ту, где посадка чистая и ближе к нему. Удар — как был:
         // клавиши ему не нужны.
-        const burn = burnSteer()
+        const burn = e ? burnSteer() : null
         const applyBurn = () => { for (const k of ['forward', 'back', 'left', 'right']) set(k, !!burn.keys[k]); set('sprint', false); set('jump', false) }
         if (hit) {
           if (burn && burn.keys) applyBurn()
@@ -93,8 +129,12 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
           endAt = Math.min(chain.deadline ?? Infinity, gameClock.now() + maxMs)
           if (stats) stats.rebounds = (stats.rebounds || 0) + 1
         }
-        if (rebounding && gameClock.now() >= choiceAt) {
-          choiceAt = gameClock.now() + 200
+        // A visible first target can pearl away too. Reprice from the actual flight, preserving a smash already in hand.
+        const reconsider = chain && (rebounding || !e || e.username) && gameClock.now() >= choiceAt
+        if (reconsider) choiceAt = gameClock.now() + 200
+        const firstSmashNow = reconsider && !rebounding && e && v.y < 0 && fallPeak - p.y > SMASH_MIN + .1 &&
+          reachFrom(pick.eyeOf(bot), e, bot) <= REACH - .05 && pick.canHit(bot, e, { range: REACH })
+        if (reconsider && !firstSmashNow) {
           const next = chain.choose(fallPeak)
           if (next) {
             e = next.entity; vel = next.vel || (() => ({ x: 0, y: 0, z: 0 })); relocation = null
@@ -105,47 +145,35 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
             for (const keys of AIR_KEYS) {
               const l = landing(bot, keys, { maxTicks: 120, observed: true, arena: chain.arena })
               if (!l?.landed || l.burn) continue
-              const damage = fallCost(bot, l.at, fallPeak)
+              const damage = fallCost(bot, l.at, Math.max(fallPeak, l.peak), l.floor)
+              const remaining = (bot.health ?? 20) - damage
+              if (!(remaining > 0)) continue
+              // Бережём последние два сердца. Если запаса уже нет, всё ещё можно сесть без урона.
+              const reserve = Math.min(4, remaining)
               const score = l.at.y * 2 - damage * 8 - (chain.home ? l.at.distanceTo(new Vec3(chain.home.x, chain.home.y, chain.home.z)) : 0)
-              if (damage < (bot.health ?? 20) - 4 && (!best || score > best.score)) best = { keys, score, at: l.at }
+              if (!best || reserve > best.reserve || reserve === best.reserve && score > best.score) best = { keys, reserve, score, at: l.at }
             }
             relocation = best
           }
         }
         if (!e) {
           for (const k of KEYS) set(k, !!relocation?.keys[k])
+          tryWindLanding(p, v, top, moved)
           return
         }
         if (!e.isValid) {
           if (burn && burn.keys) applyBurn()
           else for (const k of KEYS) set(k, false)
+          tryWindLanding(p, v, top, moved)
           return
         }
         const tv = vel() || { x: 0, y: 0, z: 0 }
         const ep = e.position
-        // Где мы по вертикали: тики до «ноги на уровне его головы + 1».
-        let n = 0; let yy = p.y; let vv = v.y
-        const hitY = ep.y + 1.0
-        while (n < 40 && !(vv < 0 && yy <= hitY)) { yy += vv; vv = (vv - 0.08) * 0.98; n++ }
-        n = Math.max(1, n)
-        const dh = Math.hypot(ep.x - p.x, ep.z - p.z)
-        if (dh > 0.25) lastYaw = yawTo(p, ep)
-        const yaw = lastYaw
-        // Целимся не точно в него, а на 0.6 перед ним (со своей стороны): над
-        // самой макушкой горизонталь для щита — ноль (applyItemBlocking), и
-        // удобнее бить: глаза ближе к его рамке.
-        const aimX = ep.x + tv.x * n + Math.sin(yaw) * 0.6
-        const aimZ = ep.z + tv.z * n + Math.cos(yaw) * 0.6
+        const { yaw, dh, keys } = descentSteering(p, v, ep, tv, lastYaw)
+        lastYaw = yaw
         const pitch = Math.atan2(ep.y + pick.hitboxOf(bot, e).h / 2 - pick.eyeOf(bot).y, Math.max(0.3, dh))
         bot.look(yaw, pitch, true).catch(() => {})
-        // Снос без клавиш (трение в воздухе 0.91): v·(1 − 0.91ⁿ)/0.09.
-        const k = (1 - Math.pow(0.91, n)) / 0.09
-        const ex = aimX - (p.x + v.x * k); const ez = aimZ - (p.z + v.z * k)
-        const fwd = ex * -Math.sin(yaw) + ez * -Math.cos(yaw)
-        const right = ex * Math.cos(yaw) + ez * -Math.sin(yaw)
-        set('forward', fwd > 0.3); set('back', fwd < -0.3)
-        set('right', right > 0.3); set('left', right < -0.3)
-        set('sprint', false); set('jump', false); set('sneak', false)
+        for (const key of KEYS) set(key, keys[key])
         if (burn && burn.keys) applyBurn()
         // Удар: падаем, высота падения > 1.5, достаём — и дальше не будет
         // лучше: на следующем тике земля или он вне руки.
@@ -164,12 +192,13 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
           hit = { fall: Math.round(fall * 100) / 100, r: Math.round(rNow * 100) / 100, hp0, at: gameClock.now(), charged: !!(bot._ndMaceHeldAt && gameClock.now() - bot._ndMaceHeldAt >= 1550), selfHp: bot.health ?? 20 }
           const doHit = () => {
             try {
-              if (ctl.aborted || e.isValid === false || !pick.canHit(bot, e, { range: REACH })) { hit = null; return }
+              if (done || bot._ndDescend !== mark || ctl.aborted || e.isValid === false || chain?.visible?.(e) === false || !pick.canHit(bot, e, { range: REACH })) { hit = null; return }
               const sh = slamHit(bot, e, stats)
+              if (sh.blocked) { hit = null; return }
               if (swap && sh.swapped) bot.setQuickBarSlot(sh.cur)
               hit.swapped = swap && sh.swapped
               hit.stun = sh.stun
-              hit.target = e.username || e.name; hits.push(hit)
+              hit.targetId = e.id; hit.target = e.username || e.name; hits.push(hit)
               if (burst) endAt = Math.max(endAt, Math.min(chain.deadline ?? Infinity, hit.at + 700))
             } catch {}
           }
@@ -177,18 +206,7 @@ export function descend (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), swap
           afterPacket(bot, () => { if (bot._ndSmashNow === doHit) { bot._ndSmashNow = null; doHit() } })
           return
         }
-        // Мимо и садимся ниже, чем прощает всплеск (или падения своего нет) —
-        // второй заряд под ноги за пару тиков до земли, если ведра нет.
-        const w = bot._ndWind
-        const h = p.y - top
-        const hurtFall = w && gameClock.now() < w.until ? (w.impactY - top) : (peak - top)
-        if (windMlg && !mlgFired && v.y < -0.35 && hurtFall > 3.6 && h > 1.0 && h < 3.2 && !findItem(bot, 'water_bucket') && windReady(bot)) {
-          mlgFired = true
-          fireWind(bot, () => !ctl.aborted && selfWindAim(bot, { moved }), { swap: true, immediate: true }).then((r : any) => {
-            if (r.fired) { bot._ndWind = { impactY: bot.entity.position.y, until: gameClock.now() + 2000 }; if (stats) stats.mlg++ }
-            else mlgFired = false
-          })
-        }
+        tryWindLanding(p, v, top, moved)
       } catch (err) { finish('ошибка: ' + err.message) }
     }
     bot.on('physicsTick', onT)

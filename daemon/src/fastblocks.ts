@@ -166,8 +166,9 @@ function patchFindBlocks (bot) {
       const totalSections = bot.game.height >> 4
       if (sectionY >= 0 && sectionY < totalSections && column && !visitedSections.has(next.toString())) {
         const section = column.sections[sectionY]
-        // isBlockInSection: пустая секция — мимо; палитра без искомого — мимо; глобальная палитра — полный перебор.
-        if (section && (!section.palette || section.palette.some(hit))) {
+        // В 1.21.11 у одноцветной секции (включая воздух) тоже нет palette: все 4096 клеток равны data.value.
+        const uniform = section?.data?.value
+        if (section && (uniform !== undefined ? hit(uniform) : !section.palette || section.palette.some(hit))) {
           const begin = new Vec3(next.x * 16, sectionY * 16 + bot.game.minY, next.z * 16)
           const cursor = begin.clone()
           const end = cursor.offset(16, 16, 16)

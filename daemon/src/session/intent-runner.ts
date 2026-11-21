@@ -11,7 +11,7 @@ const chatOff = process.env.ND_CHAT_INTERRUPT === '0'
 // Тот же набор, что reflex-lock COMMANDED_ESCAPE: ветер/жемчуг/элитры тоже рвались боем драйвера до старта (roof-free-1).
 const DODGES = /^(evade|juke|take_cover|douse_lava|wind_jump|pearl_to|fly_to|burrow|block_behind|peek_shot|wind_leap|dodge_blast|clear_web)$/
 
-async function runIntent (this: any, name, worker, { exclusive = true, interruptible = true, timeoutMs = 120000, interruptOn = null, params = null }: any = {}) {
+async function runIntent (this: any, name, worker, { exclusive = true, interruptible = true, timeoutMs = 120000, interruptOn = null, params = null, canStart = null }: any = {}) {
     // Уворот не ждёт тактики (12.10: «ест/пьёт зелье — булавой ваншотаю, ноль реакции»; mace-6: рывок стоял в очереди за
     // щитом/едой тактики и начинался за 6 тиков до удара): неаварийный рефлекс снимается сразу, аварийный (падение, лава) —
     // дождаться; остальные приказы — как раньше, после тактики.
@@ -26,10 +26,11 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
       if (stopped) throw cancelled
       return value
     }
+    const reflexLock: typeof import('../reflex-lock') = require('../reflex-lock')
     try {
     if (DODGES.test(name)) {
-      const rl: typeof import('../reflex-lock') = require('../reflex-lock'); const o = rl.owner(this); if (o && o.owner !== 'Emergency') rl.cancel(this)
-      while (rl.owner(this)?.owner === 'Emergency' && this.reflex) await beforeStart(this.reflex)
+      const o = reflexLock.owner(this); if (o && o.owner !== 'Emergency') reflexLock.cancel(this)
+      while (reflexLock.owner(this)?.owner === 'Emergency' && this.reflex) await beforeStart(this.reflex)
     } else if (exclusive && this.tactics?.enabled()) await beforeStart(this.tactics.waitForRelease())
     const cur = this.current
     // Спасаюсь из пропасти на элитрах (rescue) — его не рвёт ничто, кроме stop (13.10: подстрелил — рывок от следующей
@@ -37,6 +38,9 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     if (cur && (cur.name === 'fly_to' || cur.name === 'pearl_to') && cur.params?.rescue && cur.ctl && !cur.ctl.aborted) return { status: 'failed', error: cur.name === 'fly_to' ? 'спасаюсь на элитрах' : 'спасаюсь жемчугом', code: 'RESCUE_BUSY' }
     if (exclusive && !DODGES.test(name) && cur && DODGES.test(cur.name) && cur.ctl && !cur.ctl.aborted && cur.done) await beforeStart(cur.done.catch(() => {}))
     if (stopped) throw cancelled
+    if (canStart && !canStart()) return { status: 'failed', notStarted: true, code: 'ACTION_EXPIRED', error: 'окно действия прошло' }
+    // A flank route planned before a shield went up may arrive after it. Discard that stale movement at handover.
+    if (name === 'goto' && reflexLock.shieldHold(this)) return { status: 'failed', notStarted: true, code: 'DEFENSE_BUSY', error: 'держу защиту от наблюдаемой угрозы' }
     } catch (err) {
       if (err !== cancelled) throw err
       const result: any = { status: 'interrupted', by: cancelledBy || { type: 'cancelled' }, notStarted: true,
@@ -53,7 +57,6 @@ async function runIntent (this: any, name, worker, { exclusive = true, interrupt
     if (exclusive && !(fromDirector && this.current && this.current.name === 'wait')) this.cancel(name)
 
     const ctl: any = { aborted: false, onAbort: [] }
-    const reflexLock: typeof import('../reflex-lock') = require('../reflex-lock')
     ctl.waitReflex = () => reflexLock.wait(this, ctl)
     ctl.abort = () => {
       if (ctl.aborted) return

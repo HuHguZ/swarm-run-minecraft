@@ -311,7 +311,7 @@ async function explore (session, ctl, {
   if (hit) return { found: hit.name, at: xyz(hit.position), walked: 0, note: 'уже видно отсюда' }
   // A newly placed roof can be confirmed before the client skylight update arrives.
   if (surface && (require('../worlds') as typeof import('../worlds')).worldOf(bot) === 'overworld' && !ctl.aborted && deadline - gameClock.now() >= 10000 &&
-    (!session.underSky?.() || (require('../fortify') as typeof import('../fortify')).enclosure(bot, bot.entity.position.floored()).sealed)) {
+    (!session.underSky?.() || (require('../fortify') as typeof import('../fortify')).enclosure(bot, bot.entity.position.floored(), 'movement').sealed)) {
     await (require('../survival') as typeof import('../survival')).surface(session, ctl, { timeoutSeconds: Math.min(30, (deadline - gameClock.now()) / 1000), hand: false, preferPillar: true })
     // 30 с не хватило (карман под крышей своей лестницы: «поднялся на 6», до неба 2 блока — cl-n 14.10) — ещё подъём на остаток.
     if (!ctl.aborted && typeof session.underSky === 'function' && !session.underSky() && deadline - gameClock.now() >= 10000) {

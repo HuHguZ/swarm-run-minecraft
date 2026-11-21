@@ -32,6 +32,14 @@ function scene() {
   return { team, board, sites, observe, options }
 }
 
+test('a second direct witness is needed to send the other pickaxes to the reported trap', () => {
+  const f = scene(); f.observe(true)
+  const miners = () => [...planPvp(f.board, f.team, { ...f.options, quorum: 2 }).values()].filter(t => t.data?.dig)
+  assert.ok(miners().every(t => t.assignedTo === 'b00'))
+  f.board.observe('b01', 10000, { id: 'HuHguZ', position: p(.5, .5), visible: true })
+  assert.equal(miners().length, 20)
+})
+
 test('q9c-2: при 30 ботах и 22 мечниках наблюдаемое лечение делает полезную копку делом всех свободных кирок кроме двух прикрывающих', () => {
   const f = scene(); f.observe()
   const before = planPvp(f.board, f.team, f.options)
@@ -173,6 +181,7 @@ test('q9c-3: занятые бойцами полезные клетки рез�
   const reserve = scene(), guard = reserve.team[22]
   Object.assign(guard, { position: p(5.2, .5), weapon: 'stone_sword', inventory: { stone_sword: 1 }, armor, strength: 40 })
   reserve.observe(true)
+  for (const m of reserve.team.slice(1, 22)) reserve.board.observe(m.id, 10000, { id: 'HuHguZ', position: p(.5, .5), visible: true })
   const reservedPlan = planPvp(reserve.board, reserve.team, { ...reserve.options, aggressive: false, quorum: 99 })
   const guardTask = reservedPlan.get(guard.id)!
   assert.equal(guardTask.kind, 'goto')

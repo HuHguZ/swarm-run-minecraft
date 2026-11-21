@@ -27,6 +27,7 @@ import * as throwMod from './throw'
 import { dropOptions, runDrop } from './flee-drop'
 import { stepSafe, keyDir } from './moves'
 import { bodyClear } from './navigation/geometry'
+import { gearPartVisible, seesPlayer } from './pvp/last-seen'
 
 // Доктрина по мобам. radius — докуда моб опасен в ближнем бою (с запасом на
 // его скорость), weight — насколько. range — дальность стрельбы (опасен, только
@@ -81,9 +82,8 @@ const DOCTRINE: Record<string, { radius: number; weight: number; range?: number;
 // Напавший игрок (id передаёт тактика): бегает как мы, бьёт с 3 бл. и с разгона; с луком/арбалетом/трезубцем — ещё и стрелок.
 // ponytail: дальность 48 — оценка (как ифрит), у человека-лучника нет константы в jar; без неё бег от игрока «отрывался»
 // за тик (smartFlee его не видел: слот 27, 18 качелей CreateDistance↔Flee).
-function playerDoctrine (e) {
-  const held = e.heldItem?.name || ''
-  return { radius: 10, weight: 8, fast: true, ...(/(^|_)bow$|crossbow|trident/.test(held) ? { range: 48 } : {}) }
+function playerDoctrine (ranged = false) {
+  return { radius: 10, weight: 8, fast: true, ...(ranged ? { range: 48 } : {}) }
 }
 
 // ND_PIGLIN_GOLD_NEUTRAL (поток ne 21.10; вкл. по умолчанию с 03:50 — открытый торг 0.4–3.5 → 14–22 сделки/мин; =0 — выкл.): в золотой броне пиглин нейтрален, пока у него нет цели атаки — флаг aggressive
@@ -113,11 +113,18 @@ function hostilesAround (bot, radius = 32, foes: number[] = []) {
     if (calmPiglin(bot, e)) continue
     const bear = e.name === 'polar_bear' ? bears?.find(h => h.e.id === e.id) : null
     if (e.name === 'polar_bear' && bears && !bear) continue
-    const doc = bear ? { ...DOCTRINE.polar_bear, radius: bear.avoiding ? (require('./polar-bear') as typeof import('./polar-bear')).MECH.followMax : (require('./polar-bear') as typeof import('./polar-bear')).MECH.cubMax + (require('./polar-bear') as typeof import('./polar-bear')).MECH.reach } : e.username ? (foes.includes(e.id) ? playerDoctrine(e) : null) : DOCTRINE[e.name]
-    if (!doc) continue
-    if (e.username && !(require('./pvp/last-seen') as typeof import('./pvp/last-seen')).seesPlayer(bot, e)) continue
+    if (e.username && (!foes.includes(e.id) || !seesPlayer(bot, e))) continue
+    if (!e.username && !DOCTRINE[e.name]) continue
     const d = (bear?.e ?? e).position.distanceTo(me)
     if (d > radius) continue
+    let doc = DOCTRINE[e.name]
+    if (bear) doc = { ...DOCTRINE.polar_bear, radius: bear.avoiding ? (require('./polar-bear') as typeof import('./polar-bear')).MECH.followMax : (require('./polar-bear') as typeof import('./polar-bear')).MECH.cubMax + (require('./polar-bear') as typeof import('./polar-bear')).MECH.reach }
+    if (e.username) {
+      // Both hands share one visible body layer. A head above a slab does not reveal the weapon below.
+      const ranged = gearPartVisible(bot, e, 0) && [e.equipment?.[0] ?? e.heldItem, e.equipment?.[1]]
+        .some(item => /^(bow|crossbow|trident)$/.test(item?.name))
+      doc = playerDoctrine(ranged)
+    }
     out.push({ e: bear?.e ?? e, doc, d, swelling: e.name === 'creeper' && creeperSwelling(bot, e) })
   }
   return out.sort((a, b) => a.d - b.d)
@@ -174,11 +181,23 @@ function cells (bot) {
   return v
 }
 
+// The feet cell can contain the floor itself (slab, snow layer, stair tread).
+// Require the centre of the next step to rest on a real face at the current sole height.
+function levelPartialFloor(bot, p) {
+  if (Number.isInteger(p.y)) return false
+  const cell = p.floored()
+  const block = bot.blockAt(cell)
+  if (!block?.shapes?.length || HURTS.has(block.name)) return false
+  const x = p.x - cell.x, y = p.y - cell.y, z = p.z - cell.z
+  return block.shapes.some(([x0, , z0, x1, top, z1]) =>
+    Math.abs(y - top) < 1e-7 && x >= x0 && x < x1 && z >= z0 && z < z1)
+}
+
 function runLength (bot, dir, max = 10, maxDrop = 3, arena = null) {
   bot = cells(bot)
   const DYS = [0, 1]; for (let k = 1; k <= maxDrop; k++) DYS.push(-k)
   const me = bot.entity.position
-  let y = Math.floor(me.y)
+  let y = bot.entity.onGround && levelPartialFloor(bot, me) ? me.y : Math.floor(me.y)
   let last = me.clone()
   let len = 0
   let wet = 0
@@ -187,8 +206,11 @@ function runLength (bot, dir, max = 10, maxDrop = 3, arena = null) {
     const x = Math.floor(me.x + dir.x * s)
     const z = Math.floor(me.z + dir.z * s)
     let found = null
+    if (!Number.isInteger(y) && levelPartialFloor(bot, new Vec3(me.x + dir.x * s, y, me.z + dir.z * s)) &&
+        insideArena(new Vec3(x + .5, y, z + .5), arena)) found = y
     for (const dy of DYS) {
-      const yy = y + dy
+      if (found !== null) break
+      const yy = Math.floor(y) + dy
       if (!insideArena(new Vec3(me.x + dir.x * s, yy, me.z + dir.z * s), arena) || !insideArena(new Vec3(x + .5, yy, z + .5), arena)) continue
       const feet = bot.blockAt(new Vec3(x, yy, z))
       const head = bot.blockAt(new Vec3(x, yy + 1, z))
@@ -482,6 +504,9 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
   let dodgeUntil = 0
   let dodgeKey = null
   let cornered = 0
+  let barrierTried = false
+  let rearBarrier: string | undefined
+  let airborneMiss: import('vec3').Vec3 | null = null
   let jukeNext = 0; let jukeUntil = 0; let jukeYaw = 0; let jukes = 0; let lunges = 0; let bridges = 0
   // S4d (07.10; ND_S4D=0 — прежний бег до срока): бег, за которым ходячий держится в 5 бл., не отрывает — так и сказать
   // через 3 игр. с, а не бежать 12 с к краю. Спринт 5.6 бл/с против зомби ~2.3, иссушителя ~2.75 (скорость моба ~ квадрат
@@ -500,7 +525,7 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
       for (const e of arena?.avoid || []) {
         const position = new Vec3(e.x, e.y, e.z)
         if (!hs.some(h => h.e.position.equals(position))) hs.push({ e: { name: 'player', position },
-          doc: { ...playerDoctrine({}), radius: e.r }, d: position.distanceTo(bot.entity.position), remembered: true })
+          doc: { ...playerDoctrine(), radius: e.r }, d: position.distanceTo(bot.entity.position), remembered: true })
       }
       for (const h of hs) if (!h.remembered && h.d < 16) fromNames.add(h.e.username || h.e.name)
       const walker = hs.find(h => !h.remembered && h.doc.radius > 0)
@@ -523,13 +548,15 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
           from: [...fromNames],
           at: xyz(bot.entity.position),
           ran: Math.round(bot.entity.position.distanceTo(new Vec3(start.x, start.y, start.z))),
+          ...(rearBarrier && { rearBarrier }),
           dodges: dodges || undefined, jukes: jukes || undefined, lunges: lunges || undefined, bridged: bridges || undefined
         }
       }
 
       const now = gameClock.now()
       const swell = hs.find(h => h.swelling && h.d < 6)
-      if (!plan || now >= replanAt || swell) {
+      const retryEscape = !plan && (bot.entity.onGround !== false || !airborneMiss || !airborneMiss.equals(bot.entity.position.floored()))
+      if (retryEscape || now >= replanAt || swell) {
         plan = pickDirection(bot, hs, prevYaw, goals, arena, null, true)
         // Прямой бег короткий (стены, комната) или прижали — путь по клеткам к выходу (ND_FLEE_ROUTE=0 — только лучи).
         if (process.env.ND_FLEE_ROUTE !== '0' && hs.some(h => h.doc.radius > 0 && h.d < 16) && (!plan || plan.drop || plan.run < 8)) {
@@ -565,13 +592,28 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
             const out = await pearlOut(bot, hs, arena)
             if (out) return { mode: 'прижали — ушёл жемчугом', pearl: out, from: [...fromNames], at: xyz(bot.entity.position) }
           }
+          // После отбрасывания на уровне ног может ещё не быть ни одной проходимой клетки.
+          // Последний бой решаем с опоры, когда уже можно проверить выход пешком или вплавь.
           if (cornered >= 3) {
-            stop()
-            return { mode: 'прижали — бежать некуда', cornered: true, from: [...fromNames], at: xyz(bot.entity.position) }
+            if (bot.entity.onGround !== false || inWater(bot)) {
+              stop()
+              return { mode: 'прижали — бежать некуда', cornered: true, from: [...fromNames], at: xyz(bot.entity.position) }
+            }
+            // Без опоры повторяем обзор при смене клетки, приземлении или очередном пересчёте.
+            airborneMiss = bot.entity.position.floored()
           }
         } else {
+          airborneMiss = null
           cornered = 0
           prevYaw = plan.yaw
+          if (!barrierTried && arena && bot.entity.onGround && walker?.e.username && !walker.doc.range && walker.d < walker.doc.radius &&
+            !hs.some(h => h !== walker && h.d < h.doc.radius)) {
+            const barrier = await (require('./combat/rear-barrier') as typeof import('./combat/rear-barrier')).blockBehind(bot, walker.e, {
+              ctl, retreatYaw: plan.yaw, arena, deadline, stop() { barrierTried = true; stop() }
+            })
+            if (barrier.ok) rearBarrier = barrier.how
+            if (ctl.aborted) break
+          }
         }
       }
       if (plan) {
@@ -606,11 +648,14 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
         }
         const f = keyDir(bot, 'forward')
         const wet = inWater(bot)
-        set('forward', (stepSafe(bot, f) || wet) && insideArena(bot.entity.position.offset(f.x, 0, f.z), arena))
+        const p = bot.entity.position
+        const next = bot.entity.onGround && levelPartialFloor(bot, p) ? runLength(bot, f, 1, 0, arena) : null
+        const level = next?.len === 1 && next.end.y === p.y
+        set('forward', (level || stepSafe(bot, f) || wet) && insideArena(p.offset(f.x, 0, f.z), arena))
         set('sprint', (bot.food ?? 20) > 6 && !wet)
         // Прыжок: стена по ходу или вода (всплыть).
         const ahead = bot.blockAt(bot.entity.position.offset(f.x * 0.8, 0, f.z * 0.8).floored())
-        set('jump', wet || !!(ahead && ahead.boundingBox === 'block'))
+        set('jump', wet || !level && !!(ahead && ahead.boundingBox === 'block'))
       }
 
       // Стрелы и шары — шаг в сторону поверх бега.
@@ -629,7 +674,8 @@ async function smartFlee (session, ctl, { timeoutMs = 12000, safeDist = 14, reas
     stop()
     edgeGuard.stop()
   }
-  return { mode: 'бежал до конца срока', from: [...fromNames], at: xyz(bot.entity.position), dodges: dodges || undefined, jukes: jukes || undefined, lunges: lunges || undefined, bridged: bridges || undefined, reason: reason || undefined }
+  return { mode: 'бежал до конца срока', from: [...fromNames], at: xyz(bot.entity.position), ...(rearBarrier && { rearBarrier }),
+    dodges: dodges || undefined, jukes: jukes || undefined, lunges: lunges || undefined, bridged: bridges || undefined, reason: reason || undefined }
 }
 
 // Жемчуг туда, где безопаснее всего. Точка переноса считается честно

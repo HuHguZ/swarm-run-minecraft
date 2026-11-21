@@ -5,6 +5,8 @@ import { installSight } from './arena/watch'
 import { swarmWind } from './swarm/swarm-driver/wind'
 import { swarmTurn } from './swarm/swarm-driver/turn'
 import { swarmTeam } from './swarm/swarm-driver/team'
+import { createDriverState } from './swarm/swarm-driver/state'
+import { swarmRetry } from './swarm/swarm-driver/retry'
 import { currentTurn, swarmLifecycle } from './swarm/swarm-driver/lifecycle'
 import { swarmMoves } from './swarm/swarm-driver/moves'
 import { swarmTurnWork } from './swarm/swarm-driver/turn-work'
@@ -35,7 +37,7 @@ function fixture(names = ['Victim', 'Helper']) {
       if (method === 'enemy_wind_plan') return new Promise(resolve => gates.set('plan', () => resolve({ detail: { ok: true, plan: {
         shots: [{ thrower: 'Helper', fireTick: 110 }]
       } } })))
-      return new Promise(resolve => calls[calls.length - 1].reply = detail => resolve({ status: 'done', detail }))
+      return new Promise(resolve => calls[calls.length - 1].reply = (detail, state?) => resolve({ status: 'done', detail, state }))
     } }
     return b
   })
@@ -48,10 +50,10 @@ function fixture(names = ['Victim', 'Helper']) {
     alive: name => !ctx.out.has(name) && !ctx.deadNow.has(name), log() {} }
   installSight(ctx)
   installDangers(ctx)
-  const sw: any = { bots, pos, generation: 1, now: () => 100000, alive: ctx.alive, log() {},
-    teamOf: b => b.team, hostile: (_b, name) => name === 'Foe', panic: () => false,
-    arena: { x: 0, y: 120, z: 0, r: 80 }, boardOf: () => ({ enemies: () => [] }),
-    go: (b, at, range, timeoutSeconds) => b.c.call('goto', { ...at, range, timeoutSeconds }) }
+  const sw = createDriverState({ bots, pos, now: () => 100000, alive: ctx.alive, log() {},
+    hostile: (_b, name) => name === 'Foe', arena: { x: 0, y: 120, z: 0, r: 80 } })
+  Object.assign(sw, swarmRetry(sw), { generation: 1, teamOf: b => b.team, panic: () => false, boardOf: () => ({ enemies: () => [] }),
+    go: (b, at, range, timeoutSeconds) => b.c.call('goto', { ...at, range, timeoutSeconds }) })
   let observedAt = Date.now()
   const report = web => victim.c.onDanger({ pos: pos.Victim.p, observedAt: ++observedAt,
     dangers: { web: web ? [{ at: pos.Victim.p, cells: 1 }] : [] } })
@@ -105,6 +107,24 @@ test('all twenty free wind holders can offer a pearl pop from forty-five blocks 
   f.api.pearlObserve(f.bots[0], [pearl])
   assert.equal(f.calls.filter(c => c.method === 'pearl_pop').length, 20, 'one observed pearl still schedules each candidate once')
   for (const c of f.calls) c.reply?.({ ok: false, why: 'controlled physical arrival deadline' }); await settle()
+})
+
+test('pearl witnesses give all four support RPCs the same arrival tick, including old untimed reports', async () => {
+  for (const gameTick of [100, undefined]) {
+    const f = fixture(['Near', 'Scout', 'Miner', 'Lance', 'Bow', 'Pot'])
+    const equipment = [[0, {}], [1, {}], [3, { cobweb: 1 }], [7, { iron_spear: 1 }], [10, { bow: 1, arrow: 2 }], [4, { splash_potion: 1 }]] as const
+    for (const [i, b] of f.bots.entries()) f.pos[b.name] = { p: { x: equipment[i][0], y: 120, z: 0 }, inv: equipment[i][1] }
+    const pearl = { id: 71, owner: 'Foe', at: { x: 0, y: 120, z: 0 }, block: { x: 0, y: 119, z: 0 }, eta: 60 }
+    f.api.pearlObserve(f.bots[0], [{ ...pearl, ...(gameTick === undefined ? {} : { gameTick }) }])
+    const support = f.calls.filter(c => ['boost_lance', 'boost_shot', 'pearl_potion', 'pearl_trap'].includes(c.method))
+    assert.deepEqual(support.map(c => c.method).sort(), ['boost_lance', 'boost_shot', 'pearl_potion', 'pearl_trap'])
+    for (const c of support) {
+      assert.equal(c.params.gameTick, gameTick, c.method)
+      assert.equal(c.params.eta, pearl.eta)
+    }
+    for (const c of f.calls) c.reply?.({ ok: true })
+    await settle()
+  }
 })
 
 test('uncapped pearl pops preserve the current defence, flee and input owner', async () => {
@@ -669,6 +689,152 @@ for (const phase of ['approach', 'draw']) test(`arrow boost yields to actual hel
   await settle()
   assert.equal(shots.length, 0, 'late ordinary boost cannot interrupt the active lava escape')
   if (phase === 'approach') assert.equal(f.calls.some(c => c.method === 'boost_lance'), false)
+})
+
+test('twenty scouts without spears do not recalculate the crew panic verdict for a boost they cannot start', () => {
+  const f = fixture(Array.from({ length: 20 }, (_, i) => 'Scout' + i))
+  let verdicts = 0
+  f.sw.panic = () => { verdicts++; return false }
+  const target = { id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }
+  for (const o of f.bots) f.pos[o.name] = { p: { x: 7, y: 120, z: 0 }, inv: { bow: 1, arrow: 8 } }
+  for (const o of f.bots) f.api.arrowBoost(o, [target])
+  assert.equal(verdicts, 0)
+  assert.deepEqual(f.calls, [])
+})
+
+test('an archer with a plain bow keeps working until they acquire Punch for a team boost', async () => {
+  const f = fixture(), target = { id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }
+  f.pos.Victim = { p: { x: 8, y: 120, z: 0 }, inv: { iron_spear: 1 } }
+  f.pos.Helper = { p: { x: 11, y: 120, z: 0 }, inv: { bow: 1, arrow: 4 }, enchants: [{ slot: 12, name: 'bow', ench: { power: 3 } }] }
+  f.api.arrowBoost(f.victim, [target])
+  assert.deepEqual(f.calls, [], 'an ordinary bow cannot supply the impulse')
+  f.pos.Helper.enchants.push({ slot: 14, name: 'bow', ench: { punch: 1 } })
+  f.api.arrowBoost(f.victim, [target])
+  assert.equal(f.calls.filter(c => c.method === 'goto').length, 2)
+  for (const c of f.calls) c.reply?.({ ok: false })
+  await settle()
+})
+
+for (const failed of [false, true]) test(`arrow boost stages from actual goto receipts before the status poll updates: failed=${failed}`, async t => {
+  const f = fixture(), timers: (() => void)[] = []
+  t.mock.method(globalThis, 'setTimeout', (work: () => void, ms: number) => { assert.equal(ms, 900); timers.push(work); return 0 as any })
+  f.pos.Victim = { p: { x: failed ? 7 : 11, y: 120, z: 0 }, inv: { iron_spear: 1 } }
+  f.pos.Helper = { p: { x: 10, y: 120, z: 0 }, inv: { bow: 1, arrow: 8 }, enchants: [{ slot: 12, name: 'bow', ench: { punch: 1 } }] }
+  f.api.arrowBoost(f.victim, [{ id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }])
+  for (const c of f.calls.filter(c => c.method === 'goto')) c.reply(failed && c.name === 'Helper' ? { ok: false } :
+    { arrived: { x: Math.floor(c.params.x), y: c.params.y, z: Math.floor(c.params.z) } })
+  await settle()
+  const lance = f.calls.find(c => c.method === 'boost_lance')
+  try {
+    assert.equal(!!lance, !failed)
+    for (const resume of timers) resume()
+    await settle()
+    assert.equal(f.calls.some(c => c.method === 'boost_shot'), !failed)
+  } finally {
+    for (const resume of timers.splice(0)) resume()
+    for (const c of f.calls.filter(c => /^boost_/.test(c.method))) c.reply({ ok: true })
+    await settle()
+  }
+  assert.ok(f.bots.every(b => !b.swarmReserved))
+})
+
+test('a stopped native goto near the staging position does not confirm a boost', async () => {
+  const f = fixture()
+  f.pos.Victim = { p: { x: 7, y: 120, z: 0 }, inv: { iron_spear: 1 } }
+  f.pos.Helper = { p: { x: 10, y: 120, z: 0 }, inv: { bow: 1, arrow: 8 } }
+  f.api.arrowBoost(f.victim, [{ id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }])
+  for (const c of f.calls.filter(c => c.method === 'goto')) {
+    c.reply(c.name === 'Victim' ? { stopped: 'WATER_ROUTE_UNCHANGED', at: c.params } : { arrived: c.params }, { pos: c.params })
+  }
+  await settle()
+  const lance = f.calls.find(c => c.method === 'boost_lance')
+  lance?.reply({ ok: false })
+  assert.equal(lance, undefined)
+})
+
+test('a failed boost approach to a stationary foe reopens on a new firing position or round', async () => {
+  const f = fixture(), target = { id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }
+  f.pos.Victim = { p: { x: 10, y: 120, z: 0 }, inv: { iron_spear: 1 } }
+  f.pos.Helper = { p: { x: 12, y: 120, z: 0 }, inv: { bow: 1, arrow: 4 } }
+  const stage = async () => {
+    const before = f.calls.length
+    f.api.arrowBoost(f.victim, [target])
+    const moves = f.calls.slice(before)
+    for (const c of moves) c.reply({ ok: false })
+    await settle()
+    return moves.length
+  }
+  assert.equal(await stage(), 2)
+  assert.equal(await stage(), 0)
+  f.pos.Victim.p.x = 7
+  assert.equal(await stage(), 2, 'the lancer has reached a different starting position on their own')
+  assert.equal(await stage(), 0)
+  f.sw.generation++
+  assert.equal(await stage(), 2, 'a new round has its own terrain and crew')
+})
+
+test('one stranded boost archer leaves the timing and firing order to the archer who reached the line', async t => {
+  const f = fixture(['Victim', 'Helper', 'Reserve']), timers: (() => void)[] = []
+  t.mock.method(globalThis, 'setTimeout', (work: () => void) => { timers.push(work); return 0 as any })
+  const target = { id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }
+  f.pos.Victim = { p: { x: 10, y: 120, z: 0 }, inv: { iron_spear: 1 } }
+  for (const [k, name] of ['Helper', 'Reserve'].entries()) f.pos[name] = { p: { x: 11 + k, y: 120, z: 0 }, inv: { bow: 1, arrow: 3 } }
+  f.api.arrowBoost(f.victim, [target])
+  for (const c of f.calls.filter(c => c.method === 'goto')) c.reply(c.name === 'Helper' ? { ok: false } : { arrived: c.params })
+  await settle()
+  assert.deepEqual(f.calls.find(c => c.method === 'boost_lance')?.params.from, ['Reserve'])
+  assert.equal(f.helper.swarmReserved, undefined, 'failed archer resumes normal duties while the other archer draws')
+  timers.shift()!()
+  await settle()
+  const shots = f.calls.filter(c => c.method === 'boost_shot')
+  assert.deepEqual(shots.map(s => [s.name, s.params.wait, s.params.lag]), [['Reserve', 0, 0]])
+  for (const c of f.calls.filter(c => /^boost_/.test(c.method))) c.reply({ ok: true })
+  await settle()
+  assert.ok(f.bots.every(b => !b.swarmReserved))
+})
+
+for (const phase of ['approach', 'draw']) test(`a newly ordered retreat takes precedence over an arrow boost during ${phase}`, async t => {
+  const f = fixture(), timers: (() => void)[] = []
+  t.mock.method(globalThis, 'setTimeout', (work: () => void) => { timers.push(work); return 0 as any })
+  f.pos.Victim = { p: { x: 7, y: 120, z: 0 }, inv: { iron_spear: 1 } }
+  f.pos.Helper = { p: { x: 10, y: 120, z: 0 }, inv: { bow: 1, arrow: 8 } }
+  f.api.arrowBoost(f.victim, [{ id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }])
+  const retreat = () => f.sw.planned.set('blue', new Map([[f.helper.name, { kind: 'flee' }]]))
+  if (phase === 'approach') retreat()
+  for (const c of f.calls.filter(c => c.method === 'goto')) c.reply({ arrived: c.params })
+  await settle()
+  if (phase === 'draw') retreat()
+  for (const resume of timers) resume()
+  await settle()
+  for (const c of f.calls.filter(c => /^boost_/.test(c.method))) c.reply({ ok: false })
+  await settle()
+  assert.equal(f.calls.some(c => c.method === 'boost_lance'), phase === 'draw')
+  assert.equal(f.calls.some(c => c.method === 'boost_shot'), false)
+  assert.ok(f.bots.every(b => !b.swarmReserved))
+  f.sw.planned.clear()
+  const before = f.calls.length
+  f.api.arrowBoost(f.victim, [{ id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }])
+  assert.deepEqual(f.calls.slice(before).map(c => c.method), ['goto', 'goto'], 'the same observed line reopens once the retreat ends')
+  for (const c of f.calls.slice(before)) c.reply({ ok: false })
+  await settle()
+})
+
+test('an already finished lance releases its archers without a friendly shot', async t => {
+  const f = fixture(), timers: (() => void)[] = []
+  t.mock.method(globalThis, 'setTimeout', (work: () => void) => { timers.push(work); return 0 as any })
+  f.pos.Victim = { p: { x: 7, y: 120, z: 0 }, inv: { iron_spear: 1 } }
+  f.pos.Helper = { p: { x: 10, y: 120, z: 0 }, inv: { bow: 1, arrow: 8 } }
+  f.api.arrowBoost(f.victim, [{ id: 'Foe', visible: true, position: { x: 0, y: 120, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }])
+  for (const c of f.calls.filter(c => c.method === 'goto')) c.reply({ arrived: c.params })
+  await settle()
+  f.calls.find(c => c.method === 'boost_lance').reply({ ok: false, why: 'враг скрылся' })
+  await settle()
+  timers.shift()!()
+  await settle()
+  const shots = f.calls.filter(c => c.method === 'boost_shot')
+  for (const shot of shots) shot.reply({ ok: false })
+  assert.equal(shots.length, 0)
+  assert.ok(f.bots.every(b => !b.swarmReserved))
 })
 
 test('an unchanged arrow boost starts both native actions and releases its reservations', async t => {

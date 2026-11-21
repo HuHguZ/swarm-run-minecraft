@@ -6,6 +6,7 @@ import * as gameClock from '../game-clock'
 import movement = require('../movement')
 import * as flee from '../flee'
 import * as moves from '../moves'
+import { instantBlasts, type InstantBlast } from './instant-blast'
 
 type Bot = Record<string, any>
 export interface Blast { id: number; kind: 'tnt' | 'falling_block' | 'charged_creeper'; distance: number; fuse: number | null; reach: number; alarm: boolean }
@@ -90,13 +91,20 @@ export function blastNear(bot: Bot, margin = 0): Blast | null {
   return best
 }
 
+export function actionableInstantBlasts (bot: Bot, enemies?: string[]) {
+  const scope = bot._ndFoes ?? enemies
+  return instantBlasts(bot, Array.isArray(scope) ? scope : [])
+}
+
 // The source to face: a primed TNT or charged creeper in alarm, else a creeper hissing within its 7-block swell reach
 // (Creeper.SwellGoal) or standing at the body (3.3, autopilot.CREEPER.closeDist).
-export function shieldableBlast(bot: Bot): { entity: Bot; kind: string; distance: number } | null {
+export function shieldableBlast(bot: Bot, enemies?: string[]): { entity: Bot; kind: string; distance: number } | null {
   const me = bot.entity?.position
   if (!me) return null
   const alarm = blastNear(bot)
   if (alarm?.alarm && alarm.kind !== 'falling_block' && bot.entities[alarm.id]) return { entity: bot.entities[alarm.id], kind: alarm.kind, distance: alarm.distance }
+  const instant = actionableInstantBlasts(bot, enemies).sort((a, b) => a.at.distanceTo(me) - b.at.distanceTo(me))[0]
+  if (instant) return { entity: { position: instant.at, height: 0 }, kind: instant.kind, distance: instant.at.distanceTo(me) }
   let best: { entity: Bot; kind: string; distance: number } | null = null
   for (const entity of Object.values(bot.entities || {}) as Bot[]) {
     if (entity?.name !== 'creeper' || !entity.position || entity.isValid === false) continue
@@ -119,7 +127,7 @@ function blastBound(bot: Bot, entity: Bot | undefined): number {
   return ((entity?.name === 'tnt' ? fuseOf(bot, entity) : null) ?? 80) * 50 + 1000
 }
 
-export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }) {
+export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }, enemies?: string[]) {
   const bot = session.bot
   const start = gameClock.now()
   let until = Infinity
@@ -131,7 +139,7 @@ export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort
   try {
     if (!await shield.wear()) return { how: 'shield-blast', unavailable: true, reason: 'shield not worn' }
     while (!ctl.aborted && gameClock.now() < until && (bot.health ?? 0) > 0) {
-      const source = shieldableBlast(bot)
+      const source = shieldableBlast(bot, enemies ?? session._ndFoes)
       if (!source) break
       if (until === Infinity) until = start + blastBound(bot, source.entity)
       kind = source.kind
@@ -143,12 +151,12 @@ export async function shieldBlast(session: Bot, ctl: { aborted: boolean; onAbort
       await movement.sleep(50)
     }
   } finally { shield.close() }
-  return { how: 'shield-blast', kind, blocked, clear: !shieldableBlast(bot), seconds: Math.round((gameClock.now() - start) / 100) / 10 }
+  return { how: 'shield-blast', kind, blocked, clear: !shieldableBlast(bot, enemies ?? session._ndFoes), seconds: Math.round((gameClock.now() - start) / 100) / 10 }
 }
 
 // Run out of reach along flee.pickDirection (terrain run length, mobs on the way): the blast is one more danger source,
 // so dodging TNT does not run into a creeper (stress stand: TNT + creeper, dodged into the creeper's blast).
-export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }) {
+export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort: Array<() => void> }, enemies?: string[]) {
   const bot = session.bot
   const start = gameClock.now()
   let until = Infinity
@@ -156,7 +164,7 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
   const stop = () => { for (const key of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) set(key, false) }
   ctl.onAbort.push(stop)
   try { bot.pathfinder?.setGoal(null) } catch {}
-  let last: Blast | null = null
+  let last: Blast | InstantBlast | null = null
   let prevYaw: number | null = null
   let cornered = false
   let steps = 0
@@ -167,13 +175,16 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
       const blast = blastNear(bot, 2)
       const charges = tntCharges(bot, me)
       const inReach = charges.filter(c => c.position.distanceTo(me) <= TNT_REACH + 3)
+      const instant = actionableInstantBlasts(bot, enemies ?? session._ndFoes)
       // A calm charged creeper nearby is no reason to keep running once nothing alarms.
-      if ((!blast || blast.kind === 'charged_creeper' && !blast.alarm && last?.kind !== 'charged_creeper') && !inReach.length) break
-      if (until === Infinity) until = start + (inReach.length ? Math.max(...inReach.map(c => c.fuse)) * 50 + 1000 : blastBound(bot, bot.entities[blast!.id]))
-      if (blast) last = blast
+      if ((!blast || blast.kind === 'charged_creeper' && !blast.alarm && last?.kind !== 'charged_creeper') && !inReach.length && !instant.length) break
+      if (until === Infinity) until = start + (inReach.length ? Math.max(...inReach.map(c => c.fuse)) * 50 + 1000 : blastBound(bot, blast && bot.entities[blast.id]))
+      if (instant.length) last = instant[0]
+      else if (blast) last = blast
       const source = blast && blast.kind !== 'tnt' ? [{ e: bot.entities[blast.id], doc: { radius: blast.reach, weight: 10, blast: blast.reach }, d: blast.distance, swelling: true }] : []
       // Every charge steers the run, not only the deepest: the second one on the other side was run into (arena 16.10); a
       // chain block counts before it is lit.
+      for (const contact of instant) source.push({ e: { position: contact.at }, doc: { radius: contact.reach + 1, weight: 10, blast: contact.reach }, d: contact.at.distanceTo(me), swelling: true })
       const others = inReach.map(c => ({ e: { position: c.position }, doc: { radius: TNT_REACH + 3, weight: 10, blast: TNT_REACH + 3 }, d: c.position.distanceTo(me), swelling: true }))
       const plan: { yaw: number; dir: { x: number; z: number } } | null = flee.pickDirection(bot, [...source, ...others, ...flee.hostilesAround(bot, 16)], prevYaw, [], null,
         o => blastExposure(me, o, inReach))
@@ -188,7 +199,8 @@ export async function dodgeBlast(session: Bot, ctl: { aborted: boolean; onAbort:
       await movement.sleep(50)
     }
   } finally { stop() }
-  const remaining = blastNear(bot)
+  const immediate = actionableInstantBlasts(bot, enemies ?? session._ndFoes)[0]
+  const remaining = blastNear(bot) || (immediate && { distance: immediate.at.distanceTo(bot.entity.position) })
   const ended = ctl.aborted ? 'aborted' : cornered ? 'cornered' : (bot.health ?? 0) <= 0 ? 'dead' : gameClock.now() >= until ? 'fuse-bound' : 'clear'
   return { how: 'dodge-blast', kind: last?.kind ?? null, clear: !remaining, ...(cornered ? { cornered } : {}), distance: remaining ? Math.round(remaining.distance * 10) / 10 : null,
     seconds: Math.round((gameClock.now() - start) / 100) / 10, ended, steps }

@@ -36,6 +36,68 @@ function scene(t) {
   return { bot, foe, sight, time, tracker, poll, step, hide: (value = true) => { hidden = value } }
 }
 
+test('a visible grounded landing ends the overhead shield even when the enemy footing is hidden', t => {
+  const f = scene(t), bot = f.bot
+  bot.entity.position.set(.5, 135.75, .5)
+  bot.inventory = { slots: [], items: () => [] }; bot.inventory.slots[45] = { name: 'shield' }
+  let raises = 0, lowers = 0
+  Object.assign(bot, { getControlState: () => false, setControlState() {}, lookAt: async () => {},
+    activateItem: () => { raises++ }, deactivateItem: () => { lowers++ } })
+  const blocks = bot.blockAt
+  bot.blockAt = p => p.floored().equals(new Vec3(3, 139, 0)) ? null : blocks(p)
+  f.foe.equipment = [{ name: 'mace' }]
+  const session: any = { bot, _ndFoes: ['Foe'], _rescue: { arena: { x: 0, z: 0, r: 80 } } }
+  installWindOut(session)
+  let previous
+  const publish = (x: number, y: number, grounded: boolean) => {
+    f.time.advanceTicks(1)
+    f.foe.position.set(x, y, .5); f.foe.onGround = grounded
+    const next = { ...f.foe.position, kind: 'entity_move_look', grounded, t: clock.observationNow() }
+    f.foe._ndPositionReceipts = [previous, next]; previous = next; f.foe.emit('ndPositionObserved')
+    bot.emit('physicsTick')
+    return smashes(bot, ['Foe'], null, true)
+  }
+  publish(3.5, 140.74, false)
+  const incoming = publish(3.5, 140.28, false)
+  assert.equal(incoming.length, 1)
+  assert.equal(raises, 1)
+  assert.equal(f.tracker.threat()?.kind, 'air')
+  assert.equal(publish(3.5, 140, true).length, 0, 'the visible landing packet ended the fall above the defender')
+  assert.equal(f.tracker.threat()?.kind, 'above', 'a nearby visible mace on the ledge can still guard the ground below')
+  for (let i = 0; i < 9; i++) { f.time.advanceTicks(1); bot.emit('physicsTick') }
+  assert.equal(lowers, 1)
+  assert.equal(raises, 1)
+  publish(2.95, 139.92, false)
+  assert.equal(publish(2.8, 139.46, false).length, 1)
+  assert.equal(raises, 2, 'walking off the unseen ledge opens a new actual aerial strike')
+})
+
+test('twenty visible ground receipts avoid every new support probe while entity defaults alone preserve aerial caution', t => {
+  const f = scene(t), bot = f.bot, foes: string[] = []
+  bot.entity.position.set(.5, 135.75, .5)
+  const roster = []
+  const at = (i: number) => new Vec3(.5 + 3 * Math.cos(i * Math.PI / 10), 140, .5 + 3 * Math.sin(i * Math.PI / 10))
+  for (let i = 0; i < 39; i++) {
+    const e = Object.assign(new EventEmitter(), { id: i + 2, type: 'player', username: 'Player' + i, position: at(i),
+      onGround: true, height: 1.8, width: .6, equipment: [{ name: 'mace' }], metadata: [], isValid: true,
+      _ndPositionReceipts: [null, { kind: 'spawn_entity', t: clock.observationNow() }] })
+    bot.entities[e.id] = e
+    if (i < 20) { roster.push(e); foes.push(e.username) }
+  }
+  let probes = 0
+  const blocks = bot.blockAt
+  bot.blockAt = p => { if (p.y === 140 - .3) { probes++; return null } return blocks(p) }
+  assert.equal(smashes(bot, foes, null, true).length, 20, 'the default ground flag on a new entity cannot end its forecast')
+  assert.equal(probes, 20)
+  f.time.advanceTicks(1)
+  for (const e of roster) {
+    e._ndPositionReceipts = [e._ndPositionReceipts[1], { ...e.position, kind: 'sync_entity_position', grounded: true, t: clock.observationNow() }]
+    e.emit('ndPositionObserved')
+  }
+  probes = 0
+  assert.deepEqual([smashes(bot, foes, null, true).length, probes], [0, 0])
+})
+
 test('a high directed descent is detected before the late wind-charge to mace switch', t => {
   const f = scene(t)
   f.bot.emit('physicsTick'); f.poll()

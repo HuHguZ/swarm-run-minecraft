@@ -103,6 +103,65 @@ test('one allied sighting is shared, other teams and hidden updates are rejected
   assert.equal(knowledge.length, 1)
   assert.equal(knowledge[0].position.x, 5)
 })
+test('two wings send actual search routes to separate last sightings after losing visual contact', async () => {
+  let now = 1000
+  const legs = [], calls = []
+  const point = (x: number) => ({ x, y: 64, z: 0 })
+  const bots = ['A', 'B'].map(name => ({ name, team: 'blue', c: { async call(method, params) {
+    calls.push(method)
+    if (method !== 'goto') return { status: 'done', detail: {} }
+    const to = { x: params.x, y: params.y, z: params.z }
+    legs.push({ name, to }); pos[name].p = to
+    return { status: 'done', detail: { arrived: to } }
+  } } }))
+  const pos = Object.fromEntries(bots.map((b, i) => [b.name, { p: point(i ? 32 : -32), hp: 20,
+    inv: { iron_sword: 1 }, armor: { torso: 'iron_chestplate' } }]))
+  const driver = createSwarmDriver({ bots, pos, alive: () => true, arena: { x: 0, y: 64, z: 0, r: 80 },
+    home: () => point(0), now: () => now, hostile: (_, id) => ['West', 'East'].includes(id), log() {} })
+  driver.observe(bots[0], [{ id: 'West', visible: true, position: point(-40) }])
+  now += 500
+  driver.observe(bots[1], [{ id: 'East', visible: true, position: point(40) }])
+  now += 9000
+  driver.observe(bots[0], [{ id: 'West', visible: false, position: point(12) }])
+  await Promise.all(bots.map(b => driver.turn(b)))
+  assert.deepEqual(legs.sort((a, b) => a.name.localeCompare(b.name)), [{ name: 'A', to: point(-40) }, { name: 'B', to: point(40) }])
+  assert.deepEqual(driver.enemies(bots[0]), [])
+  assert.ok(!calls.includes('fight'))
+})
+
+test('after inspecting a last sighting the hunter keeps sweeping until a new report', async () => {
+  let now = 1000
+  const clue = { x: 12, y: 64, z: 0 }, legs: typeof clue[] = []
+  const frame = { p: { x: 0, y: 64, z: 0 }, hp: 20, inv: { iron_sword: 1 }, armor: { torso: 'iron_chestplate' } }
+  const b: any = { name: 'Hunter', team: 'blue', c: { async call(method, params) {
+    if (method === 'goto') {
+      frame.p = { x: params.x, y: params.y, z: params.z }
+      legs.push(frame.p)
+      return { status: 'done', detail: { arrived: frame.p } }
+    }
+    return { status: 'done', detail: {} }
+  } } }
+  const driver = createSwarmDriver({ bots: [b], pos: { Hunter: frame }, alive: () => true, now: () => now,
+    arena: { x: 0, y: 64, z: 0, r: 60 }, home: () => frame.p, hostile: (_, id) => id === 'Foe', log() {} })
+  const sight = () => driver.observe(b, [{ id: 'Foe', visible: true, position: clue }])
+  sight()
+  await driver.turn(b)
+  frame.p = { x: 0, y: 64, z: 0 }
+  legs.length = 0
+  now += 9000
+  const step = async () => { now += 1000; driver.observe(b, []); await driver.turn(b) }
+  await step()
+  assert.deepEqual(legs[0], clue)
+  await step()
+  await step()
+  assert.equal(legs.length, 3)
+  assert.notDeepEqual(legs[2], clue, 'the second sweep leg must not retrace the first one to the stale report')
+  assert.deepEqual(driver.enemies(b), [])
+  sight()
+  now += 9000
+  await step()
+  assert.deepEqual(legs.at(-1), clue, 'a new sighting at the same position starts a new investigation')
+})
 test('an opened empty chest stays empty until the arena reports its refill, however long that takes', async () => {
   const priorNow = Date.now
   let now = 1000

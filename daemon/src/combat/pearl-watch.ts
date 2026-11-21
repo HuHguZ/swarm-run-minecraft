@@ -7,6 +7,8 @@ import * as pick from '../pick'
 import { isAlly } from './ally-safety'
 import { observationNow } from '../game-clock'
 import { worldTick } from './team-wind'
+import { seesPlayer } from '../pvp/last-seen'
+import { windCollisionWorld } from './enemy-wind'
 
 const GRAVITY = .03, DRAG = .99
 
@@ -14,7 +16,10 @@ const GRAVITY = .03, DRAG = .99
 export function pearlLanding(world: { blockAt(p: Vec3): any }, from: Vec3, velocity: Vec3, maxTicks = 120) {
   let p = from.clone(), v = velocity.clone()
   for (let tick = 1; tick <= maxTicks; tick++) {
-    v = new Vec3(v.x, v.y - GRAVITY, v.z).scaled(DRAG)
+    const cell = world.blockAt(p.floored())
+    if (!cell || cell.name === 'bubble_column') return null
+    const wet = cell.name === 'water' || cell.getProperties?.().waterlogged === true
+    v = new Vec3(v.x, v.y - GRAVITY, v.z).scaled(wet ? .8 : DRAG)
     const len = v.norm()
     if (len < 1e-9) return null
     let unknown = false
@@ -22,8 +27,8 @@ export function pearlLanding(world: { blockAt(p: Vec3): any }, from: Vec3, veloc
     const hit = pick.blockOnRay(seen, p, v.scaled(1 / len), len)
     // Владелец появляется в oldPosition() жемчуга — где тот был в начале тика удара (ThrownEnderpearl.onHit 1.21.11, javap
     // codex-lab/pearl), а не в точке касания: под углом это до шага (~1.5 бл.) раньше и выше. contact — касание блока.
-    if (hit) return { tick, at: p.clone(), contact: p.plus(v.scaled(hit.t / len)), block: hit.pos, velocity: v }
     if (unknown) return null
+    if (hit) return { tick, at: p.clone(), contact: p.plus(v.scaled(hit.t / len)), block: hit.pos, velocity: v }
     p = p.plus(v)
   }
   return null
@@ -35,16 +40,16 @@ export function enemyPearls(bot: any) {
   const own = bot.entity
   if (!own?.position) return []
   const eye = pick.eyeOf(bot), out: any[] = [], gameTick = worldTick(bot)
+  let world: ReturnType<typeof windCollisionWorld> | undefined
   for (const e of Object.values(bot.entities || {}) as any[]) {
     if (e?.name !== 'ender_pearl' || !e.position) continue
-    const d = e.position.minus(eye), len = d.norm()
-    if (len > 64 || len > 1e-6 && pick.blockOnRay(bot, eye, d.scaled(1 / len), len)) continue
+    if (e.position.distanceTo(eye) > 64 || !seesPlayer(bot, e)) continue
     const seen = bot._ndThrown?.get(e.id), birth = seen?.name === 'ender_pearl' ? seen : null
     if (birth?.own || !birth && !e.velocity) continue
     let owner = birth?.owner && bot.entities[birth.owner]?.username || owners.get(e)
     if (owner === undefined) {
       const thrower = (Object.values(bot.players || {}) as any[]).map(pl => pl?.entity)
-        .filter(p => p?.position && p !== own && p.username && p.position.offset(0, 1.62, 0).distanceTo(e.position) <= 3)
+        .filter(p => p?.position && p !== own && p.username && p.position.offset(0, 1.62, 0).distanceTo(e.position) <= 3 && seesPlayer(bot, p))
         .sort((a, b) => a.position.distanceTo(e.position) - b.position.distanceTo(e.position))[0]
       owner = thrower?.username || ''
       // Не угадал хозяина с первого взгляда — пробовать на следующих (кэш '' прятал жемчуг навсегда).
@@ -54,7 +59,8 @@ export function enemyPearls(bot: any) {
     const age = !birth ? 0 : gameTick !== null && Number.isSafeInteger(birth.gameTick) ? gameTick - birth.gameTick
       : Math.floor((observationNow() - birth.observedAt) / 50)
     if (!Number.isSafeInteger(age) || age < 0 || age >= 120) continue
-    const land = pearlLanding({ blockAt: p => bot.blockAt(p, false) }, birth ? new Vec3(birth.p.x, birth.p.y, birth.p.z) : e.position,
+    world ||= windCollisionWorld(bot)
+    const land = pearlLanding(world, birth ? new Vec3(birth.p.x, birth.p.y, birth.p.z) : e.position,
       birth ? new Vec3(birth.v.x, birth.v.y, birth.v.z) : e.velocity)
     if (land && land.tick > age) out.push({ id: e.id, owner, at: { x: +land.at.x.toFixed(2), y: +land.at.y.toFixed(2), z: +land.at.z.toFixed(2) }, eta: land.tick - age,
       ...(gameTick === null ? {} : { gameTick }),

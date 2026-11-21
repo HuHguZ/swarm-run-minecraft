@@ -14,7 +14,12 @@ function scene({ name = 'stone', x = .5, y = 120 } = {}) {
   const danger = () => threats.dangers(bot, { foes: [] }).floor
   danger()
   const crack = (at = new Vec3(0, 119, 0)) => bot.emit('blockBreakProgressObserved', bot.blockAt(at), 2, { id: 2, username: 'Ally' })
-  const remove = (at = new Vec3(0, 119, 0)) => { const old = bot.blockAt(at); changes.set(at.toString(), 'air'); bot.emit('blockUpdate', old, bot.blockAt(at)) }
+  const remove = (at = new Vec3(0, 119, 0)) => {
+    const old = bot.blockAt(at)
+    changes.set(at.toString(), 'air')
+    const air = bot.blockAt(at)
+    bot.emit('blockUpdate', old, air); bot.emit(`blockUpdate:${at}`, old, air)
+  }
   const sound = (at: Vec3, what = 'hit') => bot._client.emit('sound_effect', { sound: { data: { soundName: `minecraft:block.stone.${what}` } },
     x: at.x * 8, y: at.y * 8, z: at.z * 8, volume: 1 })
   return { bot, danger, crack, remove, sound, close: () => bot.emit('end') }
@@ -81,5 +86,46 @@ test('planning both dig layers never manufactures a native disappearance or crac
   try {
     f.bot._ndDigAvoid = [{ x: 0, y: 119, z: 0 }, { x: 0, y: 118, z: 0 }]
     assert.deepEqual(f.danger(), [])
+  } finally { f.close() }
+})
+
+test('an ended visible crack releases the floor alarm without hiding a second miner or a real hole', () => {
+  const f = scene(), at = new Vec3(0, 119, 0)
+  require('mineflayer/lib/plugins/block_actions')(f.bot)
+  f.bot.entities = { 2: { id: 2 }, 3: { id: 3 } }
+  const frame = (id, stage) => f.bot._client.emit('block_break_animation', { entityId: id, destroyStage: stage, location: at })
+  f.bot.ndClock = { ticks: 70 }
+  try {
+    frame(2, 4); frame(3, 6); frame(42, 3)
+    assert.equal(f.danger()[0]?.signal, 'sight')
+    frame(2, -1)
+    assert.equal(f.danger()[0]?.signal, 'sight', 'another visible miner is still cracking the same support')
+    f.sound(at.offset(.5, .5, .5))
+    frame(3, 255)
+    assert.equal(f.danger()[0]?.signal, 'sight', 'the public crack can have a source outside entity tracking')
+    frame(42, -1)
+    assert.deepEqual(f.danger(), [], 'both animations ended on the intact visible floor within this tick')
+    frame(2, 1)
+    assert.equal(f.danger()[0]?.signal, 'sight', 'a new crack in the same tick must be actionable')
+    f.remove(at); frame(2, -1)
+    assert.equal(f.danger()[0]?.signal, 'sight', 'the independently observed removal survives the end packet')
+  } finally { f.close() }
+})
+
+test('finishing our own dig does not turn the accepted removal into a floor evacuation', async () => {
+  const f = scene(), at = new Vec3(0, 119, 0), states = []
+  require('mineflayer/lib/plugins/digging')(f.bot)
+  f.bot.digTime = () => 1
+  f.bot.swingArm = () => {}
+  f.bot._client.write = (name, p) => { if (name === 'block_dig') states.push(p.status) }
+  f.bot._updateBlockState = (p, stateId) => {
+    assert.equal(stateId, 0)
+    assert.equal(f.bot.targetDigBlock, null, 'Mineflayer clears the target before updating the world')
+    f.remove(p)
+  }
+  try {
+    await f.bot.dig(f.bot.blockAt(at), 'ignore')
+    assert.deepEqual(states, [0, 2])
+    assert.deepEqual(f.danger(), [], 'a terrain change caused by the ongoing route must not cancel that route')
   } finally { f.close() }
 })

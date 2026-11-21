@@ -124,3 +124,35 @@ test('a failed geometry batch stays unknown without per-cell compatibility reque
     f.report(); await settle(); assert.equal(f.calls.length, 1, 'unknown is not a newly opened route')
   }
 })
+
+test('a delayed sight check cannot move the bot for a vanished floor crack, and a fresh crack can still move it', async t => {
+  const f = scene(t)
+  let wall = 10000
+  t.mock.method(Date, 'now', () => wall)
+  const crack = { name: 'видимый подкоп', at: { x: .5, y: 63, z: .5 }, ticks: 0, signal: 'sight' }
+  f.report([], { floor: [crack] })
+  f.calls[0].reply({ ok: false, why: 'стены' }); await settle()
+  const call = f.b.c.call
+  let deliver: (() => void) | undefined
+  f.b.c.call = (method, params) => {
+    const response = call(method, params)
+    if (method !== 'swarm_pose' || deliver) return response
+    return new Promise(resolve => { deliver = () => resolve(response) })
+  }
+  f.geometry('air'); wall += 1600
+  f.report([], { floor: [crack] })
+  assert.ok(deliver)
+  f.report([], { floor: [] })
+  assert.equal(f.calls.length, 1)
+  wall += 1600
+  const newCrack = { ...crack, at: { x: -.5, y: 63, z: .5 } }
+  f.report([], { floor: [newCrack] })
+  await settle()
+  assert.equal(f.calls.length, 2)
+  assert.ok(f.calls[1].params.dir.x > 0, 'the escape points away from the newly reported support')
+  f.geometry('bedrock'); f.calls[1].reply({ ok: false, why: 'стены' }); await settle()
+  deliver(); await settle()
+  wall += 1600
+  f.report([], { floor: [newCrack] }); await settle()
+  assert.equal(f.calls.length, 2, 'the delayed opening cannot erase the blocked exit of a newer floor crack')
+})

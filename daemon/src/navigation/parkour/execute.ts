@@ -1,9 +1,10 @@
 // Паркур: исполнение плана прыжка по тикам со сверкой тела и прогноза, прыжок к цели, спуск на уступ.
 import { Vec3 } from 'vec3'
-import { bodyBox, bodyClear, supportAt, type CollisionBlock, type Point } from '../geometry'
-import { PlayerState, controls, JUMP_FRAMES, onTarget, settledLanding, MAX_FALL_DAMAGE, ROUTE_FRAMES, withinArena, safeFallCost, forecastOwner, simulator, worldOf, IDLE } from './model'
+import { bodyBox, bodyClear, supportAt, type CollisionBlock, type CollisionWorld, type Point } from '../geometry'
+import { PlayerState, controls, JUMP_FRAMES, onTarget, settledLanding, MAX_FALL_DAMAGE, ROUTE_FRAMES, withinArena, safeFallCost, forecastOwner, simulator, worldOf, seesPoint, IDLE } from './model'
 import type { MovementBot, Cancellation, JumpOptions, PlanningDiagnostics, MovementArena, JumpPlan, State, Control } from './model'
-import { planJumpAsync } from './search'
+import { LOCAL_JUMP_REACH, planJumpAsync } from './search'
+import { holdEdge } from './moves'
 
 interface TrajectorySample {
   tick: number; pos: Point; velocity: Point; onGround: boolean; hp?: number;
@@ -30,58 +31,102 @@ export function bodyObservation(bot: MovementBot, pos: Point) {
   return { body, clear: bodyClear(bot, pos), cells }
 }
 
-export async function executeJump(bot: MovementBot, ctl: Cancellation, target: Point, opts: JumpOptions = {}): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[]; planningMs: number; planningTicks?: number; forecast?: unknown }> {
+export async function executeJump(bot: MovementBot, ctl: Cancellation, target: Point, opts: JumpOptions = {}, observe?: () => MovementBot): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[]; planningMs: number; planningTicks?: number; forecast?: unknown }> {
   bot.pathfinder?.setGoal(null)
   bot.clearControlStates(); bot.setControlState('sneak', true)
-  const start = forecastStart(bot, target); const diagnostics: PlanningDiagnostics = { frames: 0, profiles: 0 }
+  const planningBody = observe?.() ?? bot
+  const start = forecastStart(planningBody, target); const diagnostics: PlanningDiagnostics = { frames: 0, profiles: 0 }
   const clock = require('../../game-clock') as { now(): number }
-  const began = performance.now(); const gameBegan = clock.now(); const plan = await planJumpAsync(bot, ctl, target, { maxFrames: JUMP_FRAMES, ...opts, diagnostics })
+  const began = performance.now(); const gameBegan = clock.now(); const plan = await planJumpAsync(planningBody, ctl, target, { maxFrames: JUMP_FRAMES, ...opts, diagnostics })
   // Wall time is this machine's CPU; game ticks are what the body stood still.
   const planningMs = performance.now() - began; const planningTicks = Math.round((clock.now() - gameBegan) / 50)
   if (!plan) return { ok: false, why: diagnostics.why ?? 'no_safe_native_trajectory', ticks: 0, samples: [], planningMs, planningTicks, forecast: { ...start, diagnostics, observation: {
-    start: { at: { ...start.native.pos }, ...bodyObservation(bot, start.native.pos) },
-    target: { at: { ...target }, ...bodyObservation(bot, target) },
-    ...(opts.climb ? { climb: { at: { ...opts.climb }, ...bodyObservation(bot, opts.climb) } } : {}),
-    ...(diagnostics.closest ? { closest: { at: { ...diagnostics.closest.pos }, ...bodyObservation(bot, diagnostics.closest.pos) } } : {})
+    start: { at: { ...start.native.pos }, ...bodyObservation(planningBody, start.native.pos) },
+    target: { at: { ...target }, ...bodyObservation(planningBody, target) },
+    ...(opts.climb ? { climb: { at: { ...opts.climb }, ...bodyObservation(planningBody, opts.climb) } } : {}),
+    ...(diagnostics.closest ? { closest: { at: { ...diagnostics.closest.pos }, ...bodyObservation(planningBody, diagnostics.closest.pos) } } : {})
   } } }
   // The forecast keeps an inner centering margin. Actual completion also checks
   // the full supported, collision-free body after six stopping ticks; a tiny
   // coordinate drift inside that safe footprint is not a failed landing.
-  const result = await executePlan(bot, ctl, { ...plan, arena: opts.arena }, st => onTarget(bot, st, target, opts.tolerance ?? .25))
+  const result = await executePlan(bot, ctl, { ...plan, arena: opts.arena }, st => onTarget(observe?.() ?? bot, st, target, opts.tolerance ?? .25), undefined, observe)
   // A real step-height collision can settle on an adjacent partial top inside
   // the destination footprint. Macro routing may continue from that observed
   // support after six actual stable ticks; explicit targets remain exact.
   const last = result.samples.slice(-6) as Array<{ pos: Point; velocity: Point; onGround: boolean }>
-  const adjusted = !result.ok && result.why === 'landing_not_confirmed' && opts.allowWalk && last.length === 6 && last.every(sample =>
-    settledLanding(bot, { pos: new Vec3(sample.pos.x, sample.pos.y, sample.pos.z), vel: new Vec3(sample.velocity.x, sample.velocity.y, sample.velocity.z), onGround: sample.onGround }, target, Math.max(.35, opts.tolerance ?? .25)))
+  const landingBody = !result.ok && result.why === 'landing_not_confirmed' && opts.allowWalk && last.length === 6 && (observe?.() ?? bot)
+  const adjusted = !!landingBody && last.every(sample =>
+    settledLanding(landingBody, { pos: new Vec3(sample.pos.x, sample.pos.y, sample.pos.z), vel: new Vec3(sample.velocity.x, sample.velocity.y, sample.velocity.z), onGround: sample.onGround }, target, Math.max(.35, opts.tolerance ?? .25)))
   return { ...result, ...(adjusted ? { ok: true, why: undefined } : {}), planningMs, planningTicks, forecast: { diagnostics, ...(plan.fall ? { fall: plan.fall } : {}), ...(adjusted ? { adjustedLanding: { ...bot.entity.position } } : {}) } }
 }
 /** A bounded local descent; every input and landing remains native player motion. */
 export async function ledgeTo(session: { require(): MovementBot }, ctl: Cancellation, opts: { at: Point; maxFallDamage?: number; timeoutSeconds?: number; arena?: MovementArena }) {
   const bot = session.require(), target = opts?.at, seconds = opts?.timeoutSeconds ?? 8, damage = opts?.maxFallDamage ?? 0
+  const hp = bot.health ?? 20
   const refuse = (why: string) => ({ ok: false, landed: false, why, ticks: 0, samples: [], at: { ...bot.entity.position } })
   if (!target || ![target.x, target.y, target.z, seconds, damage].every(Number.isFinite) || Math.abs(target.x) > 29999984 || Math.abs(target.z) > 29999984 ||
     target.y < (bot.game?.minY ?? -64) || target.y >= (bot.game?.minY ?? -64) + (bot.game?.height ?? 384) || seconds < .5 || seconds > 30 || damage < 0 || damage > MAX_FALL_DAMAGE) return refuse('invalid_ledge_request')
   if (opts.arena !== undefined && (!opts.arena || typeof opts.arena !== 'object')) return refuse('invalid_ledge_request')
   if (target.y >= bot.entity.position.y - .55) return refuse('target_is_not_lower')
   if (ctl.aborted) return refuse('interrupted')
+  if (Math.hypot(target.x - bot.entity.position.x, target.z - bot.entity.position.z) > LOCAL_JUMP_REACH) return refuse('unsupported_or_obstructed_target')
+  // The tactical position query and the pilot share only this body's observed terrain.
+  const observedWorld = bot.world && (require('../../swarm-position') as { observedWorld(body: MovementBot): CollisionWorld }).observedWorld
+  const observe = observedWorld ? (): MovementBot => Object.assign(Object.create(bot), { blockAt: observedWorld(bot).blockAt }) : undefined
+  const support = supportAt(observe?.() ?? bot, target, .04)
+  if (!support) return refuse('landing_not_observed')
+  let watchedSupport = support.block.position
+  const touch = new Vec3(target.x, target.y + .015, target.z)
   const clock: typeof import('../../game-clock') = require('../../game-clock')
-  let expired = false
-  const local: Cancellation = { get aborted() { return expired || ctl.aborted }, onAbort: [] }
+  let expired = false, lost = false, changed = false
+  const local: Cancellation = { get aborted() { return expired || lost || ctl.aborted }, onAbort: [] }
   const abort = () => { for (const callback of [...local.onAbort!]) callback() }
+  const checkLanding = () => {
+    if (!changed || local.aborted) return
+    const eye = (require('../../pick') as { eyeOf(body: MovementBot): Vec3 }).eyeOf(bot)
+    if (!seesPoint(bot, eye, touch)) return
+    bot.removeListener('physicsTick', checkLanding)
+    changed = false
+    const replacement = supportAt(observe?.() ?? bot, target, .04)
+    if (replacement) { watchedSupport = replacement.block.position; return }
+    lost = true; abort()
+  }
+  const onUpdate = (before?: CollisionBlock, after?: CollisionBlock) => {
+    const pos = after?.position ?? before?.position
+    if (!pos || pos.x !== watchedSupport.x || pos.y !== watchedSupport.y || pos.z !== watchedSupport.z) return
+    if (!changed) { changed = true; bot.on('physicsTick', checkLanding) }
+    checkLanding()
+  }
   ctl.onAbort?.push(abort)
+  bot.on('blockUpdate', onUpdate)
   const timer = clock.setTimeout(() => { expired = true; abort() }, seconds * 1000)
   try {
-    const result = await executeJump(bot, local, target, { allowWalk: true, maxTicks: 80, maxFrames: ROUTE_FRAMES, maxFallDamage: damage, arena: opts.arena })
-    return { ...result, ...(expired ? { ok: false, why: 'timeout' } : {}), landed: result.ok && !expired, at: { ...bot.entity.position } }
+    const result = await executeJump(bot, local, target, { allowWalk: true, maxTicks: 80, maxFrames: ROUTE_FRAMES, maxFallDamage: damage, arena: opts.arena }, observe)
+    // A small drift after touching the requested shelf can end the flight
+    // before centering. Finish from the observed feet instead of repeating a descent.
+    let centeringTicks = 0
+    if (result.why === 'physics_diverged' && !local.aborted && damage === 0 && (bot.health ?? hp) >= hp && bot.entity.onGround &&
+        Math.abs(bot.entity.position.y - target.y) < .03) {
+      const center = await holdEdge(bot, local, target, 30, { support: watchedSupport, arena: opts.arena, observe })
+      centeringTicks = center.ticks
+      if (center.ok && !local.aborted) return { ...result, ok: true, why: undefined, landed: true,
+        ticks: result.ticks + centeringTicks, centeringTicks, at: { ...bot.entity.position } }
+    }
+    const why = lost ? 'landing_support_lost' : expired ? 'timeout' : ctl.aborted ? 'interrupted' : result.why
+    return { ...result, ...(why ? { ok: false, why } : {}), ...(centeringTicks ? { centeringTicks, ticks: result.ticks + centeringTicks } : {}),
+      landed: result.ok && !why, at: { ...bot.entity.position } }
   } finally {
+    bot.removeListener('blockUpdate', onUpdate)
+    bot.removeListener('physicsTick', checkLanding)
     clock.clearTimeout(timer)
     const index = ctl.onAbort?.indexOf(abort) ?? -1
     if (index >= 0) ctl.onAbort!.splice(index, 1)
   }
 }
-export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: JumpPlan, confirmed: (state: State) => boolean, completeWhen?: () => boolean): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[] }> {
+export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: JumpPlan, confirmed: (state: State) => boolean, completeWhen?: () => boolean, observe?: () => MovementBot,
+  guard?: { owns: () => boolean; step: (terrain: MovementBot, next: State) => boolean }): Promise<{ ok: boolean; why?: string; ticks: number; samples: unknown[] }> {
   const samples: TrajectorySample[] = []; const hp = bot.health ?? 20
+  if (guard && !guard.owns()) return { ok: false, why: 'interrupted', ticks: 0, samples }
   if (!withinArena(bot, bot.entity.position, plan.arena) || plan.states.some(state => !withinArena(bot, state.pos, plan.arena))) return { ok: false, why: 'outside_arena', ticks: 0, samples }
   if (plan.fall && (plan.fall.damage < 1 || plan.fall.damage > MAX_FALL_DAMAGE || !bot._client || !safeFallCost(bot, plan.fall.damage))) return { ok: false, why: 'unsafe_fall_cost', ticks: 0, samples }
   if (plan.allowDamage && (plan.allowDamage.damage > MAX_FALL_DAMAGE || !safeFallCost(bot, plan.allowDamage.damage))) return { ok: false, why: 'unsafe_fall_cost', ticks: 0, samples }
@@ -91,6 +136,15 @@ export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: Jum
   bot._ndParkourForecast = own
   bot.clearControlStates()
   let tick = 0; let lastHp = hp; let lost = 0; let fallReceipt = false
+  let terrain = bot
+  // Native collision chooses the pose for each step (and can prevent standing
+  // up under a roof). Check that frame's footprint against the current terrain.
+  const pose = { _ndPoseHeight: undefined as number | undefined }
+  const clearance: CollisionWorld = { entity: pose, get physics() { return terrain.physics }, blockAt: (at, extra) => terrain.blockAt(at, extra) }
+  const clearFrame = (state: State, from: Point) => {
+    pose._ndPoseHeight = state.ndPoseHeight ?? terrain.entity._ndPoseHeight
+    return bodyClear(clearance, state.pos, { water: true, web: true, powder: true, from })
+  }
   return new Promise((resolve, reject) => {
     let done = false
     const clean = () => {
@@ -99,14 +153,14 @@ export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: Jum
       const index = ctl.onAbort?.indexOf(abort) ?? -1
       if (index >= 0) ctl.onAbort!.splice(index, 1)
       if (bot._ndParkourForecast === own) { if (previous) bot._ndParkourForecast = previous; else delete bot._ndParkourForecast }
-      if (!bot._ndClutch?.waterPlan) { bot.clearControlStates(); bot.setControlState('sneak', true) }
+      if (!bot._ndClutch?.waterPlan && (!guard || guard.owns())) { bot.clearControlStates(); bot.setControlState('sneak', true) }
     }
     const finish = (ok: boolean, why?: string) => {
       if (done) return
       done = true
       const last = samples.at(-1)
       if (!ok && last) {
-        last.observation = { actual: bodyObservation(bot, last.pos), expected: bodyObservation(bot, last.expected.pos) }
+        last.observation = { actual: bodyObservation(terrain, last.pos), expected: bodyObservation(terrain, last.expected.pos) }
         Object.assign(last, { fallReflex: { at: clock.now(), position: { ...bot.entity.position },
           marker: bot._ndParkourForecast && { ...bot._ndParkourForecast }, forecast: bot._ndClutch?.forecast } })
       }
@@ -143,14 +197,19 @@ export async function executePlan(bot: MovementBot, ctl: Cancellation, plan: Jum
     }
     const applyStep = () => {
       const step = plan.steps[tick]
+      terrain = observe?.() ?? bot
       const next = new PlayerState(bot, step.control); next.yaw = step.yaw
-      simulator(bot)(next, worldOf(bot))
+      simulator(bot)(next, worldOf(terrain))
+      if (guard && (!guard.owns() || !guard.step(terrain, next))) { finish(false, 'step_unavailable'); return }
       if (!withinArena(bot, next.pos, plan.arena)) { finish(false, 'outside_arena'); return }
-      if (!bodyClear(bot, next.pos, { water: true, web: true, powder: true, from: bot.entity.position })) { finish(false, 'unsafe_next_body'); return }
-      if (plan.states.slice(tick).some((state, i) => !bodyClear(bot, state.pos, { water: true, web: true, powder: true, from: i ? plan.states[tick + i - 1].pos : bot.entity.position }))) { finish(false, 'trajectory_changed'); return }
+      if (!clearFrame(next, bot.entity.position)) { finish(false, 'unsafe_next_body'); return }
+      for (let i = tick; i < plan.states.length; i++) {
+        if (!clearFrame(plan.states[i], i === tick ? bot.entity.position : plan.states[i - 1].pos)) { finish(false, 'trajectory_changed'); return }
+      }
       // Mineflayer force-look updates the observed yaw synchronously. Awaiting
       // it here would hold old keys across a whole physics catch-up batch.
       void bot.look(step.yaw, 0, true).catch(fail)
+      if (done || guard && !guard.owns()) { if (!done) abort(); return }
       own.next = { ...plan.states[tick].pos }
       for (const key of Object.keys(IDLE) as Array<keyof Control>) bot.setControlState(key, step.control[key])
     }

@@ -333,6 +333,14 @@ function compilePlugin ({ filename, source }: any, scope, name, sources) {
         '      scopedWall.setTimeout(() => {\n        sendPacketPositionAndLook(delayedPos')
   }
   if (name === 'digging') {
+    // Mineflayer resets the face to TOP even with forceLook='ignore'. An exact pick can
+    // revalidate it here, after equipment awaits and immediately before the START packet.
+    source = source.replace('bot.targetDigFace = 1 // Default (top)', `bot.targetDigFace = 1 // Default (top)
+    if (forceLook === 'ignore' && typeof digFace?.ndPickedFace === 'function') {
+      const face = digFace.ndPickedFace()
+      if (!Number.isInteger(face) || face < 0 || face > 5) throw new Error('Digging aborted: stale block pick')
+      bot.targetDigFace = face
+    }`)
     // Rounded digTime gives conservative per-tick progress when landing, water or effects change mid-dig.
     source = source.replace('    waitTimeout = setTimeout(finishDigging, waitTime)', `    let progress = 0, creditedAt = Date.now(), previousDigTime = bot.digTime(block)
     let diggingItem = bot.heldItem

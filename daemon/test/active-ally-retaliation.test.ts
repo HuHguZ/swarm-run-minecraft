@@ -43,7 +43,7 @@ test('active duo ignores friendly hurt and old friendly attacker memory while re
   } finally { duel.close() }
 })
 
-test('friendly hit during a duel never becomes the next target after a native enemy death event', async t => {
+function activeDuel(t) {
   const { bot, enemy, friend, second } = fixture()
   t.mock.method(require('../src/utility/fight'), 'create', () => ({ close() {} }))
   t.mock.method(require('../src/arrows'), 'track', () => ({ shots: new Map() }))
@@ -54,25 +54,53 @@ test('friendly hit during a duel never becomes the next target after a native en
     vision: { observe: e => e, visible: () => true, source: e => e }, edgeTally() {}, finish: result => result }
   ctx.retarget = e => { ctx.entity = e; ctx.label = e.username; ctx.killed = false }
   installEvents(ctx)
-  try {
-    bot.emit('entityHurt', bot.entity, friend)
-    assert.equal(ctx.attackers.has(friend.id), false)
-    bot.emit('entityHurt', bot.entity, second)
-    ctx.attackers.set(friend.id, { e: friend, at: clock.now(), n: 100 })
-    assert.equal(ctx.otherAttacker()?.e, second, 'old friendly entries cannot outscore an enemy')
-    bot.emit('entityDead', enemy)
-    assert.equal(ctx.killed, true)
-    assert.equal(ctx.dead.has(enemy.id), true)
-    await targetTurn(ctx, {} as any)
-    assert.equal(ctx.entity, second)
-    bot.emit('entityDead', second)
-    const end: any = await targetTurn(ctx, {} as any)
-    assert.equal(end.end.killed, 'Enemy, Second', 'real death receipts still finish both enemy kills')
-    assert.ok(!ctx.kills.includes('Friend'))
-  } finally {
-    for (const close of ctx.ctl.onAbort) close()
-    bot.removeAllListeners()
+  t.after(() => { for (const close of ctx.ctl.onAbort) close(); bot.removeAllListeners() })
+  return { ctx, bot, enemy, friend, second }
+}
+
+test('friendly hit during a duel never becomes the next target after a native enemy death event', async t => {
+  const { ctx, bot, enemy, friend, second } = activeDuel(t)
+  bot.emit('entityHurt', bot.entity, friend)
+  assert.equal(ctx.attackers.has(friend.id), false)
+  bot.emit('entityHurt', bot.entity, second)
+  ctx.attackers.set(friend.id, { e: friend, at: clock.now(), n: 100 })
+  assert.equal(ctx.otherAttacker()?.e, second, 'old friendly entries cannot outscore an enemy')
+  bot.emit('entityDead', enemy)
+  assert.equal(ctx.killed, true)
+  assert.equal(ctx.dead.has(enemy.id), true)
+  await targetTurn(ctx, {} as any)
+  assert.equal(ctx.entity, second)
+  bot.emit('entityDead', second)
+  const end: any = await targetTurn(ctx, {} as any)
+  assert.equal(end.end.killed, undefined, 'target death alone has no killer identity')
+  assert.deepEqual([...ctx.playerDeaths.keys()], ['Enemy', 'Second'])
+  assert.equal(end.end.targetDead, 'Second')
+  assert.ok(!ctx.kills.includes('Friend'))
+})
+
+for (const order of ['before', 'after', 'chat alone', 'assist', 'no author', 'disappeared']) test(`public death credit and personal hit evidence: ${order}`, async t => {
+  const { ctx, bot, enemy } = activeDuel(t)
+  const nbt = require('prismarine-nbt')
+  bot.registry = require('prismarine-registry')('1.21.11')
+  require('mineflayer/lib/plugins/chat')(bot, { chatLengthLimit: 256, defaultChatPatterns: false })
+  const notice = (killer, positionId = 1) => bot._client.emit('systemChat', { positionId, formattedMessage: nbt.comp({
+    translate: nbt.string('death.attack.player.item'), with: nbt.list(nbt.string(['Enemy', killer, 'Body'])) }) })
+  if (order === 'disappeared') enemy.isValid = false
+  else {
+    if (order === 'before' || order === 'chat alone') notice('Body')
+    if (order === 'assist') bot.emit('entityHurt', enemy, bot.entity)
+    if (order !== 'chat alone') bot.emit('entityDead', enemy)
+    if (order === 'after') { notice('Body'); notice('Body') }
+    if (order === 'assist') notice('Friend')
+    if (order === 'no author') { notice('Body', 2); bot.emit('message', { translate: 'death.attack.player', with: ['Enemy', 'Body'] }, 'chat') }
   }
+  const { end } = await targetTurn(ctx, {} as any) as any
+  const death = ctx.playerDeaths.get('Enemy')
+  if (['before', 'after', 'chat alone'].includes(order)) { assert.equal(end.killed, 'Enemy'); assert.deepEqual(ctx.kills, ['Enemy']) }
+  else { assert.equal(end.killed, undefined); assert.deepEqual(ctx.kills, []) }
+  if (order === 'assist') { assert.equal(death.hits, 1); assert.equal(death.assisted, true); assert.equal(death.killer, 'Friend') }
+  if (order === 'no author') { assert.equal(death.hits, 0); assert.equal(death.killer, undefined) }
+  if (order === 'disappeared') { assert.equal(death, undefined); assert.match(end.lost, /пропал из виду/) }
 })
 
 test('a now-allied target ends an active duel without waiting for timeout or reporting a kill', async () => {

@@ -24,8 +24,10 @@ function observationMethods ({ session, cfg, bus, vision, gameClock, state }: Rp
     return out
   }
 
-  function statusDetail (p) {
+  function statusDetail (p, publish = true) {
     const active = (require('../reflex-lock') as typeof import('../reflex-lock')).owner(session)
+    const at = session.bot?.entity?.position
+    const below = p?.swarm && at?.y < p.arena?.killY
     return {
       fairPlay: cfg.fairPlay,
       server: `${cfg.host}:${cfg.port}`,
@@ -33,7 +35,11 @@ function observationMethods ({ session, cfg, bus, vision, gameClock, state }: Rp
         (session.current?.name === 'fly_to' || session.current?.name === 'pearl_to') && !!session.current.params?.rescue && !!session.current.ctl && !session.current.ctl.aborted,
       // Неделимая связка тела (utility/fight riptideSmash): рой не шлёт новых заданий, пока не кончится.
       combo: session.bot?._ndCombo && session.bot._ndCombo.until > gameClock.now() ? session.bot._ndCombo.kind : null,
-      ...(p?.swarm ? { at: session.bot?.entity?.position, sightings: require('../swarm-senses').swarmSightings(session.bot, p.swarmAllies), ownEnchants: enchantedGear(session.bot), windOut: session._windOut?.log.splice(0), pearls: require('../combat/pearl-watch').enemyPearls(session.bot) } : {}),
+      ...(p?.swarm ? { at, sightings: below ? [] : require('../swarm-senses').swarmSightings(session.bot, p.swarmAllies, publish),
+        breaches: below ? [] : require('../swarm-work').witnessedBreaches(session.bot),
+        ownEnchants: enchantedGear(session.bot), windOut: publish ? session._windOut?.log.splice(0) : session._windOut?.log.slice(),
+        pearls: below ? [] : require('../combat/pearl-watch').enemyPearls(session.bot) } : {}),
+      ...(p?.swarm && p.deathScope ? { witnessedDeaths: require('../swarm-senses').witnessedDeaths(session.bot, p.deathScope, publish) } : {}),
       ...(p && p.items ? {
         items: session.bot?.inventory?.slots?.slice(5).filter(Boolean).map(it => require('../pvp/combat-observe').itemObs(session.bot, it)) || [],
         storage: session.bot?.inventory?.slots ? Array.from({ length: 36 }, (_, index) => {
@@ -48,7 +54,7 @@ function observationMethods ({ session, cfg, bus, vision, gameClock, state }: Rp
       ...(p && p.lastDuel ? { lastDuel: session.bot?._ndLastDuel || null } : {}),
       ...(p && p.totem ? { totem: require('../totem').snapshot(session.bot) } : {}),
       // Летящие вредные зелья и игроки со взрывным зельем в руке (threats.dangers) — арене для уворота.
-      ...(p && p.dangers && session.bot?.entity ? { dangers: require('../threats').dangers(session.bot, { foes: p.foes ?? state.dangerWatch?.foes }) } : {}),
+      ...(p?.dangers && !below && session.bot?.entity ? { dangers: require('../threats').dangers(session.bot, { foes: p.foes ?? state.dangerWatch?.foes }) } : {}),
       ...(p && p.physics && session.bot?.entity ? { physics: {
         pos: session.bot.entity.position, velocity: session.bot.entity.velocity,
         onGround: session.bot.entity.onGround, pose: session.bot.entity.pose,
@@ -78,7 +84,7 @@ function observationMethods ({ session, cfg, bus, vision, gameClock, state }: Rp
       const bot = session.bot
       let foes = []
       try { if (bot && bot.entity) foes = require('../flee').hostilesAround(bot, 24).slice(0, 8).map(h => ({ name: h.e.name, d: Math.round(h.d * 10) / 10, dy: Math.round((h.e.position.y - bot.entity.position.y) * 10) / 10 })) } catch {}
-      return { status: 'done', detail: { ...statusDetail(p), foes, busy: session.current ? session.current.name : null, refuging: !!(session.autopilot && session.autopilot.refuging), water: !!bot?.entity && require('../movement').inWater(bot) }, events: [], state: session.state() }
+      return { status: 'done', detail: { ...statusDetail(p, false), foes, busy: session.current ? session.current.name : null, refuging: !!(session.autopilot && session.autopilot.refuging), water: !!bot?.entity && require('../movement').inWater(bot) }, events: [], state: session.state() }
     },
     // Жест (гонка в Колизее, 10.10: «эмоции чаще — кивать, махать, присаживаться»): nod | shake | wave | crouch, at — на кого смотреть.
     emote: async (p: any = {}) => session.immediate(async () => {

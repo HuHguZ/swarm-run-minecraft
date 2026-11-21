@@ -100,19 +100,47 @@ function refugeFiller (bot, needed = 10) {
     /^(dirt|coarse_dirt|grass_block|clay|snow_block)$|_planks$/.test(i.name) && canBreakOut(bot, i)) || filler
 }
 
+// A box is closed where collision rectangles cover the entire face touching its interior.
+// A slab beneath the roof can close it; the same slab in a side wall leaves a slit.
+function closedFace (block, axis, face) {
+  if (!block || block.boundingBox !== 'block') return false
+  const shapes = block.shapes
+  if (!Array.isArray(shapes)) return true
+  const u = (axis + 1) % 3, v = (axis + 2) % 3
+  const touches = s => s[axis] <= face && s[axis + 3] >= face
+  if (shapes.some(s => touches(s) && s[u] <= 0 && s[u + 3] >= 1 && s[v] <= 0 && s[v + 3] >= 1)) return true
+  if (shapes.length < 2) return false
+  // Stairs can cover a whole face with two boxes. Check each strip between shape edges.
+  const strips = shapes.filter(touches).sort((a, b) => a[v] - b[v])
+  const cuts = [0, ...strips.flatMap(s => [s[u], s[u + 3]]).filter(x => x > 0 && x < 1), 1].sort((a, b) => a - b)
+  for (let i = 1; i < cuts.length; i++) {
+    if (cuts[i] === cuts[i - 1]) continue
+    let covered = 0
+    for (const s of strips) {
+      if (s[u] <= cuts[i - 1] && s[u + 3] >= cuts[i] && s[v] <= covered) covered = Math.max(covered, s[v + 3])
+    }
+    if (covered < 1) return false
+  }
+  return true
+}
+
 // Насколько закрыта клетка cell (ноги): сколько сторон заложены целиком (ноги
 // и голова), есть ли крыша, какие стороны открыты и чем.
-function enclosure (bot, cell) {
+function enclosure (bot, cell, purpose: 'protection' | 'movement' = 'protection') {
+  // The existing escape detector recognizes an occupied two-block wall and roof.
+  // A sword slit can admit a hit while the walking body still needs to dig out.
+  const closed = purpose === 'movement' ? block => block?.boundingBox === 'block' : closedFace
   let walls = 0
   const open = []
   for (const s of SIDES) {
     const side = cell.plus(s)
-    const feet = solidAt(bot, side)
-    const head = solidAt(bot, side.offset(0, 1, 0))
+    const axis = s.x ? 0 : 2, face = s.x + s.z > 0 ? 0 : 1
+    const feet = closed(bot.blockAt(side), axis, face)
+    const head = closed(bot.blockAt(side.offset(0, 1, 0)), axis, face)
     if (feet && head) walls++
     else open.push({ side: s, feet: !feet, head: !head })
   }
-  const roof = solidAt(bot, cell.offset(0, 2, 0))
+  const roof = closed(bot.blockAt(cell.offset(0, 2, 0)), 1, 0)
   return { walls, roof, open, sealed: walls === 4 && roof }
 }
 
@@ -156,18 +184,37 @@ function boxPlan (cell, toward, roof) {
   return plan
 }
 
+// A body in the room cannot be walled out. A body in an unfinished wall prevents closing it.
+function shelterOccupant (bot, e, cell, spaces) {
+  if (!e?.position || e === bot.entity) return null
+  const p = e.position, half = (e.width || .6) / 2
+  if (Math.abs(p.x - cell.x - .5) >= 1.5 + half || Math.abs(p.z - cell.z - .5) >= 1.5 + half ||
+    p.y >= cell.y + 3 || p.y + (e.height || 1.8) <= cell.y) return null
+  const candidate = { entities: [e], visibleOnly: true }
+  for (const at of spaces) {
+    const occupied = occupiedByEntity(bot, at, candidate)
+    if (occupied) return occupied
+  }
+  return null
+}
+
 function boxCheck (bot, { cell = feetCell(bot), toward = null, roof = true, material = null }: any = {}) {
   const need = refugeNeed(bot, cell), plan = boxPlan(cell, toward, roof)
   if (!need) return { ok: false, why: 'клетка не закрывается целыми стенами', plan, blocks: Infinity, ms: Infinity }
   const pick: typeof import('./pick') = require('./pick'), predicted = new Map(), center = cell.offset(.5, 0, .5)
-  const entities = Object.fromEntries((Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity && (require('./pvp/last-seen') as typeof import('./pvp/last-seen')).seesPlayer(bot, e)).map(e => [e.id, e]))
+  const spaces = [cell, cell.offset(0, 1, 0), ...plan.filter((p, i) => !fullCube(bot.blockAt(p)) && !(roof && i === plan.length - 2 && need.roofSolid))]
+  const { seesPlayer }: typeof import('./pvp/last-seen') = require('./pvp/last-seen')
+  const entities = Object.fromEntries((Object.values(bot.entities || {}) as any[]).filter(e => e?.position && e !== bot.entity &&
+    e.position.distanceTo(center) <= 8 + (e.width || .6) / 2 && bot.players?.[e.username]?.gamemode !== 3 && seesPlayer(bot, e)).map(e => [e.id, e]))
   const view = { ...bot, entity: { ...bot.entity, position: center }, entities, blockAt: p => predicted.get(p.toString()) || bot.blockAt(p) }
+  for (const at of spaces) {
+    const occupied = occupiedByEntity(view, at)
+    if (occupied) return { ok: false, why: `в клетке стоит ${occupied}`, plan, blocks: 0, ms: Infinity }
+  }
   let blocks = 0
   for (let i = 0; i < plan.length; i++) {
     const p = plan[i]
     if (fullCube(view.blockAt(p)) || roof && i === plan.length - 2 && need.roofSolid) continue
-    const occupied = occupiedByEntity(view, p)
-    if (occupied) return { ok: false, why: `в клетке стоит ${occupied}`, plan, blocks, ms: Infinity }
     if (!openCell(view.blockAt(p))) return { ok: false, why: 'клетка стены занята', plan, blocks, ms: Infinity }
     let eye = pick.eyeOf(view)
     if (roof && i === plan.length - 2) {
@@ -181,7 +228,7 @@ function boxCheck (bot, { cell = feetCell(bot), toward = null, roof = true, mate
   const filler = material ? { name: material } : pickFiller(bot, { steady: true })
   const have = bot.inventory.items().filter(i => i.name === filler?.name || !material && HARD.includes(i.name)).reduce((n, i) => n + i.count, 0)
   if (have < blocks) return { ok: false, why: 'не хватит блоков закрыть все стены и крышу', plan, blocks, ms: Infinity }
-  return { ok: true, plan, blocks, ms: refugeBuildMs({ ...need, blocks }) }
+  return { ok: true, plan, spaces, blocks, ms: refugeBuildMs({ ...need, blocks }) }
 }
 
 // Every cell must have an honest construction route before the body puts its weapon away.
@@ -192,13 +239,31 @@ async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs =
   const failed = []
   let why = check.ok ? null : check.why, wake
   const interrupted = new Promise(resolve => { wake = resolve })
-  const local = { get aborted () { return !!why || !!ctl?.aborted } }
   const stop = reason => { if (why) return; why = reason; try { bot.clearControlStates() } catch {}; wake() }
-  const guard = () => { if (ctl?.aborted) stop('прервано'); else { const reason = abortIf?.(Math.max(0, check.ms - placed * 180)); if (reason) stop(reason) } }
+  const local = { get aborted () {
+    if (!why && ctl?.aborted) stop('прервано')
+    if (!why) {
+      const here = bot.entity?.position && feetCell(bot)
+      // The roof support requires jumping inside the room. Leaving the column or falling through its floor loses it.
+      if (!here || here.x !== cell.x || here.z !== cell.z || here.y < cell.y) stop('вынесло из клетки укрытия')
+    }
+    return !!why
+  } }
+  const guard = () => {
+    if (local.aborted) return
+    const reason = abortIf?.(Math.max(0, check.ms - placed * 180))
+    if (reason) stop(reason)
+  }
   let hp = bot.health
   const health = () => { if (bot.health < hp) stop('по мне попали во время стройки'); hp = bot.health }
+  const entered = e => {
+    if (local.aborted) return
+    const occupied = shelterOccupant(bot, e, cell, check.spaces)
+    if (occupied) stop(`в клетке стоит ${occupied}`)
+  }
   const cancel = () => stop('прервано')
   if (check.ok) {
+    bot.on('entityMoved', entered); bot.on('entitySpawn', entered)
     bot.on('physicsTick', guard); bot.on('health', health); ctl?.onAbort?.push(cancel)
     try {
       guard()
@@ -213,7 +278,7 @@ async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs =
             const item = mats[i] && countItem(bot, mats[i]) > 0 ? mats[i] : null
             const r = roof && i === plan.length - 2 && !solidAt(bot, p)
               ? await jumpPlace(bot, p, { ctl: local, timeoutMs, item })
-              : await placeBlockAt(bot, p, { timeoutMs, item, honest: true, steady: true, ctl: local })
+              : await placeBlockAt(bot, p, { timeoutMs, item, honest: true, steady: true, visibleOccupantsOnly: true, ctl: local })
             if (local.aborted) break
             if (r.ok && !r.already) placed++
             else if (!r.ok) {
@@ -226,6 +291,7 @@ async function boxIn (bot, { toward = null, roof = true, ctl = null, timeoutMs =
         }
       })(), interrupted])
     } finally {
+      bot.removeListener('entityMoved', entered); bot.removeListener('entitySpawn', entered)
       bot.removeListener('physicsTick', guard); bot.removeListener('health', health)
       const index = ctl?.onAbort?.indexOf(cancel); if (index >= 0) ctl.onAbort.splice(index, 1)
       try { bot.clearControlStates() } catch {}
@@ -246,7 +312,7 @@ async function patch (bot, plan, { timeoutMs = 600, mats = null, ctl = null }: a
     try {
       const want = mats && mats[i]
       const item = want && countItem(bot, want) > 0 ? want : null
-      const r = await placeBlockAt(bot, p, { timeoutMs, item, honest: true, steady: true, ctl })
+      const r = await placeBlockAt(bot, p, { timeoutMs, item, honest: true, steady: true, visibleOccupantsOnly: true, ctl })
       if (r.ok && !r.already) placed++
       else if (!r.ok) break
     } catch { break }
@@ -596,14 +662,36 @@ async function breakBlock (bot, pos, { maxMs = 8000 }: any = {}) {
 // Выйти: выломать стену с выбранной стороны (голова, потом ноги). away — от
 // кого уходим (выходим с противоположной стороны), toward — на кого выскочить
 // (сбоку от него: в лоб он ждёт у дыры).
-async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { onHole = null }: any = {}) {
+interface BreakoutResult {
+  ok: boolean; steps: string[]; side?: import('vec3').Vec3; exit?: import('vec3').Vec3; outside?: import('vec3').Vec3
+  exposed?: boolean; unsafeGround?: boolean; canStep?: () => boolean
+}
+function passageFloor(view, cell, confirmed = false) {
+  const { supportAt, bodyClear } = require('./navigation/geometry') as typeof import('./navigation/geometry')
+  const floor = view.blockAt(cell.offset(0, -1, 0)), feet = view.blockAt(cell), head = view.blockAt(cell.offset(0, 1, 0))
+  const at = cell.offset(.5, 0, .5)
+  if (floor && !supportAt(view, at, .04) || feet && !openCell(feet) || head && !openCell(head)) return false
+  // An unseen exterior can justify opening a wall to look. Walking requires positively observed clearance and support.
+  return !confirmed || !!floor && !!feet && !!head && bodyClear(view, at)
+}
+async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { onHole = null, safeExit = null }: any = {}): Promise<BreakoutResult> {
   const c = { x: cell.x + 0.5, z: cell.z + 0.5 }
-  let best = null
+  let best = null, exposed = false
+  const observe = () => (require('./pvp/search') as typeof import('./pvp/search')).observedCollision(bot)
+  const view = safeExit ? observe() : bot
+  const cost = (at, terrain = view) => {
+    const b = terrain.blockAt(at)
+    return !b ? Infinity : b.boundingBox === 'block' ? tools.bestFor(bot, b).ms : 0
+  }
+  const feasible = (mid, outside, ms) => {
+    if (!safeExit || safeExit(mid, outside, ms)) return true
+    exposed = true; return false
+  }
   for (const s of SIDES) {
     // Пролом своей стены перед следующей стеной/лавой не выпускает тело.
     // Проверяем клетку за стеной до копки: воздух для ног и головы, опора.
     const outside = cell.plus(s.scaled(2))
-    if (!(require('./walkable') as typeof import('./walkable')).standable(bot, outside)) continue
+    if (!(safeExit ? passageFloor(view, outside) : (require('./walkable') as typeof import('./walkable')).standable(bot, outside))) continue
     let sc = 0
     if (away) {
       const ax = away.x - c.x; const az = away.z - c.z
@@ -611,10 +699,9 @@ async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { 
     }
     // Своя стена из обсидиана — 9 с киркой: выходить там, где ломается
     // быстро (тыл коробки из обычного блока), секунда ломки — очко.
-    let digMs = 0
-    for (const w of [cell.plus(s), cell.plus(s).offset(0, 1, 0)]) {
-      if (solidAt(bot, w)) digMs += Math.min(20000, tools.bestFor(bot, bot.blockAt(w)).ms)
-    }
+    const mid = cell.plus(s), headMs = cost(mid.offset(0, 1, 0)), feetMs = cost(mid)
+    if (!feasible(mid, outside, headMs + feetMs)) continue
+    const digMs = Math.min(20000, headMs) + Math.min(20000, feetMs)
     sc -= digMs / 1000
     if (toward) {
       const tx = toward.x - c.x; const tz = toward.z - c.z
@@ -626,7 +713,7 @@ async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { 
     }
     // Снаружи должно быть куда встать.
     const out = cell.plus(s).plus(s)
-    if (!solidAt(bot, out.offset(0, -1, 0)) && !solidAt(bot, cell.plus(s).offset(0, -1, 0))) sc -= 5
+    if (!safeExit && !solidAt(bot, out.offset(0, -1, 0)) && !solidAt(bot, cell.plus(s).offset(0, -1, 0))) sc -= 5
     if (!best || sc > best.sc) best = { s, sc }
   }
   // Запасной выход: за стеной обрыв или край помоста — выйти хотя бы в сам
@@ -634,7 +721,7 @@ async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { 
   // у края зала «без безопасного прохода»: бой брошен, тело заперто рядом с
   // ифритами и погибло, выбираясь другим путём.
   let near = false
-  if (!best) {
+  if (!best && !safeExit) {
     const lavaAt = p => { const b = bot.blockAt(p); return !!b && /lava/.test(b.name) }
     const open = p => { const b = bot.blockAt(p); return !!b && b.boundingBox === 'empty' && !/lava|fire/.test(b.name) }
     for (const s of SIDES) {
@@ -655,7 +742,7 @@ async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { 
     }
     near = !!best
   }
-  if (!best) return { ok: false, steps: ['за стенами нет безопасного прохода'] }
+  if (!best) return { ok: false, exposed, steps: ['за стенами нет безопасного прохода'] }
   const side = best.s
   const head = cell.plus(side).offset(0, 1, 0)
   const feet = cell.plus(side)
@@ -667,10 +754,22 @@ async function breakOut (bot, cell, { away = null, toward = null }: any = {}, { 
   if (headOk && onHole) {
     for (let i = 0; i < 3; i++) { if (!(await onHole())) break; steps.push('удар в дыру') }
   }
+  const outside = near ? feet : cell.plus(side.scaled(2))
+  if (headOk && safeExit) {
+    const peek = observe()
+    if (!passageFloor(peek, outside)) return { ok: false, unsafeGround: true, steps }
+    if (!feasible(feet, outside, cost(feet, peek))) return { ok: false, exposed, steps }
+  }
   const feetOk = headOk && (await breakBlock(bot, feet))
   if (headOk) steps.push(`ноги ${feetOk ? 'выломаны' : 'не дались'}`)
   if (near) steps.push('выход в пролом: за стеной опоры нет')
-  return { ok: headOk && feetOk, side, exit: feet, outside: near ? feet : cell.plus(side.scaled(2)), steps }
+  if (feetOk && safeExit) {
+    if (!feasible(feet, outside, 0)) return { ok: false, exposed, steps }
+    const canStep = () => { const seen = observe(); return passageFloor(seen, feet, true) && passageFloor(seen, outside, true) }
+    if (!canStep()) return { ok: false, unsafeGround: true, steps }
+    return { ok: true, side, exit: feet, outside, steps, canStep }
+  }
+  return { ok: headOk && feetOk, side, exit: feet, outside, steps }
 }
 
 // Запертая клетка (своя коробка тактики BlockOff, refuge stayIn, нора с крышей): путь без копки (goto strict, explore
@@ -680,7 +779,7 @@ async function leaveSealedCell (session, ctl, toward) {
   const bot = session.bot
   if (!bot || typeof bot.blockAt !== 'function' || !bot.entity) return false
   const cell = feetCell(bot)
-  if (!enclosure(bot, cell).sealed) return false
+  if (!enclosure(bot, cell, 'movement').sealed) return false
   if (process.env.ND_BRUTE_MEMORY === '1') {
     const memory = await (require('./brute-shelter') as typeof import('./brute-shelter')).ensureShelterExit(session, ctl, toward, { knownShelter: true })
     if (memory) throw Object.assign(new Error('brute memory: covered exit requires replan'), { code: 'BRUTE_MEMORY_REPLAN', bruteMemory: memory })

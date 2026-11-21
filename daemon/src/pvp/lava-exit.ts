@@ -6,20 +6,42 @@
 // +1.5, берётся, только если поле дальше. Чем ближе — тем лучше; дальше от врага — при равных.
 import { Vec3 } from './vec3'
 import * as gameClock from '../game-clock'
-import { bodyBox, intersects } from '../navigation/geometry'
+import { bodyBox, dimensions, intersects } from '../navigation/geometry'
 
 const BURN = /^(lava|fire|soul_fire)$/
 const HOT = /^(magma_block|campfire|soul_campfire)$/
 const open = b => !!b && b.boundingBox === 'empty' && !BURN.test(b.name) && b.name !== 'cobweb'
+function litCampfire (b) {
+  if (b?.name !== 'campfire' && b?.name !== 'soul_campfire') return false
+  const lit = b.getProperties?.().lit
+  return lit === true || lit === 'true'
+}
 
 export function burnContact (bot) {
   if (bot.entity.isInLava) return 'lava'
   const body = bodyBox(bot, bot.entity.position)
   for (let x = Math.floor(body.minX); x <= Math.floor(body.maxX); x++) for (let z = Math.floor(body.minZ); z <= Math.floor(body.maxZ); z++) {
     for (let y = Math.floor(body.minY); y <= Math.floor(body.maxY); y++) {
-      const b = bot.blockAt(new Vec3(x, y, z))
+      const b = bot.blockAt(new Vec3(x, y, z), false)
       if (b && BURN.test(b.name) && intersects(body, { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 })) return b.name
     }
+  }
+  return null
+}
+
+// На кромке центр может висеть над лавой, пока соседняя магма держит край стоп.
+// Сравниваем высоту стоп с верхом формы: со ступени выше соседняя магма не жжёт.
+export function hotSupport (bot): string | null {
+  const p = bot.entity.position, { half } = dimensions(bot)
+  // Магма 1.21.11 — полный куб, у костра верх коллизии на 7/16. Два таких верха
+  // одновременно держать одни стопы не могут. На остальных высотах смотреть блоки незачем.
+  const full = Math.abs(p.y - Math.round(p.y)) < 1e-5
+  const y = full ? Math.round(p.y) - 1 : Math.floor(p.y)
+  if (!full && Math.abs(p.y - (y + 7 / 16)) >= 1e-5) return null
+  for (let x = Math.floor(p.x - half + 1e-7); x <= Math.floor(p.x + half - 1e-7); x++) for (let z = Math.floor(p.z - half + 1e-7); z <= Math.floor(p.z + half - 1e-7); z++) {
+    const block = bot.blockAt(new Vec3(x, y, z), false)
+    if (full && block?.name === 'magma_block') return block.name
+    if (!full && litCampfire(block)) return block.name
   }
   return null
 }
@@ -51,15 +73,21 @@ export function lavaExit (bot, feet: any, foe: { x: number; z: number } | null =
 
 // Горит ли под ногами: ноги или голова в лаве/огне, стою на магме/костре — или в прыжке над лавой (выпрыгнул на миг и
 // упаду обратно: a39 — выход «кончался» на взлёте, и его тут же начинали заново, теряя ход).
-export function burningFeet (bot) {
-  if (burnContact(bot)) return true
+function footHazard (bot): string | null {
+  const immediate = burnContact(bot) || hotSupport(bot)
+  if (immediate) return immediate
   const p = bot.entity.position
-  const at = (dy) => bot.blockAt(p.offset(0, dy, 0).floored())
-  const g = at(-0.2)
-  if (g && HOT.test(g.name)) return true
-  if (bot.entity.onGround) return false
-  for (const dy of [-0.6, -1.2]) { const b = at(dy); if (b && b.boundingBox === 'block') return false; if (b && BURN.test(b.name)) return true }
-  return false
+  const at = (dy) => bot.blockAt(p.offset(0, dy, 0).floored(), false)
+  if (!bot.entity.onGround) for (const dy of [-0.6, -1.2]) {
+    const b = at(dy)
+    if (b && b.boundingBox === 'block') return b.name === 'magma_block' || litCampfire(b) ? 'above_hot_floor' : null
+    if (b && BURN.test(b.name)) return b.name
+  }
+  return null
+}
+
+export function burningFeet (bot) {
+  return footHazard(bot) !== null
 }
 
 // Быстрый выход (без pathfinder'а: «goto на 3 бл.» в яме — A* и запуск пути, пока лава снимает 4 хп за 0.5 с): взгляд на
@@ -69,16 +97,22 @@ export function burningFeet (bot) {
 export async function escapeBurn (bot, { limitMs = 2500, foe = null as any, aborted = () => false, sleep = (ms: number) => new Promise(r => gameClock.setTimeout(r, ms)), now = () => gameClock.now() } = {}) {
   const t0 = now()
   let exit = null; let at = -1e9
+  let hazard: string | null, crouching = false
   try {
-    while (burningFeet(bot) && now() - t0 < limitMs && !aborted() && (bot.health ?? 0) > 0) {
+    while ((hazard = footHazard(bot)) && now() - t0 < limitMs && !aborted() && (bot.health ?? 0) > 0) {
+      crouching = hazard === 'magma_block'
+      bot.setControlState('sneak', crouching)
       if (now() - at >= 300 || !exit) { exit = lavaExit(bot, bot.entity.position, foe) || exit; at = now() }
       if (!exit) return { ok: false, ms: now() - t0, why: 'некуда' }
       await bot.lookAt(exit.cell.offset(0.5, 1, 0.5), true).catch(() => {})
-      for (const k of ['back', 'left', 'right', 'sneak']) bot.setControlState(k, false)
-      bot.setControlState('forward', true); bot.setControlState('jump', true); bot.setControlState('sprint', true)
+      for (const k of ['back', 'left', 'right']) bot.setControlState(k, false)
+      bot.setControlState('forward', true); bot.setControlState('jump', !crouching || exit.up); bot.setControlState('sprint', !crouching)
       await sleep(50)
     }
-  } finally { for (const k of ['forward', 'jump', 'sprint']) bot.setControlState(k, false) }
+  } finally {
+    for (const k of ['forward', 'jump', 'sprint']) bot.setControlState(k, false)
+    if (crouching && (aborted() || !bot.entity || !bot.health || hotSupport(bot) !== 'magma_block')) bot.setControlState('sneak', false)
+  }
   const ok = !burningFeet(bot)
   return { ok, ms: now() - t0, why: ok ? 'вышел' : 'не вышел' }
 }

@@ -1,10 +1,36 @@
 // Рой: задачи хода бота — бегство (насест, укрытие, отрыв), отход раненого, стойка (щиты, засада, кемпер), стройка у цели.
-import { blockCount, distance, cellKey } from './common'
+import { blockCount, distance, cellKey, underArrowFire } from './common'
 import { currentTurn } from './lifecycle'
 import type { SwarmDriverCtx, TurnCtx } from './common'
+import { TEAM_LINK } from '../../../daemon/src/swarm/fight'
+import { withinArena } from '../../../daemon/src/navigation/parkour/model'
 
 export function swarmTurnTasks (sw: SwarmDriverCtx) {
   const { now, alive, log, pos, arena, cooldown, boxed, boxTries, execute, reactCamp, go, loot, detail, rangedAdvantage, positionStep, search, buildStep, bounded } = sw
+  async function regroup(tc: TurnCtx) {
+    const { b, task, m, round, context, enemies } = tc, from = { ...m.p }, target = task.position
+    const fresh = enemies.filter(e => now() - e.seenAt < 3000)
+    const bounds = fresh.length ? { ...arena, avoid: [...(arena.avoid || []), ...fresh.map(e => ({ ...e.position, r: Math.min(14, distance(from, e.position)) }))] } : arena
+    const key = `regroup:${b.name}`, cell = p => cellKey({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) })
+    // The group centre can lie between two occupied platforms. Its members' reported positions offer real alternative endpoints.
+    const allies = context.members.filter(a => a.id !== b.name && a.health > 0 && alive(a.id) && pos[a.id]?.p && !pos[a.id].gliding && !pos[a.id].rescuing)
+      .map(a => pos[a.id].p).filter(p => distance(p, target) <= TEAM_LINK)
+      .sort((a, c) => distance(from, a) - distance(from, c))
+    const refused = [], next = [target, ...allies].find(p => {
+      if (!withinArena(b, p, bounds)) return false
+      if (!sw.blocked?.(b, key, cell(p))) return true
+      refused.push(cell(p)); return false
+    })
+    if (!next) { await positionStep(b, context, 'escape'); return }
+    const seconds = fresh.length ? 4 : Math.max(5, Math.ceil(distance(from, next) / 5.6 + Math.max(0, next.y - from.y)))
+    const move = go(b, next, 2, seconds, bounds), owner = b.last, reply = await move
+    if (!currentTurn(sw, b, round) || b.last !== owner || b.swarmReserved || b.webRescue || pos[b.name]?.rescuing) return
+    const result = detail(reply), end = reply?.state?.pos || result.at
+    if (reply?.notStarted || result.arrived || !(reply?.status === 'timeout' || reply?.status === 'done' && result.stopped) ||
+        !end || cell(from) !== cell(end) || distance(pos[b.name].p, from) >= .35) return
+    const until = now() + Math.max(5, seconds) * 1000
+    for (const signature of [...refused, cell(next)]) sw.failed?.(b, key, signature, until)
+  }
   async function turnFlee (tc: TurnCtx) {
     const { b, context, board, task, round, m, enemies } = tc
     // Наверху (ярус, крыша, насест), а человек пришёл на мой уровень в 8 бл. — вниз: край с дешёвым падением (jump_down), нет —
@@ -66,12 +92,12 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       let w: any = null
       for (const a of [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2]) {
         const toward = bounded({ x: m.p.x + Math.cos(base + a) * 12, y: m.p.y, z: m.p.z + Math.sin(base + a) * 12 })
-        w = detail(await b.c.call('wind_jump', { toward, times: 2 }).catch(e => ({ why: e.message })))
+        w = detail(await b.c.call('wind_jump', { toward, times: 2, arena }).catch(e => ({ why: e.message })))
         if (!currentTurn(sw, b, round)) return
-        if (w.used || !/^стена впереди/.test(w.why || '')) break
+        if (w.used || w.why !== 'unsafe_wind_landing' && !/^стена впереди/.test(w.why || '')) break
       }
       log(`🌬↩ ${b.name}: ${chaser.id} в ${distance(chaser.position, m.p).toFixed(1)} бл. — прыжок на ветре прочь — ${w.used ? `зарядов ${w.used}, подъём ${(+w.rise || 0).toFixed(1)}` : w.why || w.error || '?'}`)
-      if (w.used) return
+      if (w.used && w.landed !== false) return
       sw.failed(b, `windflee:${b.name}`)
     }
     // Колонна в двух секундах хода дешевле далёкого насеста; луч и путь проверяет само тело.
@@ -146,7 +172,10 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
     }
     // Укрытие без своих (пользователь 14.10: «если своих нет — прятаться в колизее, в блоках или на высоте, и шифт
     // зажимать, чтобы мы не видели его»): дошёл — сидеть на шифте, ник за блоками не виден.
-    if ((task.data?.hide || task.data?.regroup) && !enemies.length && distance(m.p, task.position) >= 3) { await go(b, task.position, 2); return }
+    if ((task.data?.hide || task.data?.regroup) && !enemies.length && distance(m.p, task.position) >= 3) {
+      if (task.data.regroup) await regroup(tc); else await go(b, task.position, 2)
+      return
+    }
     // Нашёл в укрытии — сначала оценить выход вниз и прорыв; близость ещё не означает, что бежать некуда.
     const atMe = task.data?.hide && enemies.find(e => now() - e.seenAt < 1000 && distance(e.position, m.p) < 6)
     if (!atMe && task.data?.hide && distance(m.p, task.position) < 3) { await b.c.call('swarm_hold', { sneak: true, enemies: enemies.map(e => e.id), allies: context.members.map(a => a.id), timeoutSeconds: 3, arena }); return }
@@ -171,7 +200,8 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       }
       // Оторвался от погони — дальше решает планировщик (лут за 22 бл.), а не поход к группе или лут исполнителя.
       if (task.data?.kite) return
-      if (task.data?.hide || task.data?.regroup) { await go(b, task.position, 2); return }
+      if (task.data?.regroup) { await regroup(tc); return }
+      if (task.data?.hide) { await go(b, task.position, 2); return }
       // Готовится (лут, позиция) — пока это его дело: паника не рвёт его, пока враги дальше 14 и без луков (safety.ts).
       b.swarmPreparing = true
       const looted = await loot(b, board)
@@ -189,14 +219,25 @@ export function swarmTurnTasks (sw: SwarmDriverCtx) {
       const result = detail(await b.c.call('antidote', { ...task.data.antidote, allies: context.members.map(a => a.id), enemies: enemies.map(e => e.id), arena }).catch(() => ({})))
       if (!currentTurn(sw, b, round) || result.consumed) return
     }
+    let behindCover = false
+    const bows = !contact && b.arrowThreat?.bows?.length && underArrowFire(b, now()) && b.arrowThreat.bows.filter(a => sw.hostile(b, a.name))
+    if (bows?.length === 1) {
+      // A wall the builders reported can already be gone. Let the wounded body verify both its route and the blocked shot.
+      const attempt = b.c.call('take_cover', { from: bows[0].name, localOnly: true, arena }), owner = b.last
+      const reply = await attempt.catch(() => null)
+      if (!currentTurn(sw, b, round) || b.last !== owner || reply?.code === 'RESCUE_BUSY') return
+      if (reply?.status === 'interrupted') { b.swarmFightReply = reply; cooldown.set(`fight:${b.name}`, now() + 500); return }
+      behindCover = reply?.status === 'done' && detail(reply)?.ok === true
+      if (behindCover && underArrowFire(b, now()) && b.arrowThreat.bows?.some(a => a.name !== bows[0].name && sw.hostile(b, a.name))) return
+    }
     if (contact) {
       const out = detail(await b.c.call('flee', { from: enemies.map(e => e.id), timeoutSeconds: 3, safeDist: 14, arena }))
       if (!currentTurn(sw, b, round)) return
       if (out.mode !== 'оторвался') return
     }
     // В кольце и «стаде» место раненого — середина строя: поиск укрытия подальше уводил его из-за щитов (ревью 13.10).
-    else if (['ring', 'weak-center'].includes(task.data?.doctrine)) { if (distance(m.p, task.position) > 1) await go(b, task.position, .6) }
-    else {
+    else if (!behindCover && ['ring', 'weak-center'].includes(task.data?.doctrine)) { if (distance(m.p, task.position) > 1) await go(b, task.position, .6) }
+    else if (!behindCover) {
       const positioned = await positionStep(b, context, 'recover')
       if (!currentTurn(sw, b, round)) return
       if (!positioned && distance(m.p, task.position) > 3) await go(b, task.position)

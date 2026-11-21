@@ -20,7 +20,7 @@ function scene(holes: any[] = [], y = 119) {
   const board = sw.boardOf(bots[0]), work = pvpState(board).dislodgeWork = new Map()
   for (const x of [543, 547]) work.set(`Champ:dig:${x},${y},594`, { at: 10000, active: false, failed: false, work: 10, alternative: 100, deadline: 20000, penalty: 0, penaltyAt: 10000, dug: 1 })
   board.setMembers(sw.membersOf(bots[0]))
-  board.observe('A', 10000, { id: 'Champ', visible: true, position: at(543.49, 594.57), hpEstimate: 20,
+  for (const source of ['A', 'B']) board.observe(source, 10000, { id: 'Champ', visible: true, position: at(543.49, 594.57), hpEstimate: 20,
     equipment: { weapon: 'netherite_sword', enchanted: true, armor: ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots'] } })
   const run = () => { sw.planned.clear(); sw.refresh(bots[0]); return [...sw.planned.get('blue').values()] }
   return { sw, run, site, board }

@@ -8,18 +8,18 @@ import { distance } from './common'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmRetry (sw: SwarmDriverCtx) {
-  const retries = new Map<string, Map<string, { at: any }>>()
+  const retries = new Map<string, Map<string, { at: any; until?: number }>>()
   const nearby = (b, key: string) => {
     const history = retries.get(key), p = sw.pos[b.name]?.p
     if (history && p) {
-      for (const [sig, f] of history) if (!f.at || !p || !(distance(p, f.at) < 2)) history.delete(sig)
+      for (const [sig, f] of history) if (!f.at || !(distance(p, f.at) < 2) || f.until != null && sw.now() >= f.until) history.delete(sig)
       if (!history.size) retries.delete(key)
     }
     return history
   }
-  const failed = (b, key: string, sig = '') => {
-    const p = sw.pos[b.name]?.p, history = nearby(b, key) || new Map<string, { at: any }>()
-    history.set(sig, { at: p ? { ...p } : null }); retries.set(key, history)
+  const failed = (b, key: string, sig = '', until?: number) => {
+    const p = sw.pos[b.name]?.p, history = nearby(b, key) || new Map<string, { at: any; until?: number }>()
+    history.set(sig, { at: p ? { ...p } : null, until }); retries.set(key, history)
   }
   const blocked = (b, key: string, sig = '') => !!sw.pos[b.name]?.p && !!nearby(b, key)?.has(sig)
   const cleared = (key: string) => { retries.delete(key) }

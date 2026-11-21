@@ -241,16 +241,20 @@ function potionRoleOf (bot, item) {
 // Падающий сверху враг (булава с высоты, 12.10: «залетел на бота — он тупо смотрел»): его ноги — шаг тика как у игрока
 // в воздухе (LivingEntity.travel: y = (y − 0.08)·0.98, по горизонтали трение 0.91), пока не опустятся до моей головы;
 // сядет ближе 4 бл. и в 30 тиков — угроза. foes — имена врагов (команду знает арена).
-function smashes (bot, foes: string[], scope: string | null = null, shieldAim = false) {
+function smashes (bot, foes: string[], scope: string | null = null, shieldAim = false, observe = raw => visiblePlayer(bot, raw, scope)) {
   const out = []
   if (!foes.length) return out
+  const { visibleGroundReceipt }: typeof import('./mace/world') = require('./mace/world')
   const me = bot.entity.position
   const now = gameClock.now()
   for (const raw of Object.values(bot.entities) as any[]) {
     if (!raw || raw.type !== 'player' || !foes.includes(raw.username) || !raw.position) continue
-    const e = visiblePlayer(bot, raw, scope); if (!e) { smashDescents.delete(raw); continue }
+    const e = observe(raw); if (!e) { smashDescents.delete(raw); continue }
     const dy = e.position.y - me.y
-    if (dy < 1.5 || Math.hypot(e.position.x - me.x, e.position.z - me.z) > 32) { smashDescents.delete(raw); fastWindRises.delete(e); continue }
+    if (dy < 1.5 || Math.hypot(e.position.x - me.x, e.position.z - me.z) > 32 ||
+        visibleGroundReceipt(e)) {
+      smashDescents.delete(raw); fastWindRises.delete(e); continue
+    }
     const v = e.velocity || { x: 0, y: 0, z: 0 }
     if (v.y >= -.3 && smashDescents.get(raw) === 'descent') smashDescents.delete(raw)
     const hand = (e.heldItem || e.equipment?.[0])?.name
@@ -377,25 +381,22 @@ function thrownLanding (r, age, floorY) {
 // Целится в меня из лука или арбалета (12.10: «уворачиваться заранее — как только я нацеливаюсь, это же видно»): лук
 // натянут (living_entity_flags 0x01 — «использует», рука — бит 0x02) или арбалет в руке, взгляд по горизонтали — на
 // меня в пределах 8°, ближе 64 бл. Видно глазами (поза и поворот головы), без прицела в пакетах.
-function aims (bot, foes: string[] | null, scope: string | null, flight = false) {
+function aims (bot, foes: string[] | null, scope: string | null, { toward = bot.entity.position, candidates = Object.values(bot.entities) as any[], observe = raw => visiblePlayer(bot, raw, scope) } = {}) {
   const out = []
-  const me = bot.entity.position
+  const me = toward
   let ix = 8
   try { const k = bot.registry.entitiesByName.player.metadataKeys.indexOf('living_entity_flags'); if (k >= 0) ix = k } catch {}
-  for (const raw of Object.values(bot.entities) as any[]) {
+  for (const raw of candidates) {
     if (!raw || raw === bot.entity || raw.type !== 'player' || (foes !== null && !foes.includes(raw.username)) || !raw.position) continue
-    const e = visiblePlayer(bot, raw, scope); if (!e) continue
+    const e = observe(raw); if (!e) continue
     const d = e.position.distanceTo(me)
     if (d < 1.5 || d > 64) continue
     const f = e.metadata?.[ix]
-    const eq = e.equipment || []
-    const it = typeof f === 'number' && (f & 0x02) ? eq[1] : eq[0]
-    // Трезубец в замахе (рука активна, как натянутый лук) — тоже прицел (пользователь 14.10: «трезубцы — плохо уворачиваются,
-    // только прыжки, а надо стрейфить постоянно»): раньше видели только летящий трезубец — поздно, рывок вместо джука.
-    const loaded = it?.componentMap?.get('charged_projectiles')?.data
-    const drawn = it && (((it.name === 'bow' || it.name === 'trident') && typeof f === 'number' && (f & 0x01)) || it.name === 'crossbow' &&
-      (!flight || !!(f & 0x01) || (loaded?.projectiles || loaded?.items || []).length > 0))
-    if (!drawn) continue
+    const hand = f & 0x02 ? 1 : 0
+    // После зарядки анимация руки заканчивается. Заряд виден на модели арбалета в каждой открытой руке.
+    const it = f & 0x01 ? e._ndGearVisible?.[hand] && e.equipment[hand] :
+      e.equipment.find((item, i) => i < 2 && e._ndGearVisible?.[i] && item?.name === 'crossbow' && item.componentMap.has('charged_projectiles'))
+    if (!it || !['bow', 'trident', 'crossbow'].includes(it.name)) continue
     // Взгляд mineflayer: (−sin yaw, …, −cos yaw); угол до меня по горизонтали.
     const want = Math.atan2(-(me.x - e.position.x), -(me.z - e.position.z))
     let dy = Math.abs(want - e.yaw) % (2 * Math.PI); if (dy > Math.PI) dy = 2 * Math.PI - dy
@@ -425,7 +426,14 @@ function floorTracker (bot) {
   const { shapeBoxes }: typeof import('./navigation/geometry') = require('./navigation/geometry')
   const ev: any[] = []
   bot._ndFloor = ev
-  bot.on('diggingCompleted', () => { bot._ndFloorOwnDigAt = gameClock.now() })
+  const dug = block => {
+    bot._ndFloorOwnDigAt = gameClock.now()
+    // Mineflayer clears targetDigBlock before emitting blockUpdate, then confirms that exact update.
+    const own = ev.find(e => e.sound === 'break' && e.result === block)
+    if (own) { own.ended = true; dangerMemo.delete(bot) }
+  }
+  bot.on('diggingCompleted', dug)
+  bot.on('spawn', () => { bot.removeListener('diggingCompleted', dug); bot.on('diggingCompleted', dug) })
   const near = (p) => {
     const me = bot.entity?.position
     return !!me && Math.abs(p.x + .5 - me.x) <= 1.8 && Math.abs(p.z + .5 - me.z) <= 1.8 && p.y < me.y && p.y >= Math.floor(me.y) - 3
@@ -437,16 +445,32 @@ function floorTracker (bot) {
     view.blockAt = p => p.floored().equals(block.position) ? block : bot.blockAt(p)
     return (require('./pick') as typeof import('./pick')).blockSeen(view, block.position)
   }
-  const remember = (block, sound) => {
+  const remember = (block, cause: { sound: 'hit'; breakerId: number } | { sound: 'break'; result: any }) => {
     const me = bot.entity.position, at = block.position.clone(), dx = at.x + .5 - me.x, dz = at.z + .5 - me.z
-    ev.push({ at, t: gameClock.now(), boxes: shapeBoxes(block), sound, dir8: senses.dir8(dx, dz),
+    ev.push({ at, t: gameClock.now(), boxes: shapeBoxes(block), ...cause, dir8: senses.dir8(dx, dz),
       band: senses.band(Math.hypot(dx, at.y + .5 - me.y, dz)) })
+    dangerMemo.delete(bot)
   }
   bot.on('blockUpdate', (oldB, newB) => {
-    try { if (oldB?.boundingBox === 'block' && newB && newB.boundingBox !== 'block' && near(newB.position) && !mine(newB.position) && seen(oldB)) remember(oldB, 'break') } catch {}
+    try { if (oldB?.boundingBox === 'block' && newB && newB.boundingBox !== 'block' && near(newB.position) && !mine(newB.position) && seen(oldB)) remember(oldB, { sound: 'break', result: newB }) } catch {}
   })
-  bot.on('blockBreakProgressObserved', (block, stage, breaker) => {
-    try { if (block?.position && breaker?.id !== bot.entity?.id && near(block.position) && !mine(block.position) && seen(block)) remember(block, 'hit') } catch {}
+  const crack = (block, stage: number, id: number) => {
+    if (!block?.position || id === bot.entity?.id || !near(block.position)) return
+    if (stage >= 0 && stage <= 9) {
+      if (!mine(block.position) && seen(block)) remember(block, { sound: 'hit', breakerId: id })
+    } else {
+      const active = ev.filter(e => !e.ended && e.sound === 'hit' && e.breakerId === id && e.at.equals(block.position))
+      if (!active.length || !seen(block)) return
+      // Keep the visible event to explain its recent sound, even after the crack overlay disappears.
+      for (const e of active) e.ended = true
+      dangerMemo.delete(bot)
+    }
+  }
+  bot.on('blockBreakProgressObserved', (block, stage, breaker) => { try { if (breaker) crack(block, stage, breaker.id) } catch {} })
+  bot.on('blockBreakProgressEnd', (block, breaker) => { try { if (breaker) crack(block, -1, breaker.id) } catch {} })
+  // Mineflayer omits the breaker outside entity tracking. The public overlay still carries its own ID.
+  bot._client?.on('block_break_animation', ({ entityId, destroyStage, location }) => {
+    try { if (!bot.entities?.[entityId] && near(location)) crack(bot.blockAt(new Vec3(location.x, location.y, location.z)), destroyStage, entityId) } catch {}
   })
   return ev
 }
@@ -456,7 +480,7 @@ function floorDanger (bot) {
   while (F.length && now - F[0].t > 800) F.shift()
   if (!bot.entity) return []
   const me = bot.entity.position
-  const support = F.filter(e => floorSupport(bot, e.boxes))
+  const support = F.filter(e => !e.ended && floorSupport(bot, e.boxes))
   if (!support.length) {
     // Слышно лишь близкую копку, не личность копающего и не клетку под полом.
     const senses: typeof import('./perception/senses') = require('./perception/senses')
@@ -476,16 +500,19 @@ function floorDanger (bot) {
 }
 // Один расчёт на игровой тик (стенд 22.10: опрос состояния драйвера 4 раза в секунду считал опасности заново, хотя рассылка
 // уже посчитала их в этом тике, — 6 % процессора тела). Копия верхнего уровня: вызывающий может переназначить поле.
-const dangerMemo = new WeakMap<object, { key: string, value: any }>()
+const dangerMemo = new WeakMap<object, { key: string, body: any, world: any, value: any }>()
 function dangers (bot, opts: { radius?: number, foes?: string[] | null } = {}) {
   const tick = bot?.ndClock?.ticks
+  const terrain = bot?._ndFastBlocks
+  if (terrain && terrain.world !== bot.world) terrain.attach(bot.world)
   if (!Number.isSafeInteger(tick) || !bot.entity) return dangersNow(bot, opts)
   const foes = opts.foes == null ? null : [...new Set(Array.isArray(opts.foes) ? opts.foes.filter(n => typeof n === 'string') : [])].sort()
-  const key = `${tick}|${opts.radius ?? 12}|${foes === null ? '*' : foes.join(',')}`
+  const p = bot.entity.position
+  const key = `${tick}|${opts.radius ?? 12}|${foes === null ? '*' : foes.join(',')}|${p.x},${p.y},${p.z}|${terrain?.ver}`
   const hit = dangerMemo.get(bot)
-  if (hit?.key === key) return { ...hit.value }
+  if (hit?.key === key && hit.body === bot.entity && hit.world === bot.world) return { ...hit.value }
   const value = dangersNow(bot, opts)
-  dangerMemo.set(bot, { key, value })
+  dangerMemo.set(bot, { key, body: bot.entity, world: bot.world, value })
   return { ...value }
 }
 // Лёгкий прогноз для тела: без сканирования лавы, пола, паутины и чужих прыжков.
@@ -499,7 +526,7 @@ function projectileDangers (bot, { foes = null as string[] | null } = {}) {
   const tick = bot.ndClock?.ticks, key = `${tick}|${scope}`, boostFrom = bot._ndBoostFrom
   const memo = projectileMemo.get(bot)
   if (Number.isSafeInteger(tick) && memo?.key === key && memo.boostFrom === boostFrom) return { ...memo.value }
-  const value = { ...projectileThreats(bot, foes, true), aims: aims(bot, foes, scope, true) }
+  const value = { ...projectileThreats(bot, foes, true), aims: aims(bot, foes, scope) }
   if (boostFrom) {
     // rawOwner also identifies an expected boost archer behind us; all other shots stay threats.
     value.arrows = value.arrows.filter(shot => !/^(arrow|spectral_arrow)$/.test(shot.name) ||
@@ -626,6 +653,26 @@ function projectileThreats (bot, foes, moving = false) {
   return { potions, arrows: arrows.sort((a, b) => a.ticks - b.ticks) }
 }
 
+const dryLavaSurvey = new WeakMap<object, { cell: any, terrain: any, version: number }>()
+
+function nearbyLava (bot) {
+  const cell = bot.entity.position.floored(), terrain = bot._ndFastBlocks
+  const last = dryLavaSurvey.get(bot)
+  if (terrain?.live && last?.terrain === terrain && last.version === terrain.ver && cell.equals(last.cell)) return []
+  const lava = []
+  let dry = true
+  for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (let dy = -1; dy <= 1; dy++) {
+    const b = bot.blockAt(cell.offset(dx, dy, dz))
+    if (!b) { dry = false; continue }
+    if (b.name !== 'lava') continue
+    dry = false
+    if (seesPlayer(bot, { position: b.position.offset(.5, 0, .5), height: 1, width: 1 })) lava.push({ at: { x: b.position.x, y: b.position.y, z: b.position.z }, d: Math.hypot(dx, dz) })
+  }
+  // Only a loaded area with no lava survives between ticks. A hidden source must be checked from the next eye position.
+  if (dry && terrain?.live) dryLavaSurvey.set(bot, { cell, terrain, version: terrain.ver })
+  return lava.sort((a, b) => a.d - b.d).slice(0, 1)
+}
+
 function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) {
   if (!bot || !bot.entity) return { potions: [], holders: [], clouds: [], smashes: [], arrows: [], aims: [], lava: [], floor: [], blasts: [], web: [] }
   // An explicit empty team list differs from the legacy unfiltered observation.
@@ -635,10 +682,16 @@ function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) 
   if (sight && sight.scope !== scope) { sight.vision?.close(); sight.vision = null; sight.scope = scope }
   const me = bot.entity.position
   const { potions, arrows } = projectileThreats(bot, foes)
+  // All three player checks consume the same synchronous view, including an occluded result.
+  const views = new Map()
+  const observe = raw => {
+    if (!views.has(raw)) views.set(raw, visiblePlayer(bot, raw, scope))
+    return views.get(raw)
+  }
   const holders = []
   for (const raw of Object.values(bot.entities) as any[]) {
     if (!raw || raw === bot.entity || raw.type !== 'player' || (foes !== null && !foes.includes(raw.username)) || !raw.position || raw.position.distanceTo(me) > radius) continue
-    const e = visiblePlayer(bot, raw, scope); if (!e) continue
+    const e = observe(raw); if (!e) continue
     const it = (e.equipment || [])[0]
     if (!it || !SPLASH.test(it.name) || /^(heal|regen|buff)$/.test(potionRoleOf(bot, it) || '')) continue
     holders.push({ name: e.username, at: e.position, dist: Math.round(e.position.distanceTo(me) * 10) / 10 })
@@ -653,23 +706,18 @@ function dangersNow (bot, { radius = 12, foes = null as string[] | null } = {}) 
   }
   // Лава рядом (12.10: «лаву водой убирать заранее, а не когда упали»): клетка лавы в 2 бл. по горизонтали на уровне ног
   // (на клетку ниже — до клетки выше) — ближайшая.
-  const lava = []
-  const f0 = me.floored()
-  for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (let dy = -1; dy <= 1; dy++) {
-    const b = bot.blockAt(f0.offset(dx, dy, dz))
-    if (b && b.name === 'lava' && seesPlayer(bot, { position: b.position.offset(.5, 0, .5), height: 1, width: 1 })) lava.push({ at: { x: b.position.x, y: b.position.y, z: b.position.z }, d: Math.hypot(dx, dz) })
-  }
-  lava.sort((a, b) => a.d - b.d)
+  const lava = nearbyLava(bot)
   // Динамит: горящий и блоки, которые он подожжёт цепочкой (tactics/blast.tntCharges), в досягаемости взрыва с запасом.
   const B: typeof import('./tactics/blast') = require('./tactics/blast')
-  const blasts = B.tntCharges(bot, me).filter(c => c.position.distanceTo(me) <= B.TNT_REACH + 2)
+  const tnt = B.tntCharges(bot, me).filter(c => c.position.distanceTo(me) <= B.TNT_REACH + 2)
     .map(c => ({ at: { x: c.position.x, y: c.position.y, z: c.position.z }, fuse: c.fuse, primed: c.primed, ...(c.id != null ? { id: c.id } : {}) }))
+  const blasts = [...tnt, ...(require('./tactics/instant-blast') as typeof import('./tactics/instant-blast')).instantBlasts(bot, foes)]
   // Паутина на теле (клетка ног или головы): в ней шаг вчетверо медленнее — ни уйти, ни догнать (стенд бота-противника 22.10:
   // паутина на боте — 10 с на месте под ударами).
   const webs = (require('./hazards') as typeof import('./hazards')).webCells(bot)
   const web = webs.length ? [{ at: { x: webs[0].x, y: webs[0].y, z: webs[0].z }, cells: webs.length }] : []
-  return { potions, holders, clouds, smashes: smashes(bot, foes || [], scope), arrows, aims: aims(bot, foes, scope), lava: lava.slice(0, 1), floor: floorDanger(bot), blasts, web }
+  return { potions, holders, clouds, smashes: smashes(bot, foes || [], scope, false, observe), arrows, aims: aims(bot, foes, scope, { observe }), lava, floor: floorDanger(bot), blasts, web }
 }
 
-module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes, thrownTracker, projectileView, projectileVelocity: sample }
-export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes, thrownTracker, projectileView, sample as projectileVelocity }
+module.exports = { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes, thrownTracker, projectileView, projectileVelocity: sample, aims }
+export { incoming, dodgeKey, PROJECTILES, closestApproach, dangers, projectileDangers, incomingGliders, smashes, thrownTracker, projectileView, sample as projectileVelocity, aims }

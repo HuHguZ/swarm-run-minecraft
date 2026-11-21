@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import vm from 'node:vm'
+import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { transpiledSource } from './source-fixture'
 import { stubRequire } from './stub-require'
@@ -27,25 +28,26 @@ function fixture(wind = false) {
   const bot: any = { entity: { id: 1, position: new Vec3(.5, 120, .5), onGround: true }, ndClock: {}, health: 20,
     players: { Red: { entity: raw } }, inventory: { items: () => [{ name: 'mace' }, { name: 'wind_charge', count: 2 }], slots: [] },
     clearControlStates() {}, look: async () => {}, setControlState() {} }
-  const f = { bot, raw, at, ticks, calls, closed: 0, visible: true, refreshes: 0,
+  const ctl = { aborted: false }
+  const f = { bot, raw, at, ticks, calls, ctl, closed: 0, visible: true, refreshes: 0,
     forecast: () => ({ target: 'Red', at: at.clone(), gameTick: ticks.now, ticks: 1050 - ticks.now }),
     onSmash: (_e, _opts) => {}, onTick: () => {}, leaps: [] as boolean[], leapAvailable: true, handoff: true }
   const file = path.resolve(__dirname, '../src/combat/pearl-ambush.js'), module = { exports: {} as any }
   const req = stubRequire(file, {
-    '../game-clock': { now: () => ticks.now * 50, setTimeout: (fn, ms) => queueMicrotask(() => { ticks.now += ms / 50; f.onTick(); fn() }),
+    '../game-clock': { now: () => ticks.now * 50, observationNow: () => ticks.now * 50, setTimeout: (fn, ms) => queueMicrotask(() => { ticks.now += ms / 50; f.onTick(); fn() }),
       wall: { monotonic: () => 0 } },
     '../pvp/last-seen': { createLastSeen: () => ({ observe: e => e && ({ ...e, _ndVisible: f.visible }), close: () => { f.closed++ } }) },
     '../bow/track': { observedVelocity: () => new Vec3(0, 0, 0) },
     './team-wind': { worldTick: () => ticks.now, windInside: () => true },
     './enemy-wind': { windFinishOpportunity: () => { f.refreshes++; return f.forecast() } },
-    '../mace/hands': { windCount: require('../src/mace/hands').windCount, ensureHotbar: async () => true, hotbarIndex: () => -1 },
+    '../mace/hands': { ...require('../src/mace/hands'), ensureHotbar: async () => true, hotbarIndex: () => -1 },
     '../utility/trident': { tridents: () => [] },
     '../wind-leap': { leap: async (_session, _ctl, _to, p) => { f.leaps.push(!!p.dryRun); return { ok: f.leapAvailable, handedOff: f.handoff && typeof p.handoff === 'function' } } },
     '../mace': { windSmash: async (_bot, _ctl, e, opts) => { calls.push(ticks.now); f.onSmash(e, opts); return { launched: true } },
       descend: async (_bot, _ctl, e, opts) => { calls.push(ticks.now); f.onSmash(e, opts); return { hit: {} } } }
   })
   vm.runInThisContext(`(function(require,module,exports,__filename,__dirname){${transpiledSource(file)}\n})`, { filename: file })(req, module, module.exports, file, path.dirname(file))
-  return { ...f, state: f, run: (more: any = {}) => module.exports.pearlAmbush({ require: () => bot }, { aborted: false },
+  return { ...f, state: f, run: (more: any = {}) => module.exports.pearlAmbush({ require: () => bot }, ctl,
     { kind: wind ? 'wind' : undefined, owner: 'Red', at, eta: 50, gameTick: 1000, arena: { x: 0, z: 0, r: 80 }, ...more }) }
 }
 
@@ -120,6 +122,56 @@ test('wind landing attack requires the same visible opponent after the real arri
   assert.equal(f.state.closed, 1)
 })
 
+for (const lane of ['crossing after movement', 'partly overlaps aim', 'beside the aim', 'behind the thrower', 'clears before the next swing']) {
+  test('pearl ambush mace packet with a friendly builder ' + lane, async () => {
+    const f = fixture(), bot = f.bot, packets = []
+    Object.setPrototypeOf(bot, EventEmitter.prototype)
+    Object.assign(bot, { username: 'Blue', version: '1.21.11', registry: require('minecraft-data')('1.21.11'),
+      _client: new EventEmitter(), getControlState: () => false, supportFeature: n => bot.registry.supportFeature(n),
+      blockAt: p => ({ position: p.floored(), name: p.y < 120 ? 'stone' : 'air', boundingBox: p.y < 120 ? 'block' : 'empty',
+        shapes: p.y < 120 ? [[0, 0, 0, 1, 1, 1]] : [] }) })
+    bot._client.write = (name, packet) => { if (name === 'use_entity' && packet.mouse === 1) packets.push(packet.target) }
+    require('mineflayer/lib/plugins/entities')(bot)
+    Object.assign(f.raw, { name: 'player', width: .6, height: 1.8 })
+    f.at.x = f.raw.position.x = 2.5
+    const friend = { id: 8, username: 'Builder', type: 'player', width: .6, height: 1.8, isValid: true,
+      position: new Vec3(lane === 'behind the thrower' ? 3.1 : 1.6, 120, lane === 'behind the thrower' ? .5 :
+        lane === 'partly overlaps aim' || lane === 'clears before the next swing' ? .74 : .84) }
+    bot.players = { Red: { entity: f.raw }, Builder: { entity: friend } }
+    bot.entities = { 7: f.raw, 8: friend }; bot._ndSwarmAllies = ['Builder']
+    require('../src/pick').install(bot)
+    let finished
+    f.state.onSmash = (target, opts) => {
+      f.ticks.now = 1050
+      Object.assign(bot.entity, { yaw: -Math.PI / 2, pitch: 0, velocity: new Vec3(0, -1, 0), onGround: false })
+      bot.look = async (yaw, pitch) => { Object.assign(bot.entity, { yaw, pitch }) }
+      bot.entity.position.y = 127.9
+      const ctl = { aborted: false }
+      finished = require('../src/mace').descend(bot, ctl, target, { ...opts, windMlg: false, telemetryHp: () => null })
+      bot.entity.position.y = 120.6
+      bot.emit('physicsTick')
+      if (lane === 'crossing after movement') {
+        assert.equal(typeof bot._ndSmashNow, 'function', 'the swing was ready before the builder stepped in')
+        friend.position.z = .5
+      }
+      if (lane === 'clears before the next swing') {
+        bot.emit('ndMovementSent')
+        assert.deepEqual(packets, [])
+        friend.position.z = .84
+        bot.entity.position.y -= .2
+        bot.emit('physicsTick')
+      }
+      bot.emit('ndMovementSent')
+      ctl.aborted = true; bot.emit('physicsTick')
+    }
+    await f.run()
+    const result = await finished
+    const expected = lane === 'partly overlaps aim' || lane === 'crossing after movement' ? [] : [7]
+    assert.deepEqual(packets, expected)
+    assert.equal(!!result.hit, !!expected.length)
+  })
+}
+
 test('wind ambush can wait through a short uncertain post-gust observation', async () => {
   const f = fixture(true), forecast = f.state.forecast
   f.state.forecast = () => f.ticks.now === 1012 ? null : forecast()
@@ -163,4 +215,51 @@ test('wind ambush refuses a future anchor or a replaced native clock', async () 
   assert.equal((await future.run({ gameTick: 1005 })).ok, false)
   assert.equal((await replaced.run()).ok, false)
   assert.deepEqual([...future.calls, ...replaced.calls], [])
+})
+
+test('a lateral pearl leap loses its strike and leaves a new owner in control after the handoff', async () => {
+  const f = fixture(), replacement = { kind: 'rescue' }
+  f.at.x = f.raw.position.x = 8
+  f.bot.blockAt = p => ({ boundingBox: p.y < 120 ? 'block' : 'empty' })
+  let cleared = 0
+  f.state.onSmash = (e, opts) => {
+    f.ticks.now = 1040
+    assert.equal(opts.ready(), true)
+    f.ctl.aborted = true
+    f.bot._ndCombo = replacement
+    f.bot.clearControlStates = () => { cleared++ }
+    assert.equal(e.isValid, false)
+    assert.equal(e.id, undefined)
+    assert.equal(opts.ready(), false)
+  }
+  await f.run({ eta: 40 })
+  assert.deepEqual(f.leaps, [true, false])
+  assert.equal(f.bot._ndCombo, replacement)
+  assert.equal(cleared, 0)
+})
+
+test('an early pearl arrival needs an observed discontinuity into the forecast, for anchored and legacy orders', async () => {
+  for (const native of [true, false]) {
+    const f = fixture(), owner: any = f.raw
+    const far = { x: 14, y: 120, z: .5 }
+      const here = { x: 1, y: 120, z: .5, t: 1046 * 50 }
+    f.state.onSmash = (e, opts) => {
+      f.ticks.now = 1046
+      owner.position.set(far.x, far.y, far.z)
+      owner._ndPositionReceipts = [null, { ...far, kind: 'reacquired' }]
+      assert.equal(opts.ready(), false)
+      owner.position.set(here.x, here.y, here.z)
+      owner._ndPositionReceipts = [null, { ...here, kind: 'reacquired' }]
+      assert.equal(opts.ready(), false, 'appearing from behind cover gives no early teleport receipt')
+      owner._ndPositionReceipts = [{ ...far }, { ...here, kind: 'rel_entity_move' }]
+      assert.equal(opts.ready(), false)
+      owner._ndPositionReceipts[1].kind = 'sync_entity_position'
+      assert.equal(opts.ready(), true, 'public absolute movement into the landing point')
+      owner._ndPositionReceipts = [{ ...here }, { ...here, kind: 'rel_entity_move' }]
+      assert.equal(e.isValid, true)
+      f.state.visible = false
+      assert.equal(e.isValid, false)
+    }
+    await f.run(native ? {} : { gameTick: undefined })
+  }
 })

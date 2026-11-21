@@ -15,6 +15,8 @@
 import { Vec3 } from 'vec3'
 import { bodyClear, containsWater, groundedHazardClear, shapeBoxes, standPositions, supportAt, type CollisionWorld, type Point } from './geometry'
 import { landingDamage } from './landing'
+import { seesPoint } from './parkour/model'
+export { seesPoint }
 import { executeJump, executePlan, IDLE, type Cancellation, type Control, type JumpPlan, type MovementBot, type State, type Step } from './parkour'
 
 const { PlayerState } = (require('../tick-plugins') as typeof import('../tick-plugins')).getPhysics() as { PlayerState: new(bot: MovementBot, control: Control) => State }
@@ -231,12 +233,6 @@ export function findWaterDrop(bot: MovementBot, goal: Point, { radius = 6, budge
 }
 
 /** Луч от глаз до точки: первое, во что он упрётся (форма блока), — не раньше точки (вода лучу не мешает). */
-export function seesPoint(bot: MovementBot, eye: Vec3, point: Vec3): boolean {
-  const d = point.minus(eye); const dist = d.norm()
-  if (!bot.world || dist < .01) return true
-  try { return !bot.world.raycast(eye, d.normalize(), dist - .05, (block, it) => !!block && it.intersect(block.shapes, block.position)) } catch { return false }
-}
-
 /** Уступы вниз: опоры в `radius` ниже ног на 0.5..(3 + урон), ближе к цели и глубже — лучше. */
 export function ledgeOptions(bot: MovementBot, goal: Point, { radius = 4, maxFallDamage = 0 }: { radius?: number; maxFallDamage?: number } = {}): Vec3[] {
   const me = bot.entity.position; const drop = 3 + Math.max(0, maxFallDamage); const out: Array<{ p: Vec3; score: number }> = []

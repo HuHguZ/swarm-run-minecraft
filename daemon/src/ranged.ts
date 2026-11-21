@@ -50,6 +50,7 @@ import * as read from './read'
 import * as assess from './assess'
 import { sleep } from './movement'
 import { visibleAllies, allyAt, allyOnSegment, allyWorld } from './combat/ally-safety'
+import { observeShotHit } from './bow/shot-hit'
 
 const TICK_MS = 50
 const ARROW_SPEED = Math.fround(3.15) // CrossbowItem.getShootingPower returns float.
@@ -464,7 +465,8 @@ async function load (bot, ctl, item, { ammo = 'arrow', abortIf = null, arrow = n
 //
 // Финальный прицел — на позднем physicTick перед пакетом движения.
 // На ndMovementSent: слот арбалета → use_item → слот назад, в том же кадре.
-async function fire (bot, entity, item, { velFn = null, frac = null, onHit = null, point = null, shouldStop = null, traceAim = false }: any = {}) {
+async function fire (bot, entity, item, { velFn = null, frac = null, onHit = null, point = null, shouldStop: cancelled = null, traceAim = false }: any = {}) {
+  const shouldStop = () => entity?.isValid === false || entity?._ndVisible === false || cancelled?.()
   const info = read.crossbowInfo(bot, item)
   if (!info || !info.loaded) return { fired: false, why: 'не заряжен' }
   if (!offensiveLoaded(bot, item, !!entity?.username || entity?.type === 'player')) return { fired: false, why: 'стрелы усиления не для атаки врага' }
@@ -511,7 +513,7 @@ async function fire (bot, entity, item, { velFn = null, frac = null, onHit = nul
       bot.look(sol.yaw, sol.pitch, true).catch(() => {})
       afterPacket(bot, () => {
         if (shouldStop?.()) return resolve({ fired: false, why: 'выстрел отменён' })
-        const current = bot.inventory.slots?.[36 + hb] || item, currentInfo = read.crossbowInfo(bot, current)
+        const current = bot.inventory.slots ? bot.inventory.slots[36 + hb] : item, currentInfo = current && read.crossbowInfo(bot, current)
         if (!currentInfo?.loaded || !offensiveLoaded(bot, current, !!entity?.username || entity?.type === 'player') ||
             ['ammo', 'multishot', 'piercing', 'stars'].some(k => currentInfo[k] !== info[k])) return resolve({ fired: false, why: 'заряженный снаряд сменился' })
         if (!point && !bowMod.hasObservedVelocity(entity)) return resolve({ fired: false, why: 'скорость цели ещё не наблюдалась' })
@@ -538,31 +540,39 @@ async function fire (bot, entity, item, { velFn = null, frac = null, onHit = nul
           aim: [+(sol.yaw * 180 / Math.PI).toFixed(2), +(sol.pitch * 180 / Math.PI).toFixed(2)],
           sent: [+(bot.entity.yaw * 180 / Math.PI).toFixed(2), +(bot.entity.pitch * 180 / Math.PI).toFixed(2)]
         } : null
+        const hitWindow = Math.min(3000, (sol.ticks || 10) * TICK_MS + 1200)
+        let hit = false, fired = false
+        const loaded = current.componentMap?.get('charged_projectiles')?.data
+        const count = (loaded?.projectiles || loaded?.items)?.length || (info.multishot ? 3 : 1)
+        const stopWatching = (onHit || shotLog) && observeShotHit(bot, entity, rocket, count, () => {
+          hit = true
+          if (shotLog) console.log('[xshot]', JSON.stringify({ ...shotLog, hit: gameClock.now() - shotLog.t }))
+          try { onHit?.() } catch {}
+        })
         try {
           if (back !== hb) bot.setQuickBarSlot(hb)
           bot._ndXbowFiring = true
           bot.activateItem()
-          if (back !== hb) bot.setQuickBarSlot(back)
-        } catch {} finally { bot._ndXbowFiring = false }
+          fired = true
+        } catch {} finally {
+          bot._ndXbowFiring = false
+          if (back !== hb) { try { bot.setQuickBarSlot(back) } catch {} }
+        }
+        if (!fired) {
+          stopWatching?.()
+          return resolve({ fired: false, why: 'не удалось выпустить снаряд' })
+        }
         if (shotLog) {
           // Где он был в расчётный миг попадания (упреждение против его хода).
           gameClock.setTimeout(() => { try { shotLog.himAtImpact = [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] } catch {} }, Math.max(0, (sol.ticks || 0) * TICK_MS))
-          let hitLogged = false
-          const onH = (victim) => { if (victim?.id === entity.id && !hitLogged) { hitLogged = true; console.log('[xshot]', JSON.stringify({ ...shotLog, hit: gameClock.now() - shotLog.t })) } }
-          bot.on('entityHurt', onH)
-          gameClock.setTimeout(() => { bot.removeListener('entityHurt', onH); if (!hitLogged) console.log('[xshot]', JSON.stringify({ ...shotLog, hit: null, himAfter: [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] })) }, Math.min(3000, (sol.ticks || 10) * TICK_MS + 1200))
         }
+        if (stopWatching) gameClock.setTimeout(() => {
+          stopWatching()
+          if (shotLog && !hit) console.log('[xshot]', JSON.stringify({ ...shotLog, hit: null, himAfter: [+entity.position.x.toFixed(2), +entity.position.y.toFixed(2), +entity.position.z.toFixed(2)] }))
+        }, hitWindow)
         // Выстрел не «использование»: mineflayer иначе считает руку занятой.
         bot.usingHeldItem = false
-        let hit = false
-        const hp0 = read.healthRaw(bot, entity)
-        const onHurt = (victim) => {
-          if (victim?.id !== entity.id || hit) return
-          hit = true
-          if (onHit) { try { onHit() } catch {} }
-        }
-        bot.on('entityHurt', onHurt)
-        gameClock.setTimeout(() => bot.removeListener('entityHurt', onHurt), Math.min(3000, (sol.ticks || 10) * TICK_MS + 1200))
+        const hp0 = entity.username || entity.type === 'player' ? null : read.healthRaw(bot, entity)
         resolve({ fired: true, ammo: info.ammo, multishot: info.multishot, piercing: info.piercing, ticks: sol.ticks, aimAt: sol.at, from, dist: Math.round(from.distanceTo(entity.position) * 10) / 10, hp0, ...(observation ? { aimObservation: observation } : {}) })
       })
     })
@@ -685,6 +695,7 @@ async function step (bot, ctl, ctx, { used = () => {}, holdWeapon = null, stats 
     const item = bot.inventory.slots[36 + hb]
     const r: any = await fire(bot, ctx.entity, item, {
       velFn: ctx.velFn,
+      shouldStop: () => ctl.aborted,
       point: p.point || null,
       onHit: () => {
         S.hits = (S.hits || 0) + 1

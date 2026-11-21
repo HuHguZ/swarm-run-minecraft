@@ -31,7 +31,9 @@ const SETTLE_MS = 250
 // point(ticks) -> Vec3 — своя точка прицела вместо середины туловища (у
 // дракона бьётся не сущность, а её части: голова, тело, крылья — dragon.js);
 // steep — разрешить крутой выстрел вверх (см. peakPitch).
-async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = null, onRelease = null, onHit = null, shouldStop = null, follow = true, mode = 'compensate', point = null, steep = false, drawMs = DRAW_MS, holdWhile = null, holdMaxMs = 2500, traceAim = false, peek = false }: any = {}) {
+async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = null, onRelease = null, onHit = null, shouldStop: cancelled = null, follow = true, mode = 'compensate', point = null, steep = false, drawMs = DRAW_MS, holdWhile = null, holdMaxMs = 2500, traceAim = false, peek = false }: any = {}) {
+  const shouldStop = () => entity?.isValid === false || entity?._ndVisible === false || cancelled?.()
+  if (entity?.isValid === false || entity?._ndVisible === false) return { shot: false, why: 'цель потеряна' }
   const bow = bot.inventory.items().find(i => i.name === 'bow')
   const ranged: typeof import('../ranged') = require('../ranged')
   const first = ranged.firstArrow(bot), player = !!entity?.username || entity?.type === 'player'
@@ -131,7 +133,8 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
     for (const k of ['forward', 'back', 'left', 'right', 'jump', 'sprint']) { try { bot.setControlState(k, false) } catch {} }
     if (mode === 'snap2') await Promise.race([sleep(60), charge.cancelled])
   }
-  const { onSpawn, onRaw, onHurt, release } = armRelease(S)
+  const { stopWatching, release } = armRelease(S)
+  try {
   let fin: any = await lateRelease(S, release)
   if (!fin) {
     const s = solve()
@@ -147,7 +150,7 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
   const out: any = shotOutcome(S, fin)
   if (!follow) {
     // Стрела на 40 блоков летит ~20 тиков: 2.5 с хватает.
-    gameClock.setTimeout(() => { bot.removeListener('entitySpawn', onSpawn); bot.removeListener('entityHurt', onHurt) }, Math.min(3000, S.sol.ticks * 50 + 1000))
+    if (onHit) gameClock.setTimeout(stopWatching, Math.min(3000, S.sol.ticks * 50 + 1000))
     return out
   }
   // Диагностика: куда реально полетела стрела в первые тики против того, куда
@@ -166,14 +169,12 @@ async function shoot (bot, entity, { velFn = null, onDraw = null, onSettle = nul
     }
     await sleep(50)
   }
-  try { bot._client.removeListener('packet', onRaw) } catch {}
   arrowDiag(S, out)
-  bot.removeListener('entitySpawn', onSpawn)
-  bot.removeListener('entityHurt', onHurt)
   out.hit = S.hit
   if (!S.hit && closest < Infinity) out.missBy = Math.round(closest * 10) / 10
   if (!S.arrow) out.note = 'свою стрелу не увидел'
   return out
+  } finally { if (follow || !S.sent) stopWatching() }
   } finally { S.stopTick(); if (S.sent) charge.close(); else charge.cancel() }
 }
 

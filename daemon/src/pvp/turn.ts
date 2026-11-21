@@ -12,6 +12,7 @@
 export const NEXT = 'next'
 
 export interface DuelCtx {
+  playerDeaths?: Map<string, { victim: string; id: number; hits: number; killer?: string; assisted?: boolean }>; onDeathNotice?: (...args: any[]) => void;
   session: any; ctl: any; entity: any; opts: any; rangedAllowed: any; bot: any; vision: any; deadline: any;
   acquired: any; strategicTargetId: any; lastStand: any; foodFire: any; burningFood: any; fireTerrainSafe: any;
   retreatAtHealth: any; guard: any; calmAfterMs: any; healAt: any; clearArea: any; arena: any; label: any;

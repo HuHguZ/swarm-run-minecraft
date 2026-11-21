@@ -1,5 +1,6 @@
 import { ownsHuntCover } from '../../pearls/hunt-cover'
 import { isAlly } from '../../combat/ally-safety'
+import { hotSupport } from '../../pvp/lava-exit'
 // Тактика: типы порта Minecraft, снимок состояния для телеметрии, наблюдение угроз и выходов (observeTactics).
 import { S4D, digDownCost, boxBuildCost, threatLevel, sustainableFight, meleeReachable, type TacticalState, type TacticalEnemy, type Candidate, type ThreatLevel, type ControlOwner, type ActionId } from '../state'
 import { lavaCapabilities, inLava } from '../lava-escape'
@@ -261,12 +262,10 @@ export function observeTactics(session: MinecraftSession): TacticalState | null 
   const burning = !!(bot.entity.metadata?.[0] & 1)
   // Contact heat sets neither the burning bit nor isInLava. Sample the real
   // support surface: a campfire holds the feet at its fractional top (.4375).
-  const support = bot.blockAt(bot.entity.position.offset(0, -.01, 0))
-  const lit = support?.getProperties?.().lit
-  const contactHeat = incident?.type === 'hot_floor' && support?.name === 'magma_block' ||
-    incident?.type === 'campfire' && /^(campfire|soul_campfire)$/.test(support?.name || '') && (lit === true || lit === 'true')
-  const hotFloor = !dryMountedBoat && !fireResistance && sameWorld && contactHeat &&
-    at >= incident.at && at - incident.at < 1000 && bot.entity.onGround
+  const floorHit = sameWorld && (incident.type === 'hot_floor' || incident.type === 'campfire') &&
+    at >= incident.at && at - incident.at < 1000 && bot.entity.onGround && !dryMountedBoat && !fireResistance
+  const support = floorHit ? hotSupport(bot) : null
+  const hotFloor = !!support && (incident.type === 'hot_floor' ? support === 'magma_block' : support === 'campfire' || support === 'soul_campfire')
   const creeper = process.env.ND_CREEPER_DODGE === '0' ? null : (autopilot ??= (require('../../autopilot') as typeof import('../../autopilot'))).creeperNeed(bot)
   const blast = blastNear(bot, 2)
   // The alarm is the blast reach; the 2 blocks past it only keep a fight from walking back into it (TNT: Fight>Dodge>Fight).

@@ -7,6 +7,7 @@ import { sleep, xyz } from '../movement'
 import { GROUPS, resolveItemNames } from '../items'
 import { live, budgetOf, WALK_MS, walkTo, stopWalkingOnAbort, guardWindow, closeStray, raceOpen, unloadCursor, bagRoom, shelfRoom } from './window'
 import { touchChest } from './base-record'
+import { seenChestPartner } from '../chest-lid'
 
 // ---------------------------------------------------------------- chests
 
@@ -347,8 +348,10 @@ async function chestTake (session, ctl, { item, count = null, x, y, z, timeoutSe
 
   let pass = null
   let facts = null
+  let partner = null
 
   try {
+    if (visibleOnly && win.inventoryStart === 54) partner = seenChestPartner(bot, bot.blockAt(block.position))
     pass = await withdrawPass(bot, mcData, win, resolveFromContainer(win, item), { budget, deadline, ctl })
     facts = { contents: mapOf(win.containerItems()), ...shelfFacts(win) }
   } finally {
@@ -366,6 +369,7 @@ async function chestTake (session, ctl, { item, count = null, x, y, z, timeoutSe
     left: pass && Object.keys(pass.left).length ? pass.left : undefined,
     contents: facts ? facts.contents : undefined,
     free: facts ? facts.free : undefined,
+    ...(visibleOnly && facts ? { chestSlots: facts.slots, ...(partner ? { chestPartner: xyz(partner) } : {}) } : {}),
     base: base || undefined,
     stopped: (pass && pass.stopped) || undefined
   }

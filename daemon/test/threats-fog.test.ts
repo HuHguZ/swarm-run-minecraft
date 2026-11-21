@@ -26,6 +26,41 @@ function player(bot, id: number, username: string, weapon = 'bow') {
   return e
 }
 
+test('one danger report projects each visible enemy once for the potion, mace and aim checks', t => {
+  const f = scene(t), bot = f.bot, foes: string[] = []
+  const Item = require('prismarine-item')(bot.registry)
+  const bow = new Item(bot.registry.itemsByName.bow.id, 1)
+  const potion = new Item(bot.registry.itemsByName.splash_potion.id, 1)
+  let handReads = 0
+  const opponents = Array.from({ length: 20 }, (_, i) => {
+    const e = player(bot, i + 2, `Enemy${i}`), equipment = [bow]
+    e.position.x += i % 4; e.position.z += i % 5 * .18
+    e.yaw = Math.atan2(e.position.x - bot.entity.position.x, e.position.z - bot.entity.position.z)
+    Object.defineProperty(e.equipment, 0, { get() { handReads++; return equipment[0] } })
+    foes.push(e.username)
+    return { e, equipment }
+  })
+  for (let i = 0; i < 19; i++) player(bot, i + 22, `Ally${i}`)
+  const poll = () => threats.dangers(bot, { foes })
+  const result = poll()
+  assert.deepEqual(result.aims.map(a => a.name), foes)
+  assert.equal(handReads, foes.length, 'each rendered hand was read once during this report')
+  f.wall(true); handReads = 0
+  const hidden = poll()
+  assert.deepEqual(hidden.aims, []); assert.deepEqual(hidden.holders, []); assert.equal(handReads, 0)
+  const { e, equipment } = opponents[0]
+  equipment[0] = potion; e.position.x = -3.5
+  const near = poll()
+  assert.deepEqual(near.holders.map(h => h.name), [e.username]); assert.deepEqual(near.aims, [])
+  delete bot.entities[e.id]; bot.emit('entityGone', e)
+  assert.deepEqual(poll().holders, [])
+  const replacement = player(bot, e.id, e.username)
+  replacement.equipment[0] = bow
+  f.wall(false)
+  const open = poll()
+  assert.deepEqual(open.aims.map(a => a.name), foes); assert.deepEqual(open.holders, [])
+})
+
 test('an explicit empty enemy list skips allied player getters and never registers a vision listener', t => {
   const f = scene(t), ally = player(f.bot, 2, 'Ally')
   let reads = 0
@@ -144,6 +179,29 @@ test('bow, mace and potion reflexes cannot observe a player behind a wall inside
   assert.deepEqual(threats.dangers(f.bot, { foes: ['Foe'] }).holders, [])
   f.wall(false)
   assert.equal(threats.dangers(f.bot, { foes: ['Foe'] }).holders.length, 1, 'unreadable contents remain an unknown throw threat')
+})
+
+test('ground and flight observers distinguish a loaded crossbow in either visible hand from an idle empty one', t => {
+  const f = scene(t), foe = player(f.bot, 2, 'Foe', 'crossbow')
+  const flags = f.bot.registry.entitiesByName.player.metadataKeys.indexOf('living_entity_flags')
+  const empty = { name: 'crossbow', componentMap: new Map() }
+  const loaded = { name: 'crossbow', componentMap: new Map([['charged_projectiles', { data: { projectiles: [{ itemId: f.bot.registry.itemsByName.arrow.id, itemCount: 1 }] } }]]) }
+  const check = (main, off, using, expected) => {
+    foe.equipment = [main, off]; foe.metadata[flags] = using
+    f.timer.advanceTicks(1); f.bot.emit('physicsTick')
+    for (const read of [threats.dangers, threats.projectileDangers]) {
+      assert.deepEqual(read(f.bot, { foes: ['Foe'] }).aims.map(a => a.weapon), expected)
+    }
+  }
+  check(empty, null, 0, [])
+  check(empty, null, 1, ['crossbow'])
+  check(loaded, null, 0, ['crossbow'])
+  check({ name: 'iron_sword' }, loaded, 0, ['crossbow'])
+  check({ name: 'iron_sword' }, empty, 3, ['crossbow'])
+  check({ name: 'apple' }, loaded, 1, [])
+  check({ name: 'iron_sword' }, empty, 0, [])
+  f.wall(true)
+  check(loaded, null, 0, [])
 })
 
 test('unknown projectile spawn behind a wall cannot create a threat; observed motion works after acquisition', t => {

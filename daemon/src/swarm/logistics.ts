@@ -77,10 +77,14 @@ export function addBlueprint(board: SwarmBoard, blueprint: Blueprint): SwarmTask
 }
 
 // blueprint — только клетки этого чертежа: строитель кокона не уходит класть чужой маяк или укрытие (ревью 13.10).
-export function nextBuild(board: SwarmBoard, member: SwarmMember, leaseMs = 3000, blueprint?: string): ClaimedTask | null {
+export function nextBuild(board: SwarmBoard, member: SwarmMember, leaseMs = 3000, blueprint?: string, canAttempt?: (cell: SwarmTask) => boolean): ClaimedTask | null {
   if (member.team !== board.team || member.health <= 0) return null
   const cells = board.tasks().filter(t => t.kind === 'build' && t.status === 'pending' && (!blueprint || t.data?.blueprint === blueprint)).sort((a, b) => (b.priority || 0) - (a.priority || 0) || distance(member.position, a.position!) - distance(member.position, b.position!) || a.id.localeCompare(b.id))
-  for (const cell of cells) { const claimed = board.claim(cell.id, member.id, leaseMs); if (claimed) return claimed }
+  for (const cell of cells) {
+    if (canAttempt && !canAttempt(cell)) continue
+    const claimed = board.claim(cell.id, member.id, leaseMs)
+    if (claimed) return claimed
+  }
   return null
 }
 

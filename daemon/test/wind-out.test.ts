@@ -31,6 +31,76 @@ function fixture() {
   return { bot, foe, own, cells, arena: { x: -1.5, z: .5, r: 6.5, killY: -10 } }
 }
 
+test('a single charge off a visible exterior ledge reaches the referee floor; a wall or friendly body prevents release', async t => {
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const { installWindOut } = require('../src/combat/wind-out')
+  const { WIND, windImpulse } = require('../src/combat/team-wind'), edges = require('../src/edges')
+  const { rayBox } = require('../src/pick'), Item = require('prismarine-item')(registry)
+  const arena = { x: 600.5, z: 600.5, r: 80, ellipse: { a: 77, b: 65 }, killY: 113 }
+  for (const mode of ['ledge', 'wall', 'ally']) await t.test(mode, async st => {
+    const { bot, foe, cells } = fixture()
+    cells.clear()
+    for (let x = 597; x <= 603; x++) for (let z = 655; z <= 666; z++) cells.set(`${x},119,${z}`, 'sandstone')
+    if (mode === 'wall') for (let x = 597; x <= 603; x++) for (let y = 120; y < 126; y++) cells.set(`${x},${y},663`, 'stone')
+    bot.entity.position = new Vec3(600.5, 120, 660.3)
+    Object.assign(foe, { position: new Vec3(600.5, 120, 666.5), velocity: new Vec3(0, 0, 0), onGround: true })
+    if (mode === 'ally') {
+      const ally = { ...foe, id: 3, username: 'Friend', position: foe.position.offset(0, 0, -1) }
+      bot.entities[3] = ally; bot.players.Friend = { entity: ally, gamemode: 0 }; bot._ndSwarmAllies = ['Friend']
+    }
+    const producer = new clock.GameClock({ epoch: 0 }), packets = []
+    st.mock.method(clock.wall, 'monotonic', () => 0)
+    st.after(() => { bot.emit('end'); producer.dispose() })
+    producer.syncAge(500n); producer.observationNow = () => 5000; bot.ndClock = producer
+    bot._client = new EventEmitter()
+    bot._client.write = (name, packet) => { if (name === 'use_item') packets.push(packet) }
+    bot.supportFeature = registry.supportFeature; bot.getControlState = () => false
+    require('mineflayer/lib/plugins/inventory')(bot, { hideErrors: true })
+    bot.inventory.updateSlot(45, new Item(registry.itemsByName.wind_charge.id, 1))
+    installWindOut({ bot, _rescue: { arena, killY: arena.killY } })
+    foe._ndObservationNow = producer.observationNow
+    foe._ndPositionReceipts = [4950, 5000].map(t => ({ ...foe.position, t, kind: 'rel_entity_move', grounded: true }))
+    bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:wind_charge', cooldownTicks: 0 })
+    bot.emit('physicsTick'); bot.emit('physicsTick'); bot.emit('ndMovementSent')
+    await new Promise(resolve => setImmediate(resolve))
+    bot.emit('ndMovementSent'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(packets.length, mode === 'ledge' ? 1 : 0)
+    if (!packets.length) return
+
+    // Replay the sent packet against the full test world, independent of the planner's target, burst and result.
+    const { fromNotchianYaw, fromNotchianPitch } = require('mineflayer/lib/conversions')
+    const yaw = fromNotchianYaw(packets[0].rotation.x), pitch = fromNotchianPitch(packets[0].rotation.y)
+    const direction = new Vec3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch))
+    for (const response of ['no charge', 'idle', 'steer back']) {
+      const body = edges.stateOf({ ...bot, entity: { ...foe, effects: {}, attributes: {}, yaw: 0, pitch: 0 } }, edges.IDLE)
+      const world = { getBlock: bot.blockAt }, step = edges.simOf(bot)
+      let projectile = response === 'no charge' ? null : bot.entity.position.offset(0, 1.62, 0), hitTick = 0, fallTick = 0
+      for (let tick = 1; tick <= 65; tick++) {
+        if (response === 'steer back' && hitTick) body.control = { ...edges.IDLE, forward: body.pos.z > 662, sprint: true }
+        step(body, world)
+        if (projectile) {
+          const margin = Math.max(0, Math.min(Math.fround(.3), Math.fround((tick - 2) / 20)))
+          const half = Math.fround(.6) / 2 + margin
+          const contact = rayBox(projectile, direction, body.pos.offset(-half, -margin, -half),
+            body.pos.offset(half, Math.fround(1.8) + margin, half), WIND.speed)
+          if (contact > 0 && contact < WIND.speed) {
+            body.vel = body.vel.plus(windImpulse(bot, body.pos, projectile.plus(direction.scaled(contact)), { resistance: 0 }))
+            hitTick = tick; projectile = null
+          } else projectile = projectile.plus(direction.scaled(WIND.speed))
+        }
+        if (body.pos.y < arena.killY) { fallTick = tick; break }
+      }
+      if (response === 'idle') {
+        assert.ok(hitTick && fallTick > hitTick)
+        st.diagnostic(`packet hit at tick ${hitTick}, fell below Y${arena.killY} at tick ${fallTick}, Y=${body.pos.y.toFixed(2)}`)
+      } else {
+        assert.equal(fallTick, 0); assert.equal(body.pos.y, 120)
+        if (response === 'steer back') assert.ok(hitTick && body.pos.z < 665 && body.onGround)
+      }
+    }
+  })
+})
+
 function centreFixture() {
   const f = fixture()
   f.cells.clear()
@@ -42,6 +112,67 @@ function centreFixture() {
     velocity: new Vec3(0, -.27824629393750167, 0), onGround: false })
   return { ...f, arena: { x: 600, z: 600, r: 80, killY: 113, ellipse: { a: 77, b: 65 } } }
 }
+
+test('last solitary wind charge buys a displacement or an observed finishing hit in a low gallery', async t => {
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const { installWindOut } = require('../src/combat/wind-out') as typeof import('../src/combat/wind-out')
+  const { swarmWind } = require('../../farm/swarm/swarm-driver/wind') as typeof import('../../farm/swarm/swarm-driver/wind')
+  const co = require('../src/pvp/combat-observe') as typeof import('../src/pvp/combat-observe')
+  const Item = require('prismarine-item')(registry)
+  for (const mode of ['boxed', 'open floor', 'spare charge', 'observed wound', 'armor', 'raised shield', 'can rise', 'ally']) await t.test(mode, async st => {
+    const { bot, foe, arena, cells } = centreFixture(), clockNow = 4393
+    bot.entity.position = new Vec3(624.5, 120, 600)
+    const x = 630 + 2867 / 4096 // Last observable horizontal coordinate just short of the wall.
+    Object.assign(foe, { position: new Vec3(x, 120, 600), velocity: new Vec3(0, 0, 0), onGround: true })
+    if (mode !== 'open floor') for (let z = 596; z <= 604; z++) {
+      for (let y = 120; y < 125; y++) cells.set(`631,${y},${z}`, 'stone')
+      if (mode !== 'can rise') for (let x = 623; x <= 631; x++) cells.set(`${x},122,${z}`, 'stone')
+    }
+    if (mode === 'armor') foe.equipment[4] = { name: 'diamond_chestplate' }
+    if (mode === 'raised shield') {
+      foe.equipment[1] = { name: 'shield' }; foe.yaw = Math.PI / 2
+      foe.metadata[registry.entitiesByName.player.metadataKeys.indexOf('living_entity_flags')] = 3
+    }
+    if (mode === 'ally') {
+      const ally = { ...foe, id: 3, username: 'Friend', position: new Vec3(625.5, 120, 604), equipment: [{ name: 'wind_charge' }] }
+      bot.entities[ally.id] = ally; bot.players.Friend = { entity: ally, gamemode: 0 }; bot._ndSwarmAllies = ['Friend']
+    }
+    st.mock.method(clock.wall, 'monotonic', () => 0)
+    const producer = new clock.GameClock({ epoch: 0 })
+    producer.syncAge(500n); producer.observationNow = () => clockNow; bot.ndClock = producer
+    const clicks = []
+    bot._client = new EventEmitter()
+    bot._client.write = (name, packet) => { if (name === 'use_item') clicks.push(packet) }
+    bot.supportFeature = registry.supportFeature
+    require('mineflayer/lib/plugins/inventory')(bot, { hideErrors: true })
+    bot.inventory.updateSlot(45, new Item(registry.itemsByName.wind_charge.id, mode === 'spare charge' ? 2 : 1))
+    bot.getControlState = () => false
+    foe.metadata[9] = .1 // The private player health is never evidence.
+    if (mode === 'observed wound' || mode === 'armor' || mode === 'raised shield') {
+      const track = co.trackFoe(bot, foe, { honest: true, roundScope: 'gallery', now: () => clockNow, visible: () => true })
+      track.noteAttack({ min: 19, max: 19, mean: 19, raw: 19 })
+      bot._client.emit('damage_event', { entityId: foe.id, sourceCauseId: bot.entity.id + 1 })
+      assert.equal(co.foeHpUpper(bot, foe), 1)
+      track.stop()
+    }
+    const actor = { name: 'A', team: 'blue' }
+    const radio = swarmWind({ bots: [actor], teamOf: () => 'blue', alive: () => true, hostile: (_, id) => id === 'Enemy', generation: 1,
+      now: () => clockNow, pos: { A: { p: bot.entity.position } }, arena, log() {} })
+    const session: any = { bot, _rescue: { arena, killY: 113 }, current: null, _windRadio: async q => {
+      const bid = { ...q, id: 1, type: 'wind_bid' }
+      if (radio.windBid(actor, bid)) return shot => radio.windBid(actor, { ...bid, type: 'wind_bid_done', shot })
+    } }
+    st.after(() => { bot.emit('end'); producer.dispose() })
+    installWindOut(session)
+    foe._ndObservationNow = () => clockNow
+    foe._ndPositionReceipts = [clockNow - 50, clockNow].map(t => ({ ...foe.position, t, kind: 'rel_entity_move', grounded: true }))
+    bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:wind_charge', cooldownTicks: 0 })
+    bot.emit('physicsTick'); bot.emit('physicsTick'); bot.emit('ndMovementSent')
+    await new Promise(resolve => setImmediate(resolve))
+    bot.emit('ndMovementSent'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(clicks.length, ['boxed', 'armor', 'raised shield'].includes(mode) ? 0 : 1)
+  })
+})
 
 test('the arena reflex sees native wind cooldown before the first duel and at release', t => {
   const { bot, arena } = fixture()
@@ -762,6 +893,16 @@ test('a visible wind displacement can nominate a supported inside landing after 
   assert.equal(result?.frames.length, result!.ticks + 1)
   assert.equal(result?.frames.at(-1)?.onGround, true)
   assert.equal(finish({ ...arena, x: 0, r: 1 }), null, 'the same fall outside still belongs to the wind tactic')
+  let wall = 0, views = 0
+  t.mock.method(clock.wall, 'monotonic', () => wall)
+  t.mock.method(require('../src/threats'), 'projectileView', () => { wall = 2; views++; return null })
+  for (let id = 1000; id < 1020; id++) {
+    bot.entities[id] = { id, name: 'wind_charge' }
+    bot._ndThrown.set(id, { name: 'wind_charge' })
+  }
+  assert.equal(core.windFinishOpportunity(bot, foe, arena, bot, 1), null)
+  assert.equal(views, 1, 'the landing cannot outlive the pending-charge check deadline')
+  assert.equal(core.windFinishOpportunity(bot, foe, arena, bot, 3)?.target, 'Enemy')
   gust(); assert.equal(finish(), null, 'a new observed gust invalidates the forecast')
 })
 
@@ -821,6 +962,89 @@ test('a witnessed wind trajectory may cross the ellipse aloft and still nominate
   assert.equal(core.windFinishOpportunity(bot, foe, arena, missingFloor, Infinity, window), null, 'a prefix starting outside cannot certify recovery')
   foe.elytraFlying = true; foe.metadata[0] |= 128
   assert.equal(core.windFinishOpportunity(bot, foe, arena, bot), null, 'a gliding target is not a ballistic landing')
+})
+
+test('a wind forecast stops reconstructing an aged visible pose at its deadline and can use the next window', t => {
+  const { bot, own, foe, arena } = centreFixture()
+  const enemy: typeof import('../src/combat/enemy-wind') = require('../src/combat/enemy-wind')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const track: typeof import('../src/bow/track') = require('../src/bow/track')
+  foe.onGround = true; foe.position = new Vec3(612.5, 120, 600.5); foe.velocity = new Vec3(0, 0, 0)
+  own.position = bot.entity.position = foe.position.offset(-6, 0, 0)
+  arena.z = foe.position.z
+  let wall = 0, steps = 0
+  t.mock.method(clock.wall, 'monotonic', () => wall)
+  t.mock.method(track, 'observedVelocity', () => ({ x: 0, y: 0, z: 0, ageTicks: 20 }))
+  const simulate = bot.physics.simulatePlayer.bind(bot.physics)
+  t.mock.method(bot.physics, 'simulatePlayer', (state, world) => { steps++; wall = 2; return simulate(state, world) })
+  const plan = (startTick: number, deadline: number) => enemy.planEnemyWind(bot, foe, [own], { arena, startTick,
+    collision: bot, delays: [0], reactAfterHit: true, maxShots: 1, deadline })
+  assert.equal(plan(500, 1), null)
+  const afterPlanning = steps
+  wall = 0; steps = 0
+  assert.deepEqual(enemy.enemyWindFrames(bot, foe, arena, [], 0, true, bot, 1), [])
+  const afterReaim = steps
+  steps = 0
+  assert.equal(plan(499, 3), null)
+  assert.deepEqual([afterPlanning, afterReaim, steps], [1, 1, 0],
+    'the expired planning and release windows stop after the current physics step; the past start tick needs no trajectory')
+  own.gameTick = 501; bot.ndClock.ticks++
+  const next = plan(501, 3)
+  assert.ok(next && next.nominal.progress > next.baseline.progress)
+  assert.ok(enemy.enemyWindFrames(bot, foe, arena, [], 0, true, bot, 3).length > 1)
+})
+
+test('a central chain saves the last charge on a vertical release and spends it on the next outward hit', t => {
+  const { bot, foe, own, arena } = centreFixture()
+  const out: typeof import('../src/combat/wind-out') = require('../src/combat/wind-out')
+  const enemy: typeof import('../src/combat/enemy-wind') = require('../src/combat/enemy-wind')
+  const hands: typeof import('../src/mace/hands') = require('../src/mace/hands')
+  const clock: typeof import('../src/game-clock') = require('../src/game-clock')
+  const execute: typeof import('../src/combat/enemy-wind-execute') = require('../src/combat/enemy-wind-execute')
+  const { worldTick } = require('../src/combat/team-wind')
+  foe.position = new Vec3(612.5, 120, 600.5); arena.z = foe.position.z
+  foe.onGround = true; foe.velocity = new Vec3(0, 0, 0)
+  own.position = bot.entity.position = foe.position.offset(0, 6, 0)
+  own.velocity = bot.entity.velocity = new Vec3(-.3, 0, 0)
+  own.onGround = bot.entity.onGround = false
+  bot._client = new EventEmitter()
+  bot.getControlState = () => false
+  const charge = { name: 'wind_charge', count: 1 }
+  bot.inventory.slots[45] = charge
+  bot.inventory.items = () => charge.count ? [charge] : []
+  bot.activateItem = () => { charge.count-- }
+  t.mock.method(clock.wall, 'monotonic', () => 0)
+  t.mock.method(execute, 'enemyWindReport', () => ({ ok: true, ready: true, report: { ...own, gameTick: worldTick(bot) } }))
+  let release: (() => void) | undefined
+  t.mock.method(hands, 'afterPacket', (_b, fn) => { release = fn })
+  const plans: { delay: number; gain: number | null }[] = []
+  const nativePlan = enemy.planEnemyWind
+  t.mock.method(enemy, 'planEnemyWind', (...args: Parameters<typeof nativePlan>) => {
+    const plan = nativePlan(...args)
+    plans.push({ delay: args[3].delays![0], gain: plan && plan.nominal.progress - plan.baseline.progress })
+    return plan
+  })
+  const session: any = { bot, _rescue: { arena } }
+  out.installWindOut(session)
+  t.after(() => bot.emit('end'))
+  const opportunity = () => {
+    release = undefined
+    bot.emit('physicsTick'); bot.emit('physicsTick')
+    assert.ok(release)
+    release!()
+  }
+  opportunity()
+  assert.ok(plans[0]?.gain !== null && plans[0].gain > .04, JSON.stringify(plans))
+  assert.equal(charge.count, 1, 'the body directly above a standing target has no outward impulse or scheduled follow-up')
+  assert.deepEqual(plans.map(p => p.delay), [1, 0])
+  assert.equal(plans[1].gain, null)
+  assert.equal(session._windOut.fired, 0)
+  own.position = bot.entity.position = foe.position.offset(-2, 6, 0)
+  bot.ndClock.ticks++
+  opportunity()
+  assert.ok((plans.at(-1)?.gain ?? 0) > 0)
+  assert.equal(charge.count, 0)
+  assert.equal(session._windOut.fired, 1)
 })
 
 test('wind out: release freshness still bounds calculation and final safety in observed game time', async t => {
@@ -1265,4 +1489,62 @@ test('velocity receipts on either side of a visible post-gust position defer a w
   assert.equal(wind.recentlyWindAffected(bot, foe), true)
   now++; assert.equal(wind.recentlyWindAffected(bot, foe), false, 'role recency still expires from the original visible gust')
   bot.emit('end'); assert.equal(bot._client.listenerCount('entity_velocity'), 0)
+})
+
+test('wind out: learned wall cost converts once at the current TPS and the native hand sends a fresh aim', async t => {
+  const clock = require('../src/game-clock') as typeof import('../src/game-clock')
+  const enemy = require('../src/combat/enemy-wind') as typeof import('../src/combat/enemy-wind')
+  const { installWindOut } = require('../src/combat/wind-out') as typeof import('../src/combat/wind-out')
+  const Item = require('prismarine-item')(registry)
+  for (const planMs of [25, 40]) await t.test(`${planMs} ms per plan`, st => {
+    const { bot, foe, arena } = fixture()
+    let wallMs = 0, cost = planMs
+    const lags: number[] = [], clicks: any[] = []
+    st.mock.method(clock.wall, 'monotonic', () => wallMs)
+    const producer = new clock.GameClock({ epoch: 0 })
+    producer.syncAge(500n); bot.ndClock = producer
+    bot._client = new EventEmitter()
+    bot._client.write = (name, packet) => { if (name === 'use_item') clicks.push(packet) }
+    bot.supportFeature = registry.supportFeature
+    require('mineflayer/lib/plugins/inventory')(bot, { hideErrors: true })
+    bot.inventory.updateSlot(45, new Item(registry.itemsByName.wind_charge.id, 64))
+    bot.getControlState = () => false
+    const nativePlan = enemy.planEnemyWind
+    st.mock.method(enemy, 'planEnemyWind', (...args: Parameters<typeof nativePlan>) => {
+      const plan = nativePlan(...args)
+      lags.push(args[3].delays![0]); wallMs += cost
+      return plan
+    })
+    st.mock.method(require('../src/bow/track'), 'observedVelocity', () => ({ ...foe.velocity, ageTicks: 0 }))
+    const session: any = { bot, _rescue: { arena }, current: null }
+    installWindOut(session)
+    st.after(() => { bot.emit('end'); producer.dispose(); bot.removeAllListeners() })
+    const attempt = (rate: number) => {
+      producer.setState({ tick_rate: rate })
+      bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:wind_charge', cooldownTicks: 0 })
+      observeNativeMotion(bot, foe)
+      bot.emit('physicsTick'); bot.emit('physicsTick'); bot.emit('ndMovementSent')
+      bot._client.emit('set_cooldown', { cooldownGroup: 'minecraft:wind_charge', cooldownTicks: 10 })
+      // Let the previous shot land before presenting the next identical target motion.
+      for (let tick = 0; tick < 40; tick++) { producer.ticks++; bot.emit('physicsTick') }
+    }
+    attempt(20)
+    assert.equal(lags.at(-1), 1)
+    for (let i = 0; i < 12; i++) attempt(40)
+    assert.equal(lags.at(-1), Math.round(planMs * 40 / 1000), 'steady 40 TPS')
+    attempt(20)
+    assert.equal(lags.at(-1), Math.round(planMs * 20 / 1000), 'first slower tick after acceleration')
+    attempt(40)
+    assert.equal(lags.at(-1), Math.round(planMs * 40 / 1000), 'same cost after reacceleration')
+    assert.equal(clicks.length, 15)
+    // The visible target moves along +X and stays at the shooter's Z. Check the protocol angle.
+    assert.ok(clicks.every(p => p.hand === 1 && -Math.sin(p.rotation.x * Math.PI / 180) > .999999 && Number.isFinite(p.rotation.y)))
+    cost = 200
+    attempt(40)
+    assert.equal(clicks.length, 15, 'an expired geometry sample cannot spend another charge')
+    assert.equal(session._windOut.log.at(-1)?.why, 'stale_release')
+    cost = planMs; bot._ndSwarmAllies = [foe.username]
+    attempt(40)
+    assert.equal(clicks.length, 15, 'a fresh observation of a teammate cannot authorize an offensive shot')
+  })
 })

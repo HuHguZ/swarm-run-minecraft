@@ -37,7 +37,7 @@ export async function ensureShelterExit(session: any, ctl: any, toward?: Point, 
   ctl ??= { aborted: false, onAbort: [] }
   if (!knownShelter && !exposed) {
     const fortify: typeof import('./fortify') = require('./fortify')
-    if (!fortify.enclosure(bot, fortify.feetCell(bot)).sealed && !(require('./build') as typeof import('./build')).inPit(bot)) return null
+    if (!fortify.enclosure(bot, fortify.feetCell(bot), 'movement').sealed && !(require('./build') as typeof import('./build')).inPit(bot)) return null
   }
   const choice = assessExit(bot, exit, { exposed })
   if (choice.mode === 'open') return null

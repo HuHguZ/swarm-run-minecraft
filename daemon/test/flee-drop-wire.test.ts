@@ -26,24 +26,33 @@ test('квитанция спрыгивания доходит в журнал �
 test('wind release bids use the subscribed socket and report the actual shot or cancellation', async () => {
   const wss = new EventEmitter(), changes = new EventEmitter(), messages: any[] = [], session: any = {}
   const ws = Object.assign(new EventEmitter(), { readyState: 1, send: text => messages.push(JSON.parse(text)) })
-  const facade = { changes, snapshot: () => null, wall: { setInterval: () => 1, clearInterval() {}, setTimeout, clearTimeout } }
+  let expire: () => void
+  const facade = { changes, snapshot: () => null, wall: { setInterval: () => 1, clearInterval() {},
+    setTimeout(fn) { expire = fn; return 1 }, clearTimeout() {} } }
   attachClients(wss, { session, gameClock: facade, methods: {}, log() {}, state: { dangerWatch: null } })
   wss.emit('connection', ws)
   const message = (packet: object) => ws.emit('message', JSON.stringify(packet))
   assert.equal(session._windRadio, undefined)
   message({ type: 'wind_radio' })
   const bid = { target: 'Red', entity: 91, tick: 70, ticks: 6 }
+  assert.equal(session._windRadio.canBid(), true)
+  Object.assign(ws, { bufferedAmount: 65536 })
+  assert.equal(session._windRadio.canBid(), false)
+  assert.equal(await session._windRadio(bid), undefined)
+  Object.assign(ws, { bufferedAmount: 0 })
   const pending = session._windRadio(bid)
+  assert.equal(session._windRadio.canBid(), false)
   assert.deepEqual(messages.at(-1), { ...bid, type: 'wind_bid', id: 1 })
   message({ type: 'wind_bid_answer', id: 0, granted: true })
   message({ type: 'wind_bid_answer', id: 1, granted: true })
   const complete = await pending
+  assert.equal(session._windRadio.canBid(), true)
   complete({ tick: 71, ticks: 4 })
   assert.deepEqual(messages.at(-1), { ...bid, type: 'wind_bid_done', id: 1, shot: { tick: 71, ticks: 4 } })
   const refused = session._windRadio(bid)
   message({ type: 'wind_bid_answer', id: 2, granted: false })
   assert.equal(await refused, undefined)
-  assert.deepEqual(messages.at(-1), { ...bid, type: 'wind_bid_done', id: 2 })
+  assert.deepEqual(messages.at(-1), { ...bid, type: 'wind_bid', id: 2 }, 'the coordinator explicitly refused and holds no reservation')
   const owner = new AbortController()
   const cancelled = session._windRadio(bid, owner.signal)
   owner.abort()
@@ -59,9 +68,16 @@ test('wind release bids use the subscribed socket and report the actual shot or 
   assert.deepEqual(messages.at(-1), { ...bid, type: 'wind_bid', id: 4 })
   nextFinish({ tick: 71, ticks: 4 })
   assert.deepEqual(messages.at(-1), { ...bid, type: 'wind_bid_done', id: 4, shot: { tick: 71, ticks: 4 } })
+  const expired = session._windRadio(bid)
+  expire()
+  assert.equal(await expired, undefined)
+  assert.deepEqual(messages.at(-1), { ...bid, type: 'wind_bid_done', id: 5 })
+  assert.equal(session._windRadio.canBid(), true)
   const interrupted = session._windRadio(bid)
+  const disconnected = session._windRadio
   ws.readyState = 3
   ws.emit('close')
   assert.equal(await interrupted, undefined)
   assert.equal(session._windRadio, undefined)
+  assert.equal(disconnected.canBid(), false)
 })

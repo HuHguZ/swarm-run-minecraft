@@ -39,6 +39,10 @@ export function windOutward(arena: WindArena, p: Point, width = .6): Vec3 {
   if (Math.abs(outward.x) <= width / 2 && Math.abs(outward.z) <= width / 2) {
     const alongX = arena.ellipse && arena.ellipse.a < arena.ellipse.b
     outward.set(alongX ? 1 : 0, 0, alongX ? 0 : 1)
+  } else if (arena.ellipse && arena.ellipse.a !== arena.ellipse.b) {
+    // The outward normal of x²/a² + z²/b² follows the rim even along its diagonals.
+    outward.x /= arena.ellipse.a ** 2
+    outward.z /= arena.ellipse.b ** 2
   }
   if (outward.norm()) outward.scale(1 / outward.norm())
   return outward
@@ -204,6 +208,31 @@ export function windLanding(bot: any, state: { pos: Point; vel: Point; onGround:
   const intended = supportAt(bot, target, .04), actual = supportAt(bot, state.pos, .04)
   return !!intended && !!actual && positionKey(intended.block.position) === positionKey(actual.block.position) && Math.abs(actual.top - state.pos.y) < .02 &&
     state.pos.x > intended.box.minX + .001 && state.pos.x < intended.box.maxX - .001 && state.pos.z > intended.box.minZ + .001 && state.pos.z < intended.box.maxZ - .001
+}
+
+export function windStanceOverlaps(at: Point, p: Point, width = .6, height = 1.8): boolean {
+  const half = (.6 + width) / 2
+  return Math.abs(at.x - p.x) < half && Math.abs(at.z - p.z) < half && at.y < p.y + height && p.y < at.y + 1.8
+}
+
+/** Only a visible player's body can occupy a proposed landing from this client's perspective. */
+export function windLandingOccupied(bot: any, at: Point): boolean {
+  for (const e of Object.values<any>(bot.entities || {})) {
+    if (!e?.position || !e.username || e === bot.entity || e.username === bot.username || e.isValid === false ||
+        bot.players?.[e.username]?.gamemode === 3) continue
+    if (windStanceOverlaps(at, e.position, e.width || .6, e.height || 1.8) &&
+        e._ndVisible !== false && (require('../pvp/last-seen') as typeof import('../pvp/last-seen')).seesPlayer(bot, e)) return true
+  }
+  return false
+}
+
+// A proposal can outlive a mined or newly occupied ledge. Recheck from this client's current sight.
+function pairLandingOpen(bot: any, plan: WindPairPlan): boolean {
+  if (!finite(plan.target) || windLandingOccupied(bot, plan.target)) return false
+  const sight = (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot)
+  const floor = supportAt(sight, plan.target, .03)
+  return !!floor && bodyClear(sight, plan.target) && plan.target.x > floor.box.minX && plan.target.x < floor.box.maxX &&
+    plan.target.z > floor.box.minZ && plan.target.z < floor.box.maxZ
 }
 
 function floorAim(bot: any, x: number, z: number, y: number): Vec3 | null {
@@ -411,6 +440,7 @@ async function waitStart(bot: any, ctl: any, tick: number) {
 
 export async function windReceive(session: any, ctl: any, p: { thrower: WindReport; to?: Point; enemy?: string; incomingDps?: number; dryRun?: boolean; plan?: WindPairPlan; startTick?: number; arena?: WindArena }) {
   const bot = session.bot
+  if (p.plan && !p.plan.spear && !pairLandingOpen(bot, p.plan)) return { ok: false, why: 'landing_changed' }
   const proposal = p.plan ? { best: p.plan, tried: 0, gameTick: worldTick(bot) } : p.enemy
     ? (require('./spear-wind') as typeof import('./spear-wind')).spearWindPlan(bot, p.thrower, p.enemy, { arena: p.arena, incomingDps: p.incomingDps })
     : teamWindPlan(bot, p.thrower, p.to!, { arena: p.arena })
@@ -431,6 +461,7 @@ export async function windReceive(session: any, ctl: any, p: { thrower: WindRepo
   if (plan.spear && !attack) { bot._client.removeListener('explosion', onExplosion); return { ok: false, why: 'spear_charge_not_ready' } }
   try {
     if (!(await waitStart(bot, ctl, p.startTick!))) return { ok: false, why: 'shared_world_tick_required_or_missed' }
+    if (!plan.spear && !pairLandingOpen(bot, plan)) return { ok: false, why: 'landing_changed' }
     if (plan.spear && worldTick(bot)! + plan.spear.hitTick < attack!.readyAt) return { ok: false, why: 'native_spear_delay_not_ready_at_contact' }
     if (plan.spear && (vector(plan.receiver.start).distanceTo(bot.entity.position) > .15 || !receiverMotionMatches(plan, bot.entity) || receiverSignature(bot) !== plan.receiver.signature || !bot.usingHeldItem || bot.health <= plan.spear.price.self))
       return { ok: false, why: 'spear_receiver_changed_during_preparation' }
@@ -559,6 +590,7 @@ export async function windBoost(session: any, ctl: any, p: { ally: string; plan:
   const charge = bot.inventory.items().find((i: any) => i.name === 'wind_charge')
   if (!charge || (require('../mace') as typeof import('../mace')).windReady?.(bot) === false) return { ok: false, why: 'wind_charge_not_ready' }
   if (!plan || !finite(plan.target) || !finite(plan.thrower.start) || !finite(plan.receiver.start)) return { ok: false, why: 'invalid_plan' }
+  if (!plan.spear && !pairLandingOpen(bot, plan)) return { ok: false, why: 'landing_changed' }
   if (vector(plan.thrower.start).distanceTo(bot.entity.position) > .15 || vector(plan.receiver.start).distanceTo(ally.position) > .2) return { ok: false, why: 'pair_start_changed' }
   if (![bot.entity.position, ally.position, plan.target].every(at => windInside(at, p.arena || plan.arena))) return { ok: false, why: 'arena_boundary' }
   if (p.dryRun) return { ok: true, gameTick: worldTick(bot) }
@@ -591,7 +623,7 @@ export async function windBoost(session: any, ctl: any, p: { ally: string; plan:
           (!plan.spear || receiverMotionMatches(plan, ally)) && receiverLaunchSafe(bot, ally, plan, release) &&
           Math.abs(bot.entity.yaw - release.yaw) <= WIND.dispersion && Math.abs(bot.entity.pitch - release.pitch) <= WIND.dispersion &&
           (!plan.spear || (require('../pvp/body') as typeof import('../pvp/body')).usingItem(bot, ally) === plan.spear.name) &&
-          plan.receiver.settled && plan.thrower.safe &&
+          plan.receiver.settled && plan.thrower.safe && (plan.spear || pairLandingOpen(bot, plan)) &&
           (require('./wind-safety') as typeof import('./wind-safety')).windReleaseSafe(bot, release, movement, p.ally)) {
         // The native safety rollout itself can consume the lease's last frame.
         if (!plan.spear || freshProgress(bot, p.ally, plan, p.startTick)) {

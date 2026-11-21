@@ -22,12 +22,13 @@ const registry = require('prismarine-registry')('1.21.11'), Block = require('pri
 const air = p => { const b = Block.fromStateId(registry.blocksByName.air.defaultState); b.position = p.floored(); return b }
 const arena = { x: 0, y: 120, z: 0, r: 80, ellipse: { a: 77, b: 65 } }
 
-test('shared offensive direction preserves the native footprint tie and radial boundary', () => {
+test('shared offensive direction preserves the native footprint tie and follows the normal outside it', () => {
   for (const p of [new Vec3(0, 150, 0), new Vec3(.3, 150, -.3)]) assert.deepEqual(windOutward(arena, p), new Vec3(0, 0, 1))
   assert.deepEqual(windOutward({ ...arena, ellipse: { a: 65, b: 77 } }, new Vec3(0, 150, 0)), new Vec3(1, 0, 0))
   assert.deepEqual(windOutward({ ...arena, ellipse: { a: 65, b: 65 } }, new Vec3(0, 150, 0)), new Vec3(0, 0, 1))
-  const p = new Vec3(.3000001, 150, -.3), radial = new Vec3(p.x, 0, p.z).normalize()
-  assert.deepEqual(windOutward(arena, p), radial)
+  const p = new Vec3(.3000001, 150, -.3)
+  assert.deepEqual(windOutward(arena, p), new Vec3(p.x / 77 ** 2, 0, p.z / 65 ** 2).normalize())
+  assert.deepEqual(windOutward({ ...arena, ellipse: { a: 65, b: 65 } }, p), new Vec3(p.x, 0, p.z).normalize())
 })
 
 function fixture(at = new Vec3(20, 150, 0), me = new Vec3(30, 147, 0), ground = false) {

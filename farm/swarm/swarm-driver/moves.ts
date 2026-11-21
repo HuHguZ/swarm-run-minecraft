@@ -23,11 +23,11 @@ export function swarmMoves (sw: SwarmDriverCtx) {
   // Цель ниже на 4+ (слез с крыши после сундуков наверху) — путь с копкой и блоками (climb): строго по поверхности с крыши вниз
   // не уйти, и бот стоял наверху — «стоит 8 с — goto — сброс» по кругу (галерея 15.10, 31ab).
   const weakLoot = b => !!b.swarmTask?.data?.weak || !Object.keys(pos[b.name]?.inv || {}).some(n => WEAPON.test(n))
-  const lootArena = b => {
+  const lootArena = (b, sightings?) => {
     const me = pos[b.name]?.p
     if (!me || !weakLoot(b)) return arena
     // Same remembered threats and 22-block clearance as weak chest selection; no hidden positions.
-    const { r, foes } = lootThreat(b)
+    const { r, foes } = lootThreat(b, sightings)
     const avoid = foes.map(e => ({ ...e.position, r: Math.min(r, distance(me, e.position)) }))
     return avoid.length ? { ...arena, avoid } : arena
   }
@@ -35,12 +35,12 @@ export function swarmMoves (sw: SwarmDriverCtx) {
   // через дверь мимо врага давал «лут → бегство» (стенд rush 15.10, 3 из 3 оставшихся).
   // Цена пути, а не запрет по дальности: взлёт/посадка и дефицит ракет против ходьбы и подъёма.
   // shortcut: время полёта оценочное; заменить замерами маршрутов, когда появится телеметрия лут-полётов.
-  const travelCost = (b, at, from = pos[b.name]?.p, threat?) => {
+  const travelCost = (b, at, from = pos[b.name]?.p, threat?, ladder = readyLadder(sw, b, at, from)) => {
     const m = pos[b.name], rockets = m?.inv?.firework_rocket || 0
     if (!m || !from) return { walk: Infinity, fly: Infinity }
     const d = distance(from, at), key = 'lootFly:' + b.name + ':' + cellKey(bounded(at))
     const kit = m.inv?.elytra > 0 || m.armor?.torso === 'elytra'
-    const ladder = readyLadder(sw, b, at, from), last = ladder?.top || from
+    const last = ladder?.top || from
     const blocks = at.climbFrom === undefined || last.y >= at.y - 1 || m.inv?.ender_pearl > 0 ? 0 : Math.max(0, at.y - Math.max(last.y, at.climbFrom)) + 3
     const leg = (a, c) => distance(a, c) / 5.6 + Math.max(0, c.y - a.y)
     const entry = ladder && ladderEntry(ladder, from)
@@ -71,13 +71,20 @@ export function swarmMoves (sw: SwarmDriverCtx) {
     // A walkable upper gallery still needs the travel time priced by the selector.
     const ascentSeconds = at.y - (pos[b.name]?.p?.y ?? at.y) > 1 && Number.isFinite(cost.walk) ? Math.ceil(cost.walk) : 0
     const params = { ...bounded(at), surface: at.surface ?? false, range, timeoutSeconds: Math.max(seconds, up ? 20 : down ? 10 : 0, ascentSeconds), arena: pathArena, ...(down || up ? { climb: true } : {}), ...(up ? { exactY: true, _climb: true } : {}), _hunt: true }
-    const started = now(), pending = b.c.call('goto', params), action = b.last
-    const reply = await pending, here = reply?.state?.pos || pos[b.name]?.p
+    const started = now(), previous = b.last ?? null, pending = b.c.call('goto', params), action = b.last
+    const reply = await pending.catch(e => {
+      if (b.swarmTask?.kind === 'loot' && e?.notStarted === true && e.code === 'ARENA_BOUNDARY')
+        return { status: 'failed', code: e.code, notStarted: true, error: e.message }
+      throw e
+    }), here = reply?.state?.pos || pos[b.name]?.p
+    const ownsWalk = reply?.notStarted ? !previous?.pending && (b.last === action || (b.last ?? null) === previous) : b.last === action
     if (reply?.status === 'failed' && /^(ARENA_BOUNDARY|AVOID_NO_PATH)$/.test(reply.code) &&
-        currentTurn(sw, b, round) && b.last === action && b.swarmTask?.kind === 'loot' && !b.swarmTask.data?.commanded &&
-        !b.webRescue && !pos[b.name]?.rescuing && here && pathArena?.avoid?.some(e => distance(here, e) < lootThreat(b).r)) {
+        currentTurn(sw, b, round) && ownsWalk && b.swarmTask?.kind === 'loot' && !b.swarmTask.data?.commanded &&
+        !b.webRescue && !pos[b.name]?.rescuing && here && pathArena?.avoid?.length) {
       // A fixed no-closer route can reject even idle momentum; escape prices the same memory without claiming arrival.
-      const threat = lootThreat(b), escape = await b.c.call('flee', { from: threat.foes.map(e => e.id), timeoutSeconds: 3,
+      const threat = lootThreat(b)
+      if (!pathArena.avoid.some(e => distance(here, e) < threat.r) || !threat.foes.some(e => distance(here, e.position) < threat.r)) return reply
+      const escape = await b.c.call('flee', { from: threat.foes.map(e => e.id), timeoutSeconds: 3,
         safeDist: threat.r, reason: b.swarmTask.data?.reason, arena: pathArena })
       const end = detail(escape).at || escape?.state?.pos
       if (currentTurn(sw, b, round) && end) pos[b.name].p = { ...end }
@@ -86,7 +93,7 @@ export function swarmMoves (sw: SwarmDriverCtx) {
     const remaining = params.timeoutSeconds - (now() - started) / 1000
     // Native goto clamps to five seconds; another mode must fit the same caller budget.
     if (!params.climb && !params._climb && !params.walkOnly && params.surface !== 'strict' && !detail(reply).arrived &&
-        reply?.status === 'failed' && !/^(DAMAGE|ARENA_BOUNDARY|AVOID_NO_PATH)$/.test(reply?.code || detail(reply).code || '') &&
+        reply?.status === 'failed' && !reply.notStarted && !/^(DAMAGE|ARENA_BOUNDARY|AVOID_NO_PATH)$/.test(reply?.code || detail(reply).code || '') &&
         !/^(Tactical|Emergency)$/.test(reply?.state?.tactics?.owner || '') &&
         currentTurn(sw, b, round) && b.last === action && b.swarmTask?.kind === 'loot' && !b.swarmTask.data?.commanded &&
         !b.climbing && !b.webRescue && !frame?.rescuing && (reply?.state?.health ?? frame?.hp) > 0 && here && at.y - here.y > 1 && remaining >= 5 &&
@@ -139,7 +146,7 @@ export function swarmMoves (sw: SwarmDriverCtx) {
     } finally { delete b.campReacting }
   }
   const release = (b, died = false) => { const board = boardOf(b); if (died && b.swarmDoctrine) board.noteTacticOutcome(b.name, b.swarmDoctrine, false); board.releaseOwner(b.name) }
-  const ownProtection = board => [...board.tasks().filter(t => t.kind === 'build').map(t => t.position), ...[...blueprints.entries()].filter(([key]) => key.startsWith(board.team + ':')).flatMap(([, plan]) => plan.protected), ...(placed.get(board.team) || [])]
+  const ownProtection = board => [...board.tasks().filter(t => t.kind === 'build').map(t => t.position), ...[...blueprints.entries()].filter(([key]) => key.startsWith(board.team + ':')).flatMap(([, plan]) => plan.protected), ...(placed.get(board.team)?.values() || [])]
   const renew = (board, b, claim) => board.renew(claim.id, b.name, claim.claim.token, 25000)
   // Цель лута и прямой путь к ней — не ближе к свежему врагу, чем радиус угрозы (голому и слабому 22, остальным 14), а если
   // бот уже ближе — не ближе, чем он сейчас (стенд rush 15.10: красный стоит, синий ходит маятником 25 → 14 → 25 бл. каждые

@@ -2,8 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { swarmTurn } from './swarm/swarm-driver/turn'
 import { swarmTurnWork } from './swarm/swarm-driver/turn-work'
+import { swarmTeam } from './swarm/swarm-driver/team'
+import { planPvp } from '../daemon/src/swarm'
 import { swarmMoves } from './swarm/swarm-driver/moves'
 import { installSight } from './arena/watch'
+import { installDangers } from './arena/dangers'
 import { runIntent } from '../daemon/src/session/intent-runner'
 import { swarmMethods } from '../daemon/src/rpc/swarm'
 
@@ -18,6 +21,8 @@ function pipeline(at = { x: .5, y: 64, z: .5 }) {
   const rpc: any = swarmMethods({ session } as any)
   const b: any = { name: 'A', swarmExecuting: true, swarmTask: task, c: { call(method, params) {
     calls.push({ method, params })
+    if (method === 'assist' && params.mode === 'wall') return Promise.resolve({ status: 'done', detail: { ok: false, placed: 0 } })
+    if (method === 'swarm_hold') return Promise.resolve({ status: 'done', detail: { ok: true, shield: { blockingSeconds: 1 } } })
     if (method === 'fight_guard') return rpc.fight_guard(params)
     if (method === 'stop') { session.current?.ctl.abort(); return Promise.resolve({ status: 'done' }) }
     if (!/^(fight|goto)$/.test(method)) throw new Error(`unexpected ${method}`)
@@ -27,7 +32,7 @@ function pipeline(at = { x: .5, y: 64, z: .5 }) {
   } } }
   const sw: any = { generation: 1, now: () => 1000, bots: [b], alive: () => true,
     pos: { A: { p: at, inv: {} } }, log() {}, arena: { x: 0, z: 0, r: 32 },
-    teamOf: () => 'blue', home: () => at, rangedAdvantage: () => false, onslaught: () => false,
+    teamOf: () => 'blue', home: () => at, rangedAdvantage: () => false, onslaught: () => false, detail: r => r.detail || r,
     cooldown: new Map(), refresh: () => ({ task, board: { enemies: () => [foe] } }) }
   Object.assign(sw, swarmMoves(sw))
   const work = swarmTurnWork(sw), turn = swarmTurn(sw)
@@ -37,13 +42,95 @@ function pipeline(at = { x: .5, y: 64, z: .5 }) {
   const start = async (initial = task, contact = true) => {
     task = initial; b.swarmTask = task
     const running = work.turnFight({ b, board: {}, task, round: 1, m: sw.pos.A, enemies: [foe],
-      context: { members: [] }, foe, contact } as any)
+      context: { members: sw.bots.map(o => ({ id: o.name })) }, foe, contact } as any)
     await flush()
     return { running }
   }
   const done = async running => { finish?.({ landed: 1, arrived: at }); await running }
   return { b, sw, session, calls, foe, fight, start, done, set: value => { task = value }, preempt: () => turn.preempt(b) }
 }
+
+for (const scenario of ['in line', 'off line', 'behind ally', 'other floor', 'ward moved', 'quiet now', 'stale report', 'melee contact', 'no shield', 'other archer']) {
+  test(`the assigned guard screens a wounded teammate from a reported bow draw: ${scenario}`, async () => {
+    const f = pipeline({ x: scenario === 'behind ally' ? 9.5 : 5.5, y: scenario === 'other floor' ? 68 : 64, z: scenario === 'off line' ? 2 : .5 })
+    f.foe.position = { x: -4.5, y: 64, z: .5 }
+    const ally: any = { name: 'Ward', c: {} }, ward = { x: 7.5, y: 64, z: .5 }
+    f.sw.bots.push(ally)
+    f.sw.pos.Ward = { hp: 4, p: ward, inv: {} }
+    f.sw.pos.A.offHand = scenario === 'no shield' ? null : { item: 'shield', count: 1 }
+    installDangers({ bots: [ally], pos: f.sw.pos, busy: new Set(), out: new Set(), deadNow: new Set(),
+      enemiesOf: () => [], log() {} } as any)
+    ally.c.onDanger({ pos: ward, observedAt: scenario === 'stale report' ? -1000 : 1000, dangers: {
+      aims: [{ name: scenario === 'other archer' ? 'Other' : f.foe.id, weapon: 'bow', at: f.foe.position }]
+    } })
+    if (scenario === 'ward moved') f.sw.pos.Ward.p = { ...ward, z: 3.5 }
+    if (scenario === 'quiet now') ally.c.onDanger({ pos: ward, observedAt: 1000, dangers: {} })
+    const { running } = await f.start(f.fight({ cover: ally.name }), scenario === 'melee contact')
+    try {
+      const hold = f.calls.find(c => c.method === 'swarm_hold')
+      if (scenario === 'in line') {
+        assert.equal(hold?.params.whileDraw, f.foe.id)
+        assert.equal(hold.params.coverAlly, ally.name)
+        assert.equal(hold.params.requireShield, true)
+        assert.ok(hold.params.allies.includes(ally.name))
+        assert.equal(f.calls[0], hold, 'guard keeps the lane instead of chasing the shooter')
+      } else {
+        assert.equal(hold, undefined)
+        assert.ok(f.calls.length, 'the ordinary cover task continues')
+      }
+    } finally { await f.done(running) }
+  })
+}
+
+test('a wounded teammate can call a shield already in the line of a distant stationary bow', async () => {
+  const f = pipeline({ x: 5.5, y: 64, z: .5 }), ward = { name: 'Ward', team: 'blue', c: {} }, bruiser = { name: 'Bruiser', team: 'blue', c: {} }
+  f.b.team = 'blue'
+  f.foe.position = { x: -14.5, y: 64, z: .5 }
+  f.sw.bots.push(ward, bruiser)
+  Object.assign(f.sw.pos.A, { hp: 20, offHand: { item: 'shield' }, inv: { stone_sword: 1 } })
+  f.sw.pos.Ward = { hp: 4, inv: { cooked_beef: 1 }, p: { x: 7.5, y: 64, z: .5 } }
+  f.sw.pos.Bruiser = { hp: 20, p: { x: 7.5, y: 64, z: 1.5 }, inv: { diamond_sword: 1 },
+    armor: { head: 'diamond_helmet', torso: 'diamond_chestplate', legs: 'diamond_leggings', feet: 'diamond_boots' } }
+  let time = 1000
+  f.sw.now = () => time
+  const team = swarmTeam({ ...f.sw, boards: new Map(), blueprints: new Map() }), board = team.boardOf(f.b)
+  installDangers({ bots: [ward], pos: f.sw.pos, busy: new Set(), out: new Set(), deadNow: new Set(), enemiesOf: () => [], log() {} } as any)
+  const report = () => (ward.c as any).onDanger({ pos: f.sw.pos.Ward.p, observedAt: time,
+    dangers: { aims: [{ name: f.foe.id, weapon: 'bow', at: f.foe.position }] } })
+  const plan = () => {
+    const members = team.membersOf(f.b)
+    board.setMembers(members)
+    board.observe('Ward', time, { id: f.foe.id, position: f.foe.position, visible: true, equipment: { weapon: 'bow', armor: [] } })
+    return [...planPvp(board, members, { doctrine: 'hunt' }).values()].filter(t => t.data?.cover === ward.name)
+  }
+  report()
+  const orders = plan()
+  assert.deepEqual(orders.map(t => t.assignedTo), ['A'])
+  const { running } = await f.start(orders[0], false)
+  try { assert.equal(f.calls[0].params.coverAlly, 'Ward') } finally { await f.done(running) }
+  time += 2000
+  assert.deepEqual(plan(), [], 'a visible archer holding a bow is insufficient after the draw report expires')
+  report()
+  f.sw.pos.A.p.z = 3.5
+  assert.deepEqual(plan(), [], 'a distant firing line without a shield on it does not divert a bystander')
+})
+
+test('a block carrier answers the ward’s bow sighting once and keeps out of a chase when cover is impossible', async () => {
+  const f = pipeline(), ward: any = { name: 'Ward', team: 'blue' }
+  f.sw.bots.push(ward)
+  f.sw.pos.A.inv = { cobblestone: 4 }
+  f.sw.pos.Ward = { p: { x: .5, y: 64, z: 2.5 } }
+  f.foe.position = { x: 19, y: 64, z: 2.5 }
+  ward.arrowThreat = { active: true, at: 1000, ward: f.sw.pos.Ward.p, bows: [{ name: f.foe.id, at: f.foe.position }] }
+  const order = f.fight({ cover: 'Ward', coverWall: true })
+  const issue = async () => { const { running } = await f.start(order, false); await f.done(running) }
+  await issue(); await issue()
+  assert.deepEqual(f.calls.map(c => [c.method, c.params.mode, c.params.ally, c.params.foe]), [['assist', 'wall', 'Ward', 'Champ']])
+  assert.equal(f.calls[0].params.whileDraw, true)
+  ward.arrowThreat = { ...ward.arrowThreat, at: -600 }
+  await issue()
+  assert.equal(f.calls.length, 1)
+})
 
 test('actual turnFight -> arena wrapper -> real intent -> fight_guard keeps the native controller', async () => {
   const f = pipeline(), { running } = await f.start()

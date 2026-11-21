@@ -9,7 +9,7 @@ import { armRelease } from '../src/bow/shot-release'
 import { stateSummary } from '../src/perception'
 import { tntTeamRisk, igniteTntNow } from '../src/tnt'
 import { memberForce } from '../src/swarm/race'
-import { allyAt, isAlly } from '../src/combat/ally-safety'
+import { allyAt, allyOnSegment, allyWorld, isAlly } from '../src/combat/ally-safety'
 import * as pick from '../src/pick'
 
 function scene() {
@@ -36,6 +36,7 @@ test('ordinary melee never retaliates against a known teammate after accidental 
   pick.install(bot)
   bot.attack(ally)
   assert.deepEqual(sent, [], 'native FF=true allows player_attack, so every ordinary attack caller needs this guard')
+  ally.position.z += 1
   bot.attack(foe)
   assert.deepEqual(sent, [foe.id])
   delete bot.teamMap.Ally
@@ -145,6 +146,28 @@ function observedStrafe(ally, age: number, z = 0) {
   ]
   ally._ndObservationNow = () => 1000 + age * 50
 }
+
+test('a compressed visible strafe checks stops near the projectile without surveying its distant extrapolation', () => {
+  const { bot, ally } = scene()
+  ally.position = new Vec3(3, 116, 34.1)
+  ally._ndObservationNow = () => 5000
+  ally._ndPositionReceipts = [
+    { x: 7, y: 116, z: 34.1, t: 4999, grounded: true, kind: 'rel_entity_move' },
+    { x: 3, y: 116, z: 34.1, t: 5000, grounded: true, kind: 'rel_entity_move' }
+  ]
+  const from = new Vec3(4.1079, 118.9635, 34.1721), to = new Vec3(3.4119, 117.6353, 34.2082)
+  for (const blocked of [false, true]) {
+    let reads = 0
+    allyWorld(bot).blockAt = p => {
+      reads++
+      const solid = blocked && p.x === 2 && p.y === 116
+      return { name: solid ? 'stone' : 'air', position: p, shapes: solid ? [[0, 0, 0, 1, 1, 1]] : [] }
+    }
+    const hit = allyOnSegment(bot, [ally], from, to, 2, 1, .3)
+    assert.equal(hit, blocked ? ally : null)
+    assert.ok(reads > 0 && reads < 250, 'observed blocks read: ' + reads)
+  }
+})
 
 for (const age of [0, 4]) test(`spear keeps the actual visible ally on its beam at observation age ${age}`, t => {
   const { bot, ally } = scene(), sent: any[] = []

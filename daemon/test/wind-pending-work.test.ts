@@ -46,8 +46,37 @@ function recordedBirth(t, ownX: number, nominalDelay = 0, capture = recordedBirt
   const arena = { x: 600, y: 201, z: 600.5, r: 9, ellipse: { a: 8, b: 10 }, killY: 190 }
   const options = { arena, startTick: tick, delays: [nominalDelay], maxShots: 1, waitForHit: true, visiblePrefix: true,
     reactAfterHit: true, expectedPrefix: nominalDelay ? undefined : charge.id, collision: bot, allies: [{ ...ally, id: ally.username, gameTick: tick }] }
-  return { bot, foe, arena, origin, expected: charge.id, plan: () => planEnemyWind(bot, foe, [own], options) }
+  return { bot, foe, arena, origin, expected: charge.id, plan: (overrides = {}) => planEnemyWind(bot, foe, [own], { ...options, ...overrides }) }
 }
+
+test('a visible allied charge off the target trajectory skips launch verification, then certifies a real follower', t => {
+  const f = recordedBirth(t, 593.5)
+  let reads = 0, bodies = 0
+  const block = f.bot.blockAt
+  t.mock.method(f.bot, 'blockAt', (p: Vec3) => { reads++; return block(p) })
+  for (let i = 0; i < 37; i++) {
+    const body = { ...f.bot.players.Relay.entity, id: 300 + i, username: 'Other' + i, position: f.origin.offset(0, 0, i + 20),
+      get _ndVisible() { bodies++; return true }, _ndPositionReceipts: [] }
+    f.bot.entities[body.id] = body
+  }
+  const moveTarget = dz => {
+    f.foe.position.z += dz
+    for (const receipt of f.foe._ndPositionReceipts) receipt.z += dz
+    return enemyWindFrames(f.bot, f.foe, f.arena, [], 0, true, f.bot)
+  }
+  const away = moveTarget(8)
+  assert.ok(away.length > 1)
+  reads = bodies = 0
+  assert.equal(pendingWindHit(f.bot, f.foe, away, [], f.bot, { witness: true }), null)
+  assert.deepEqual({ reads, bodies }, { reads: 0, bodies: 0 }, 'neither launch ray can touch this target or reach a surface close enough to displace it')
+  const aligned = moveTarget(-8)
+  reads = bodies = 0
+  const direct = pendingWindHit(f.bot, f.foe, aligned, [], f.bot, { witness: true })
+  assert.equal(direct?.id, f.expected)
+  assert.deepEqual(direct?.witness?.from, f.origin)
+  assert.ok(reads > 0 && bodies >= 37, 'a candidate contact still verifies the original ray against terrain and bodies')
+  assert.equal(f.plan()?.relayPrefix, f.expected)
+})
 
 test('a stale birth witness keeps the recorded launch ray and rejects a possibly simultaneous second hit', t => {
   const f = recordedBirth(t, 595)
@@ -65,6 +94,45 @@ test('the same immutable birth ray still permits a later eight-tick follower', t
   const f = recordedBirth(t, 593.5), plan = f.plan()
   assert.equal(plan?.relayPrefix, f.expected)
   assert.equal(plan?.shots[0].ticks, 8)
+})
+
+test('the owner of a flying relay skips the paired forecast and can certify a new follower as soon as the slot clears', t => {
+  const f = recordedBirth(t, 593.5)
+  let reads = 0
+  const block = f.bot.blockAt
+  t.mock.method(f.bot, 'blockAt', p => { reads++; return block(p) })
+  const blocked = f.plan({ waitForRelaySlot: true, expectedPrefix: undefined })
+  const busyReads = reads
+  reads = 0
+  const clear = f.plan({ expectedPrefix: undefined })
+  assert.equal(blocked?.relayPrefix, undefined)
+  assert.equal(clear?.relayPrefix, f.expected)
+  assert.equal(clear.shots[0].ticks, 8)
+  assert.ok(busyReads < reads, `blocked ${busyReads}, available ${reads}`)
+  t.diagnostic(`native block reads: occupied ${busyReads}, available ${reads}`)
+})
+
+for (const visiblePrefix of [false, true]) test('wind candidate deadline during the pending projectile view stops collision work, then a fresh window can throw: ' + visiblePrefix, t => {
+  const f = recordedBirth(t, 593.5)
+  let wall = 0, afterDeadline = 0, views = 0
+  const originalView = threats.projectileView, block = f.bot.blockAt
+  t.mock.method(clock.wall, 'monotonic', () => wall)
+  t.mock.method(threats, 'projectileView', (...args: Parameters<typeof threats.projectileView>) => {
+    views++; wall = 2
+    return originalView(...args)
+  })
+  t.mock.method(f.bot, 'blockAt', (p: Vec3) => { if (wall > 1) afterDeadline++; return block(p) })
+  for (let id = 201; id < 220; id++) {
+    f.bot._ndThrown.set(id, f.bot._ndThrown.get(f.expected))
+    f.bot.entities[id] = { ...f.bot.entities[f.expected], id }
+  }
+  const stale = f.plan({ visiblePrefix, expectedPrefix: undefined, deadline: 1 })
+  assert.equal(stale, null)
+  assert.deepEqual({ views, afterDeadline }, { views: 1, afterDeadline: 0 })
+  for (let id = 201; id < 220; id++) { f.bot._ndThrown.delete(id); delete f.bot.entities[id] }
+  const fresh = f.plan({ deadline: 3 })
+  assert.equal(fresh?.relayPrefix, f.expected)
+  assert.equal(fresh?.shots[0].ticks, 8)
 })
 
 test('an eight-tick follower can bid for the current tick when the ordinary lead is one tick', t => {

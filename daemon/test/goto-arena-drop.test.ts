@@ -14,9 +14,11 @@ const file = path.resolve(__dirname, '../src/session.ts'), local = createRequire
 vm.runInThisContext((require('node:module') as typeof import('node:module')).wrap((require('esbuild') as typeof import('esbuild')).transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs' }).code), { filename: file })(source.exports, local, source, file, path.dirname(file))
 
 // V-j's isolated cobblestone: immediate landings are 11.5 below, a diagonal slab is 8.5 below.
-async function stranded(mode: 'drop' | 'walk' | 'disabled' | 'low' | 'lava' | 'abort' | 'xz' | 'expired') {
+async function stranded(mode: 'drop' | 'walk' | 'disabled' | 'low' | 'lava' | 'abort' | 'xz' | 'expired' | 'field' | 'fieldLate') {
+  const field = mode === 'field' || mode === 'fieldLate'
   const cells: any[] = [[0, 161, 0, 'cobblestone']]
   for (let x = -4; x <= 4; x++) for (let z = -4; z <= 4; z++) {
+    if (field) { cells.push([x, 150, z, 'smooth_sandstone']); continue }
     const high = x >= 2 && z >= 2
     cells.push([x, high ? 153 : 150, z, mode === 'lava' ? 'lava' : 'smooth_sandstone_slab', mode === 'lava' ? undefined : { type: 'bottom', waterlogged: false }])
   }
@@ -59,10 +61,11 @@ async function stranded(mode: 'drop' | 'walk' | 'disabled' | 'low' | 'lava' | 'a
       try { return await fn(ctl) } finally { ctl.abort() }
     }
   })
-  const arena = { x: 0, y: 120, z: 0, r: 20, killY: 110 }
+  const arena = { x: 0, y: field ? 151 : 120, z: 0, r: 20, killY: 110 }
   let settled = false, reply: any, error: any, lowest = 162, fall = 0, contact: number | null = null
   const run = s.goto({ x: -15, ...(mode === 'xz' ? {} : { y: 125 }), z: -15, range: 2, timeoutSeconds: 10, arena, climb: true, pathWait: true, unstuck: false,
-    ...(mode === 'walk' ? { walkOnly: true } : {}), ...(mode === 'disabled' ? { descent: false } : {}) })
+    ...(mode === 'walk' ? { walkOnly: true } : {}), ...(mode === 'disabled' ? { descent: false } : {}),
+    ...(field ? { y: arena.y, arenaFloor: true } : {}) })
     .then(r => { reply = r; settled = true }, e => { error = e; settled = true })
   try {
     for (let tick = 0; tick < 500 && !settled; tick++) {
@@ -72,6 +75,7 @@ async function stranded(mode: 'drop' | 'walk' | 'disabled' | 'low' | 'lava' | 'a
       if (st.onGround && st.pos.y < 160 && contact === null) {
         contact = (require('../src/navigation/landing') as typeof import('../src/navigation/landing')).landingDamage(world.getBlock(st.pos.offset(0, -.01, 0)), fall, bot.entity.attributes)
         bot.health -= contact
+        if (mode === 'fieldLate') game.advanceTicks(201)
       }
       game.advanceTicks(1); bot.emit('physicsTick'); bot.emit('physicTick'); bot.emit('ndMovementSent')
       if (mode === 'abort' && lowest < 161 && !s.ctl.aborted) s.ctl.abort()
@@ -81,12 +85,19 @@ async function stranded(mode: 'drop' | 'walk' | 'disabled' | 'low' | 'lava' | 'a
     await run
     assert.equal(searches[0].status, 'noPath'); assert.equal(searches[0].visited, 1)
     assert.ok(searches.length <= 3, `a local descent cannot retry the same failed goto indefinitely: ${JSON.stringify(searches)}`)
-    assert.equal(reply?.arrived, undefined, 'safe local progress does not claim the distant goal was reached')
+    if (field) {
+      assert.equal(reply?.target?.mode, 'arenaFloor', error?.message || reply?.stopped)
+      assert.equal(reply.arrived.y, 151)
+      assert.equal(bot.entity.onGround, true)
+      assert.ok(Math.hypot(reply.arrived.x + 15, reply.arrived.z + 15) > 15)
+    } else assert.equal(reply?.arrived, undefined, 'safe local progress does not claim the distant goal was reached')
     assert.equal(bot.inventory.slots[45].count, 3, 'the rescue rocket reserve stays intact')
     if (mode === 'drop') {
       assert.equal(searches[0].cap, 9, 'ordinary native movement keeps its real health-based drop cap')
       assert.ok(lowest < 160, 'failed native path hands off to the existing safe-drop controller')
       assert.ok(contact !== null && contact <= 5); assert.ok(bot.health >= 15)
+    } else if (field) {
+      assert.ok(lowest >= arena.y)
     } else if (mode === 'abort') {
       assert.ok(lowest < 161, 'the actual drop started before cancellation')
       assert.ok(error); assert.ok(Object.values(controls).every(v => !v))
@@ -96,4 +107,32 @@ async function stranded(mode: 'drop' | 'walk' | 'disabled' | 'low' | 'lava' | 'a
   } finally { game.dispose(); clock.activate(null) }
 }
 
-for (const mode of ['drop', 'walk', 'disabled', 'low', 'lava', 'abort', 'xz', 'expired'] as const) test(`stranded arena goto: ${mode}`, () => stranded(mode))
+for (const mode of ['drop', 'walk', 'disabled', 'low', 'lava', 'abort', 'xz', 'expired', 'field', 'fieldLate'] as const) test(`stranded arena goto: ${mode}`, () => stranded(mode))
+
+test('field arrival requires the body on safe support inside the arena', async () => {
+  for (const kind of ['stone', 'airborne', 'air', 'magma_block', 'outside']) {
+    const { bot } = worldOf([[0, 119, 0, kind === 'magma_block' || kind === 'air' ? kind : 'stone']])
+    bot.entity.position = new Vec3(.5, 120, .5)
+    bot.entity.onGround = kind !== 'airborne'
+    const arena = { x: 15.5, z: .5, y: 120, r: kind === 'outside' ? 8 : 30, killY: 113 }
+    let paths = 0
+    bot.pathfinder = { movements: { emptyBlocks: new Set() }, setGoal() {}, goto: async g => {
+      paths++
+      assert.equal(g.isEnd(bot.entity.position.floored()), true, 'A* accepts this height')
+    } }
+    bot.clearControlStates = () => {}
+    const s: any = Object.assign(Object.create(source.exports.Session.prototype), { require: () => bot, bot,
+      underSky: () => false, updateMovements() {}, runIntent: async (_name, work) => {
+        const ctl = { aborted: false, onAbort: [] }
+        try { return await work(ctl) } finally { for (const stop of ctl.onAbort) stop() }
+      } })
+    const result = await s.goto({ x: 15, y: 120, z: 0, arenaFloor: true, arena, climb: true, walkOnly: true, pathWait: false })
+    if (kind === 'stone') {
+      assert.equal(result.target.mode, 'arenaFloor')
+      assert.equal(paths, 0)
+    } else {
+      assert.equal(result.arrived, undefined, kind)
+      assert.equal(result.code, 'ROUTE_BLOCKED', kind)
+    }
+  }
+})

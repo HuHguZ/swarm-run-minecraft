@@ -21,7 +21,10 @@ export async function fightGraphTurn (ctx: DuelCtx, turn: TurnFrame) {
       obs.storm = thundering(bot)
       obs.foeSky = obs.storm ? skyOver(ctx.entity) : false
       // Булава с падения: взлёт зарядом ветра — подъём и спуск ~28 тиков, высота по потолку (mace.smashPlan).
-      try { const smp = findItem(bot, i => i.name === 'mace') ? mace.smashPlan(bot, ctx.entity) : null; if (smp) obs.smash = { h: smp.h, ticks: 28 } } catch {}
+      try {
+        const smp = findItem(bot, i => i.name === 'mace') && mace.smashPlan(bot, ctx.entity, { frame: turn, arena: ctx.arena, velocity: () => ctx.track.vel() })
+        if (smp) obs.smash = { h: smp.h, ticks: smp.ticks ?? 28 }
+      } catch {}
       const cp = require('./kill-planner').planAttack(obs, { depth: 3, pHit: { rod: rodChance(bot, ctx.entity) } })
       const opts = []
       // У экземпляра elytra.create нет ON (флаг ND_ELYTRA — у модуля): проверка всегда истинна; поведение не трогаю.

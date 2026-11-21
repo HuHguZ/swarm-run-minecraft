@@ -470,6 +470,10 @@ export async function repositionTurn (ctx: DuelCtx, turn: TurnFrame) {
       ctx.reposition = null; ctx.losGoal = null; pathTo(false); ctx.pathing = false
     }
   }
+  // A chest-height sightline through a slit is not a walkable passage after a failed jump.
+  if (seesBody && r > HIT_REACH && !ctx.crowd?.hold && !ctx.perch && !ctx.fort && !ctx.reposition &&
+      bot.entity.onGround && bot.entity.isCollidedHorizontally && ctx.failedHop && ctx.failedHop.inputs === routeInputs() &&
+      !miningProgress() && await ctx.punchThrough(false, true)) return NEXT
   if (!ctx.perch && !ctx.fort && r > HIT_REACH && !ctx.reposition && !miningProgress() &&
       (!ctx.failedReposition || ctx.failedReposition.inputs !== routeInputs())) {
     const wall = !seesBody && !raySees(bot, me.offset(0, 0.4, 0), ctx.entity.position.offset(0, 0.4, 0))

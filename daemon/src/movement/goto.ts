@@ -62,6 +62,20 @@ export function pathKeepAlive (bot, { minMove = 0.8 }: any = {}) {
   return { stats, stop () { bot.removeListener('path_update', onUpdate); bot.removeListener('path_reset', onReset) } }
 }
 
+const walkOnly = move => move && !move.toBreak?.length && !move.toPlace?.length && !move.ndBridge && !move.ndDescend
+
+// A different terminal branch is usable from this body only through a real edge of its movement graph.
+function canJoinCompletedWalk(bot, result) {
+  const next = result.path[0], p = bot.entity.position
+  if (!walkOnly(next) || next.parkour || !next.hash || bot.entity.isInWater ||
+      !result.context.movements?.getNeighbors || !bot.pathfinder.canMove) return false
+  const dx = Math.abs(Math.floor(p.x) - Math.floor(next.x)), dz = Math.abs(Math.floor(p.z) - Math.floor(next.z))
+  if (Math.floor(p.y) !== Math.floor(next.y) || Math.max(dx, dz) !== 1) return false
+  const Move = require('mineflayer-pathfinder/lib/move')
+  const edges = result.context.movements.getNeighbors(new Move(p.x, p.y, p.z, 0, 0))
+  return edges.some(move => move.hash === next.hash && walkOnly(move) && !move.parkour) && bot.pathfinder.canMove(result.path) === true
+}
+
 // opts.unstuck — наблюдатель лестницы выхода (unstuck.watch, ND_UNSTUCK): пока идёт ступень, свои setGoal(null)/goal
 // не рвут переход; отказ поиска не у цели он может взять себе (ступень, потом та же цель ещё раз).
 export function gotoGoal (bot, goal, opts: any = {}) {
@@ -124,10 +138,11 @@ export function gotoGoal (bot, goal, opts: any = {}) {
         if (pathContext !== r.context) {
           pathContext = r.context; prefix = null; prefixEnd = null; prefixStarted = false; continuePrefix = false; terminalPrefix = false
         }
-        if (prefixStarted && !prefix.length && (r.status === 'partial' || r.status === 'success')) {
+        const timedTail = r.status === 'timeout' && r.path?.length > 0 && timeoutWalkOn()
+        if (prefixStarted && !prefix.length && (r.status === 'partial' || r.status === 'success' || timedTail)) {
           // Keep the continuing search. Its next child is ready only when the
           // parent chain still contains the exact Move consumed under our feet.
-          if (r.status === 'partial') {
+          if (r.status === 'partial' || timedTail) {
             const ready = []
             let n = r.ndPartialNode || r.context.bestNode
             for (; n && n.data !== prefixEnd; n = n.parent) ready.push(n.data)
@@ -143,7 +158,12 @@ export function gotoGoal (bot, goal, opts: any = {}) {
                 (marker && (!reached(marker) || marker.toBreak?.length || marker.toPlace?.length || marker.ndBridge || marker.ndDescend)) ||
                 !first || reached(first) || first.toBreak?.length || first.toPlace?.length || first.ndBridge || first.ndDescend ||
                 // canMove bypasses its simulator in water; it cannot prove a different branch there.
-                (!n && bot.entity.isInWater) || bot.pathfinder.canMove?.(step) !== true) { r.path.length = 0; return }
+                (!n && bot.entity.isInWater) || bot.pathfinder.canMove?.(step) !== true) {
+              r.path.length = 0
+              // The expired search cannot publish another edge. Replan from the body once it is free.
+              terminalPrefix = timedTail
+              return
+            }
             r.path.splice(0, r.path.length, ...ready)
           } else {
             const first = r.path[0]
@@ -160,24 +180,27 @@ export function gotoGoal (bot, goal, opts: any = {}) {
           if (tail >= 0) prefix.push(...r.path.slice(tail + 1))
           else if (r.status === 'success') {
             const first = prefix[0]
-            const ready = []
+            let completed
             if (r.path[0]?.toPlace?.length && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() &&
-                !first.toBreak?.length && !first.toPlace?.length && !first.ndBridge && !first.ndDescend) {
+                walkOnly(first)) {
               // Rebase a different complete construction route; native owns its landing and placement from the actual body.
               continuePrefix = true; r.path.length = 0
               return
             }
-            if (bot.entity?.onGround && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() &&
-                !first.toBreak?.length && !first.toPlace?.length && !first.ndBridge && !first.ndDescend &&
-                bot.pathfinder.canMove?.(prefix) === false) {
-              // The success node remains in native AStar's open map. bestNode
-              // may be a different branch; keep every parent, including jumps
-              // discarded by native nearest-node trimming.
+            if (bot.entity?.onGround && !bot.pathfinder.isMining?.() && !bot.pathfinder.isBuilding?.() && walkOnly(first)) {
               const last = r.path.at(-1), terminal = r.context.openDataMap?.get(last?.hash)
-              if (terminal?.data === last) for (let n = terminal; n?.parent; n = n.parent) ready.push(n.data)
+              if (terminal && terminal.data === last) {
+                if (canJoinCompletedWalk(bot, r)) completed = r.path
+                else if (bot.pathfinder.canMove?.(prefix) === false) {
+                  // Restore every parent of the real success node, including jumps lost in native trimming.
+                  const ready = []
+                  for (let n = terminal; n?.parent; n = n.parent) ready.push(n.data)
+                  if (ready.length) completed = ready.reverse()
+                }
+              }
             }
-            if (ready.length) { prefix = ready.reverse(); continuePrefix = false }
-            else continuePrefix = true
+            if (completed) prefix = completed
+            continuePrefix = !completed
           }
           // Session/custom executors already hold this publication's array.
           // Change its contents, so every consumer walks the selected prefix.

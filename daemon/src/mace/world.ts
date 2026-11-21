@@ -4,6 +4,7 @@ import vec3 from 'vec3'
 import * as edges from '../edges'
 // Честный удар (pick.js, 2026-09-26): сквозь крышу его коробки не бить.
 import * as pick from '../pick'
+import { supportAt } from '../navigation/geometry'
 import { clamp } from './consts'
 // Фабрика vec3 (parseFloat, null → 0,0,0), как прежний require('vec3'); тип — класс Vec3.
 export const Vec3 = vec3 as unknown as typeof import('vec3').Vec3
@@ -33,9 +34,14 @@ export function landingSoon (bot) {
   return !!b && (!!b.onGround || (b.velocity?.y ?? 1) <= 0.1 && b.position.y - floorTop(bot, b.position) <= 1)
 }
 
-// Стоит ли он на чём-то: mineflayer onGround чужих сущностей не ведёт вовсе
-// (entities.js его не пишет — поле всегда undefined), поэтому по опоре под
-// рамкой (edges.support) и по вертикальной скорости.
+// The entity constructor defaults onGround to true. Only a movement packet witnessed in direct sight confirms contact.
+export function visibleGroundReceipt(e): boolean {
+  const last = e._ndPositionReceipts?.[1]
+  return e._ndVisible === true && e.onGround === true && last?.grounded === true &&
+    (last.kind === 'rel_entity_move' || last.kind === 'entity_move_look' || last.kind === 'sync_entity_position')
+}
+
+// Опору без подтверждённого пакета оцениваем по скорости и поверхности под рамкой.
 export function grounded (bot, e, vy = 0) {
   if (!e || !e.position) return true
   if (Math.abs(vy) > 0.1) return false
@@ -80,19 +86,24 @@ export function landing (bot, control, { maxTicks = 60, observed = false, arena 
     const view = observed ? (require('../pvp/search') as typeof import('../pvp/search')).observedCollision(bot) : bot
     const world = { getBlock: (p) => view.blockAt(p, false) }
     const st = edges.stateOf(bot, control)
+    let peak = st.pos.y
     for (let t = 0; t < maxTicks; t++) {
       sim(st, world)
+      peak = Math.max(peak, st.pos.y)
       if (arena && (Math.abs(st.pos.x - arena.x) + .3 > arena.r || Math.abs(st.pos.z - arena.z) + .3 > arena.r || st.pos.y <= (arena.killY ?? -64))) return null
       if (st.isInLava) return { at: st.pos, burn: true, t }
-      if (st.onGround) return { at: st.pos, burn: burnAt(bot, st.pos), t, landed: true }
+      if (st.onGround) {
+        const floor = observed ? supportAt(view, st.pos, .04)?.block : undefined
+        if (observed && !floor) return null
+        return { at: st.pos, burn: burnAt(view, st.pos), t, landed: true, peak, floor }
+      }
     }
     return { at: st.pos, burn: false, t: maxTicks, landed: false }
   } catch { return null }
 }
 export const NO_KEYS = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
 export const AIR_KEYS = [{}, { forward: true }, { back: true }, { left: true }, { right: true }, { forward: true, left: true }, { forward: true, right: true }, { back: true, left: true }, { back: true, right: true }].map(k => ({ ...NO_KEYS, ...k }))
-export function fallCost(bot, at, peak) {
-  const floor = bot.blockAt(at.offset(0, -.01, 0).floored())
+export function fallCost(bot, at, peak, floor = bot.blockAt(at.offset(0, -.01, 0).floored())) {
   if (!floor) return Infinity
   const dm: typeof import('../pvp/damage-model') = require('../pvp/damage-model'), read: typeof import('../read') = require('../read')
   const worn = [5, 6, 7, 8].map(s => bot.inventory.slots[s]).filter(Boolean).map(it => ({ name: it.name, ench: { protection: read.enchLevel(bot, it, 'protection'), feather_falling: read.enchLevel(bot, it, 'feather_falling') } }))

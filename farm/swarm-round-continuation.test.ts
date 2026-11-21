@@ -32,7 +32,12 @@ function fixture(deferBot = 'Healer', deferMethod = 'goto') {
   const dead = new Set<string>()
   const driver = createSwarmDriver({ bots, pos, alive: name => !dead.has(name), arena: { x: 0, y: 64, z: 0, r: 100 },
     home: () => pos.Healer.p, hostile: () => false, log() {}, now: () => clock })
-  return { calls, pending, bots, pos, driver, healer: bots[1], kill: name => dead.add(name), advance: () => { clock += 1000 } }
+  function reportVitals() {
+    for (const { name } of bots) Object.assign(pos[name], { hpAskedAt: clock, frameAt: clock, observedAt: clock, clockId: name, tick: clock / 50 })
+  }
+  reportVitals()
+  return { calls, pending, bots, pos, driver, healer: bots[1], kill: name => dead.add(name),
+    advance: (report = true) => { clock += 1000; if (report) reportVitals() } }
 }
 
 test('a current-round healer still approaches and heals', async () => {
@@ -43,6 +48,15 @@ test('a current-round healer still approaches and heals', async () => {
   f.pending.resolve({ status: 'done', detail: { arrived: true } })
   await turn
   assert.deepEqual(f.calls.map(c => c.method), ['goto', 'assist'])
+})
+
+test('an approach completed after patient telemetry expired preserves the potion', async () => {
+  const f = fixture(), turn = f.driver.turn(f.healer)
+  await flush()
+  f.advance(false)
+  f.pending.resolve({ status: 'done', detail: { arrived: true } })
+  await turn
+  assert.deepEqual(f.calls.map(c => c.method), ['goto'])
 })
 
 test('a same-phase refresh and task copy keep the current healer approach valid', async () => {

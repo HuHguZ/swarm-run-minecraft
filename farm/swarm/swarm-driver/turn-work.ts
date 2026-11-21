@@ -1,12 +1,24 @@
 // Рой: задачи хода бота — яма-ловушка, лестница у стены, поход к месту или врагу, бой с целью.
-import { canDigTrap, assessSwarmFight } from '../../../daemon/src/swarm'
+import { canDigTrap, assessSwarmFight, type SwarmBoard } from '../../../daemon/src/swarm'
 import { noteDigProgress, noteDigFailure } from '../../../daemon/src/swarm/dislodge'
 import { digCells } from '../../../daemon/src/swarm/plan-jobs'
-import { distance, cellKey } from './common'
+import { screensBow } from '../../../daemon/src/swarm/common'
+import { attackBeforeBuild } from '../../../daemon/src/swarm/fight'
+import { distance, cellKey, underArrowFire, currentShieldLane } from './common'
 import { currentTurn } from './lifecycle'
+import { coverView } from './team'
 import type { SwarmDriverCtx, TurnCtx } from './common'
 import { ladderEntry, runAscent } from './ascent'
 import { randomUUID } from 'node:crypto'
+
+// A formation slot follows the reported foe. Its stored task.position can already be out of date.
+export function gotoApproach(task, foe) {
+  const slot = task.data?.slot
+  const at = task.data?.swarmStand || (slot !== undefined && foe ? {
+    x: foe.position.x + Math.cos(slot * Math.PI / 4) * 10, y: foe.position.y, z: foe.position.z + Math.sin(slot * Math.PI / 4) * 10
+  } : task.position)
+  return { at, range: task.data?.swarmStand ? .15 : task.data?.range ?? 2 }
+}
 
 // The first physical move is shared with preempt: a changed later fight order must not restart this same walk.
 export function earlyFightMove(m, task, foe) {
@@ -21,8 +33,68 @@ export function earlyFightMove(m, task, foe) {
   }
   return null
 }
+
 export function swarmTurnWork (sw: SwarmDriverCtx) {
   const { now, alive, log, pos, bots, arena, home, cooldown, holes, planned, walls, ladderRoutes, go, detail, rangedAdvantage, search, teamOf, ownProtection, say2, breach, climbTo, bounded, blast } = sw
+  const opening = new Set<string>()
+  // Two failed exchanges or a newly lost opponent can justify one cut by an equipped local fighter.
+  // Inspect the entrance from that fighter's eyes; a search sector alone says nothing about a wall.
+  async function openLocalPassage(tc: TurnCtx) {
+    const { b, task, member, foe, round, board } = tc
+    if (!foe?.equipment || !member || !task.data?.committed || task.data.verify || task.data.cover ||
+        !Object.entries(pos[b.name]?.inv || {}).some(([name, count]) => /_pickaxe$/.test(name) && Number(count) > 0)) return false
+    const from = { ...pos[b.name].p }, to = foe.position
+    const sameCell = (a, c) => a && c && Math.floor(a.x) === Math.floor(c.x) && Math.floor(a.y) === Math.floor(c.y) && Math.floor(a.z) === Math.floor(c.z)
+    const viable = f => f?.equipment && !f.nametag && !f.glowing && f.threat !== 'aerial' &&
+      attackBeforeBuild({ ...member, health: pos[b.name]?.hp ?? member.health }, f, now())
+    if (!viable(foe) || Math.floor(from.y) !== Math.floor(to.y) || distance(from, to) >= 10) return false
+    const dx = to.x - from.x, dz = to.z - from.z
+    if (Math.hypot(dx, dz) < .8) return false
+    const alongX = Math.abs(dx) > Math.abs(dz) || Math.abs(Math.abs(dx) - Math.abs(dz)) < 1
+    const foot = { x: Math.floor(from.x) + (alongX ? Math.sign(dx) : 0), y: Math.floor(from.y), z: Math.floor(from.z) + (alongX ? 0 : Math.sign(dz)) }
+    const cells = [foot, { ...foot, y: foot.y + 1 }], key = round + ':' + teamOf(b) + ':' + cellKey(foot)
+    if (opening.has(key)) return false
+    opening.add(key)
+    try {
+      const raw = await b.c.call('swarm_pose', { cells, inspectOnly: true }).catch(() => null)
+      const rows = raw && (!raw.status || raw.status === 'done') && detail(raw)?.cells
+      if (!Array.isArray(rows) || rows.length !== cells.length || rows.some((r, i) => !r?.at || cellKey(r.at) !== cellKey(cells[i]) || r.existing?.name === 'bedrock') ||
+          !rows.some(r => r.existing?.solid)) return false
+      if (!currentTurn(sw, b, round) || b.swarmTask !== task || !sameCell(from, pos[b.name]?.p) ||
+          ownProtection(board).some(p => p && cells.some(c => cellKey(c) === cellKey(p)))) return false
+      const fresh = board.enemies().find(e => e.id === foe.id)
+      if (!viable(fresh) || !sameCell(fresh.position, to)) return false
+      // Aim at the inspected entrance itself so a diagonal target cannot divert the cut into another wall.
+      return await breach(b, { x: foot.x + .5, y: foot.y, z: foot.z + .5 }, rows.map(r => r.existing?.name || '?').join('/'))
+    } finally { opening.delete(key) }
+  }
+  // A completed fight can return before Paper announces who killed the target.
+  const pendingFightDeaths = new Map<string, Map<string, { round: number; doctrine: any }>>()
+  const credit = (b, victim, doctrine) => {
+    if (!sw.boardOf(b).noteTacticOutcome(b.name, doctrine, true)) return false
+    log(`⚔ ${b.name}: убийство ${victim} подтверждено лентой смертей (${doctrine})`)
+    return true
+  }
+  const publicDeath = (victim: string, killer: string | null) => {
+    // A team's first status request can still be in flight when the death is announced.
+    for (const board of new Set<SwarmBoard>(bots.map(b => sw.boardOf(b)))) {
+      board.forget(victim)
+      sw.plannedFoes.get(board.team)?.delete(victim)
+      sw.plannedAt.set(board.team, -Infinity)
+    }
+    const pending = pendingFightDeaths.get(victim)
+    pendingFightDeaths.delete(victim)
+    const winner = bots.find(b => b.name === killer)
+    const late = pending?.get(killer)
+    const notice = { killer, credited: !!winner && !!late && late.round === sw.generation && credit(winner, victim, late.doctrine) }
+    for (const b of bots) {
+      const fight = b.swarmFight
+      if (!fight || fight.round !== sw.generation || fight.notices.has(victim)) continue
+      if (!fight.targets.has(victim) && !fight.maceOpponents?.has(victim)) continue
+      fight.notices.set(victim, notice)
+      if (!notice.credited && b === winner && fight.target === victim) notice.credited = credit(b, victim, fight.doctrine)
+    }
+  }
   async function turnDig (tc: TurnCtx) {
     const { b, context, board, task, round, m } = tc
     const active = () => currentTurn(sw, b, round) && (!b.swarmTask || b.swarmTask.data?.dig === task.data.dig && b.swarmTask.data?.undermine === task.data.undermine)
@@ -147,15 +219,26 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
 
   async function turnGoto (tc: TurnCtx) {
     const { b, context, task, round, m, contact, foe } = tc
-    // Охота: дошёл до места, где врага видели последним, — прочёсывать арену, а не стоять.
-    // Дошёл туда, где врага видели последним, а его не видно — замуровался рядом: копать туда, а не бродить (натиск).
-    // Своя точка поиска веером (searchAt, план) — туда; дошёл — прочёсывать (а прокоп — только к самому месту врага).
-    const searchAt = task.data?.searchAt ?? task.data?.enemyPosition
-    if (task.data?.search && distance(m.p, searchAt) < 4) { if (task.data.hunt && (sw.onslaught(b) || task.data.finishing) && await breach(b, task.data.enemyPosition)) return; if (!currentTurn(sw, b, round)) return; await search(b, context); return }
+    const searchAt = task.data?.search && bounded(task.data.searchAt ?? task.data.enemyPosition)
+    const clue = searchAt && { round, enemy: task.data.searchEnemy, seenAt: task.data.searchSeenAt }
+    if (searchAt) {
+      const { searchSeenAt, searchEnemy } = task.data, prior = b.swarmSearch
+      const inSector = p => Math.abs(p.y - searchAt.y) < 2 && distance(p, searchAt) < 4
+      const reached = inSector(m.p)
+      const swept = prior && prior.seenAt === searchSeenAt && prior.enemy === searchEnemy && inSector(prior.at)
+      if (reached || swept) {
+        if (reached && task.data.hunt && (sw.onslaught(b) || task.data.finishing) && distance(m.p, task.data.enemyPosition) < 12 && await breach(b, task.data.enemyPosition)) return
+        if (reached && !swept && await openLocalPassage(tc)) return
+        if (!currentTurn(sw, b, round)) return
+        // Зафиксировать достигнутый сектор до первого шага разведки. Новый контакт откроет его снова.
+        if (reached) b.swarmSearch = { at: searchAt, seenAt: searchSeenAt, enemy: searchEnemy }
+        await search(b, context)
+        return
+      }
+    }
     // Сбор на своём секторе (окружение): место — от живой позиции цели (план держит старое место, пока данные те же).
-    const sf = task.data?.slot !== undefined && foe
-    let at = task.data?.search ? searchAt : task.data?.swarmStand || (sf ? { x: sf.position.x + Math.cos(task.data.slot * Math.PI / 4) * 10, y: sf.position.y, z: sf.position.z + Math.sin(task.data.slot * Math.PI / 4) * 10 } : task.position)
-    const range = task.data?.swarmStand && !task.data?.search ? .15 : task.data?.range ?? 2
+    let { at, range } = task.data?.search ? { at: searchAt, range: task.data.range ?? 2 } : gotoApproach(task, foe)
+    if (searchAt && Math.abs(searchAt.y - m.p.y) >= 2) range = Math.min(range, 1)
     const sentry = task.data?.reserve && task.data?.sentry && !task.data?.target && !task.data?.search && !task.data?.swarmStand && !task.data?.hold
     // Виртуальная точка резерва наследует высоту бойца, но в её XZ пол может быть ниже его столба.
     if (sentry && sw.surfaceY && Math.hypot(at.x - m.p.x, at.z - m.p.z) > range) {
@@ -168,17 +251,26 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
       return
     }
     // Сторож уже отказал этому подходу с той же стойки: меняем путь, сохраняя цель охоты.
-    if ((b.badSpots || []).some(p => p.from && distance(p.from, m.p) < 2 && distance(p, bounded(at)) < 1)) {
+    if ((b.badSpots || []).some(p => p.from && distance(p.from, m.p) < 2 && distance(p, bounded(at)) < 1 &&
+        (!p.clue || clue && p.clue.round === round && p.clue.enemy === clue.enemy && p.clue.seenAt === clue.seenAt))) {
       if (task.data?.hunt && (sw.onslaught(b) || task.data.finishing) && distance(m.p, task.data.enemyPosition) < 12 && await breach(b, task.data.enemyPosition)) return
       if (!currentTurn(sw, b, round)) return
       await search(b, context)
       return
     }
-    const walked = detail(await go(b, at, range).catch(e => ({ why: e.message })))
-    if (!currentTurn(sw, b, round)) return
+    const from = { ...m.p }, previous = b.last, pending = go(b, at, range)
+    if (b.last && b.last !== previous && b.last.m === 'goto') b.last.approachRound = round
+    const reply = await pending.catch(e => ({ why: e.message }))
+    if (!currentTurn(sw, b, round) || reply?.notStarted || reply?.status === 'interrupted' || reply?.status === 'skipped') return
+    const walked = detail(reply)
     // Охота: к месту врага не дойти (замуровался за стеной дальше 4 бл.) — прокоп к нему (Codex 15.10: три отказа пути, ноль прокопов).
     if (task.data?.hunt && (sw.onslaught(b) || task.data.finishing) && !walked?.arrived && distance(pos[b.name]?.p || m.p, task.data.enemyPosition) < 12 && await breach(b, task.data.enemyPosition)) return
+    if (searchAt && !walked?.arrived && (reply?.code === 'NO_PATH' || walked?.stopped) && await openLocalPassage(tc)) return
     if (!currentTurn(sw, b, round)) return
+    const stoppedAt = walked.stopped ? walked.at : reply?.status === 'failed' && reply.code === 'NO_PATH' ? reply.state?.pos : null
+    if (searchAt && !walked.arrived && stoppedAt && distance(stoppedAt, from) < 2) {
+      b.badSpots = [...(b.badSpots || []), { ...searchAt, from, clue }].slice(-32)
+    }
     if (task.data?.bait && !contact) await b.c.call('eat', { timeoutSeconds: 2 }).catch(() => {})
     return
   }
@@ -190,6 +282,47 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     if (!active()) return
     if (b.cur !== foe.id) b.noReach = 0
     b.cur = foe.id
+    if (task.data.coverWall || task.data.coverShield) {
+      const ward = bots.find(o => o.name === task.data.cover && teamOf(o) === teamOf(b))
+      const report = ward?.arrowThreat, at = pos[ward?.name]?.p
+      const aim = report?.bows?.find(a => a.name === foe.id)
+      if (contact || b.swarmReserved || m.rescuing || m.tactics?.owner === 'Emergency' || b.maceDefense?.until > now() ||
+          !ward || !alive(ward.name) || !underArrowFire(ward, now()) || !aim ||
+          !at || distance(m.p, at) > 3) return
+      if (task.data.coverShield) {
+        if ((m.offHand?.item ?? m.offHand) !== 'shield' || b.swarmShieldReport === report || !currentShieldLane(m.p, at, report, aim)) return
+        const key = `coverShield:${b.name}`, view = coverView(m.p, ward.name, at, aim)
+        if (sw.blocked?.(b, key, view)) return
+        b.swarmShieldReport = report
+        const reply = await b.c.call('swarm_hold', { shield: true, requireShield: true, whileDraw: foe.id, coverAlly: ward.name,
+          stepIntoLane: !screensBow(m.p, at, aim.at), enemies: [foe.id], allies: tc.context.members.map(a => a.id), timeoutSeconds: 20, arena })
+        if (active() && reply?.status === 'done' && ['cover_step_blocked', 'cover_lane_lost', 'no_shield', 'shield_cooldown'].includes(detail(reply)?.why)) {
+          sw.failed(b, key, view, report.at + 1500)
+          sw.plannedAt.set(board.team, -Infinity)
+        }
+        return
+      }
+      if (b.swarmWallReport === report) return
+      const key = `coverWall:${b.name}`, view = coverView(m.p, ward.name, at, aim, m.inv)
+      if (sw.blocked?.(b, key, view)) return
+      b.swarmWallReport = report
+      const reply = await b.c.call('assist', { mode: 'wall', whileDraw: true, ally: ward.name, foe: foe.id,
+        allies: tc.context.members.map(a => a.id), arena })
+      if (round !== sw.generation) return
+      const result = detail(reply), cells = result?.cells || []
+      if (reply?.status === 'done' && result?.ok === false && !cells.length && result.why === 'нет открытой грани для заслона') {
+        sw.failed(b, key, view, report.at + 1500)
+        if (b.swarmWallReport === report) delete b.swarmWallReport
+        sw.plannedAt.set(board.team, -Infinity)
+      }
+      if (cells.length) {
+        const own = sw.placed.get(board.team) || new Map()
+        for (const cell of cells) own.set(cellKey(cell), cell)
+        sw.placed.set(board.team, own)
+        log(`🧱 ${b.name} прикрыл ${ward.name} от ${foe.id}: поставлено ${cells.length}`)
+      }
+      return
+    }
     // Ближний бой прежде игнорировал сектор: свои вставали на опоры уже назначенной ямы.
     const stand = task.data.digAvoid?.length && task.data.swarmStand
     const move = earlyFightMove(m, task, foe)
@@ -199,6 +332,19 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
       try { const pending = go(b, move.at, move.range); owner.intent = b.last; await pending }
       finally { if (b.swarmReposition === owner) delete b.swarmReposition }
       return
+    }
+    // A teammate reports a visible draw towards them. Keep the shield between them and the archer for this shot.
+    // The body rechecks its own sightline, ends the hold after the draw/arrow clears, and yields to melee and emergencies.
+    if (task.data.cover && !contact && !b.swarmReserved && !(b.maceDefense?.until > now()) && !m.rescuing && m.tactics?.owner !== 'Emergency' &&
+        (m.offHand?.item === 'shield' || m.offHand === 'shield' || m.inv?.shield)) {
+      const ward = bots.find(o => o.name === task.data.cover && teamOf(o) === teamOf(b))
+      const report = ward?.arrowThreat
+      const aim = ward && alive(ward.name) && underArrowFire(ward, now()) && report.bows?.find(a => a.name === foe.id)
+      if (aim && report.ward && pos[ward.name]?.p && screensBow(m.p, report.ward, aim.at) && screensBow(m.p, pos[ward.name].p, aim.at)) {
+        const reply = await b.c.call('swarm_hold', { shield: true, requireShield: true, whileDraw: foe.id, coverAlly: ward.name,
+          enemies: [foe.id], allies: tc.context.members.map(a => a.id), timeoutSeconds: 20, arena })
+        if (!active() || reply?.status !== 'done' || detail(reply)?.shield?.blockingSeconds > 0) return
+      }
     }
     const to = task.data.shoveAt
     if (task.data.push && now() - foe.seenAt < 500) {
@@ -257,6 +403,7 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
       if (!active()) return
       if (breached) { b.noReach = 0; return }
     }
+    if (!reach && (b.noReach || 0) >= 2 && await openLocalPassage(tc)) { b.noReach = 0; return }
     if (!active()) return
     const canFly = (m.inv.elytra || m.armor?.torso === 'elytra') && m.inv.firework_rocket > 3
     const flyerAway = flyer && (stale || reachGap > 48 && !canFly)
@@ -283,20 +430,39 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     // Очередь ударов по окнам неуязвимости (pvp/strike-order, поток enc 21.10): свои, кто бьёт ту же цель у неё (6 бл.), —
     // по имени, одинаково у всех; удар в чужое окно — пустой взмах и сброс своей зарядки.
     const strikers = bots.filter(o => alive(o.name) && teamOf(o) === teamOf(b) && (o === b || o.swarmTask?.kind === 'fight' && o.swarmTask.data?.target === foe.id) && pos[o.name]?.p && distance(pos[o.name].p, foe.position) <= 6).map(o => o.name).sort()
-    const fight = { id: randomUUID(), round, target: foe.id, roundScope: `${teamOf(b)}:${round}`, intent: null }
+    const targets = new Set<string>([foe.id, ...enemies.map(e => e.id)])
+    // Публичный состав разрешает опознать нового противника в полёте. В список целей и на доску эти имена не попадают.
+    const maceOpponents = new Set<string>(b.team && sw.hostile ? [
+      ...bots.filter(o => o.team && o.team !== b.team).map(o => o.name), ...(sw.humanNames?.() || [])
+    ].filter(name => sw.hostile(b, name)) : [])
+    const fight = { id: randomUUID(), round, target: foe.id, targets, maceOpponents, roundScope: `${teamOf(b)}:${round}`, intent: null, doctrine: task.data.doctrine, notices: new Map<string, { killer: string | null; credited: boolean }>() }
     b.swarmFight = fight
     let reply
     try {
-      const pending = b.c.call('fight', { target: foe.id, targets: enemies.map(e => e.id), ...(strikers.length > 1 ? { strikeOrder: strikers } : {}), shoveAt: task.data.shove ? task.data.shoveAt || null : null, digAvoid: task.data.digAvoid || [], swarmStand: stand || null, relocateTo: home(b), allowPlayer: true, allowRanged: true, potionFirst, timeoutSeconds: task.data.fountain === 'close' ? 4 : sw.onslaught(b) && below > 1.8 && nearH ? 3 : 12, retreatAtHealth: sw.onslaught(b) ? 0 : 3, roundScope: fight.roundScope, fightId: fight.id, arena })
+      const pending = b.c.call('fight', { target: foe.id, targets: enemies.map(e => e.id), ...(maceOpponents.size && { maceOpponents: [...maceOpponents] }), ...(strikers.length > 1 ? { strikeOrder: strikers } : {}), shoveAt: task.data.shove ? task.data.shoveAt || null : null, digAvoid: task.data.digAvoid || [], swarmStand: stand || null, relocateTo: home(b), allowPlayer: true, allowRanged: true, potionFirst, timeoutSeconds: task.data.fountain === 'close' ? 4 : sw.onslaught(b) && below > 1.8 && nearH ? 3 : 12, retreatAtHealth: sw.onslaught(b) ? 0 : 3, roundScope: fight.roundScope, fightId: fight.id, arena })
       fight.intent = b.last
       reply = await pending
     } finally { if (b.swarmFight === fight) delete b.swarmFight }
-    if (!active()) return
     const result = detail(reply)
+    if (round === sw.generation) {
+      // Older bodies called an observed death "killed"; neither field identifies the attacker.
+      const victims = new Set<string>([...(result.playerDeaths || []).map(d => d.victim), ...(result.kills || []), ...(typeof result.killed === 'string' ? result.killed.split(', ') : [])])
+      for (const victim of victims) {
+        if (!targets.has(victim) && !(maceOpponents.has(victim) && result.playerDeaths?.some(d =>
+          d.victim === victim && (d.hits > 0 || d.killer === b.name)))) continue
+        const notice = fight.notices.get(victim)
+        if (notice) {
+          if (!notice.credited && notice.killer === b.name) notice.credited = credit(b, victim, fight.doctrine)
+        } else {
+          const pending = pendingFightDeaths.get(victim) || new Map()
+          pending.set(b.name, { round, doctrine: fight.doctrine }); pendingFightDeaths.set(victim, pending)
+        }
+      }
+    }
+    if (!active()) return
     // Бой перебит (тактика, отмена) — не повторять сразу тот же бой: до освобождения тактики (guardedTurn; Codex 15.10:
     // «fight → interrupted → fight» по 5–8 раз за секунду).
     if (reply?.status === 'interrupted') { b.swarmFightReply = reply; cooldown.set(`fight:${b.name}`, now() + 500) }
-    if (result.killed || result.kills?.length) board.noteTacticOutcome(b.name, task.data.doctrine, true)
     const gapAfter = pos[b.name]?.p ? distance(pos[b.name].p, foe.position) : 0
     b.noReach = (reply?.status === 'done' || reply?.status === 'timeout') && result.landed === 0 && gapAfter < 10 && foe.position.y - (pos[b.name]?.p?.y ?? 0) < 2.5 ? (b.noReach || 0) + 1 : 0
     // Итог боя в журнал (арена 14.10: убийств почти нет — видно, чем кончается схватка: попадания, хп, причина конца).
@@ -304,9 +470,11 @@ export function swarmTurnWork (sw: SwarmDriverCtx) {
     const special = Object.keys(result.tricks || {}).filter(k => /булав|копь|элитр|пике|таран|трезуб|удочк|молни|заряд|зель|щит|опор|яму|столкн|вод|потуш|огн|паутин/.test(k)).slice(0, 5)
     // Сломать опору под ним (pvp.ts breakUnder): попыток/сломал/упал — видно, работает ли сброс на краю.
     if (result.breakUnder?.tries) special.unshift(`опора ${result.breakUnder.ok}/${result.breakUnder.tries}${result.breakUnder.fell ? `, упал ${result.breakUnder.fell}` : ''}`)
-    log(`⚔ ${b.name} → ${foe.id}: попаданий ${result.landed ?? '?'}/${result.swings ?? '?'}, хп ${result.hp ?? '?'}${result.killed || result.kills?.length ? ', убил' : ''}${result.stopped || result.why ? ' — ' + String(result.stopped || result.why).slice(0, 70) : ''}${result.calc?.picks ? ` | граф ${Object.entries(result.calc.picks).map(([k, n]) => `${k}:${n}`).join(',')}` : ''}${special.length ? ` | ${special.join('; ')}` : ''}${reply?.status === 'interrupted' ? ` | interrupted ${JSON.stringify(reply.by)}` : ''}`)
+    const death = result.playerDeaths?.find(d => d.victim === foe.id)
+    const outcome = death?.assisted ? `, попал по цели, добил ${death.killer}` : death?.hits ? ', цель погибла после моего попадания' : death || result.killed || result.kills?.length ? ', цель погибла' : ''
+    log(`⚔ ${b.name} → ${foe.id}: попаданий ${result.landed ?? '?'}/${result.swings ?? '?'}, хп ${result.hp ?? '?'}${outcome}${result.stopped || result.why ? ' — ' + String(result.stopped || result.why).slice(0, 70) : ''}${result.calc?.picks ? ` | граф ${Object.entries(result.calc.picks).map(([k, n]) => `${k}:${n}`).join(',')}` : ''}${special.length ? ` | ${special.join('; ')}` : ''}${reply?.status === 'interrupted' ? ` | interrupted ${JSON.stringify(reply.by)}` : ''}`)
     return
   }
 
-  return { turnDig, turnLadder, turnGoto, turnFight }
+  return { turnDig, turnLadder, turnGoto, turnFight, publicDeath, pendingFightDeaths }
 }

@@ -9,8 +9,12 @@
 import * as eyes from './perception/eyes'
 import { castRay, rayDirs, pieCounts } from './swarm/cache-model'
 import { wall } from './game-clock'
+import { Vec3 } from 'vec3'
+import { faceAim } from './pick'
+import { supportAt } from './navigation/geometry'
+import { FALLING } from './build'
 
-export async function cacheScan (bot: any, { rays = 700, range = 56, spin = Math.random(), pie = true, pieStep = 5, pieRange = 64, chestRange = 40 }: any = {}) {
+export async function cacheScan (bot: any, { rays = 700, range = 56, spin = Math.random(), pie = true, pieStep = 5, pieRange = 64, chestRange = 40, checkFootings }: any = {}) {
   if (!bot?.entity || !bot.registry) return null
   const n = Math.max(32, Math.min(2000, Math.floor(rays)))
   const read = eyes.reader(bot)
@@ -51,6 +55,22 @@ export async function cacheScan (bot: any, { rays = 700, range = 56, spin = Math
         yield
       }
       out.pie = { step: pieStep, range: pieRange, bins: pieCounts(o, cells, pieStep, pieRange) }
+    }
+    if (Array.isArray(checkFootings) && checkFootings.length) {
+      const standable = []
+      const up = new Vec3(0, 1, 0)
+      for (const cell of checkFootings) {
+        yield
+        if (!cell || ![cell.x, cell.y, cell.z].every(Number.isSafeInteger)) continue
+        const at = new Vec3(cell.x, cell.y, cell.z)
+        if (Math.hypot(at.x + .5 - o.x, at.y + .5 - o.y, at.z + .5 - o.z) <= 4.5 + Math.sqrt(3) / 2 && faceAim(bot, at, up)) {
+          const block = bot.blockAt(at)
+          const surface = block && !FALLING.has(block.name) && !/_(concrete_powder|anvil)$|^(anvil|dragon_egg|suspicious_sand|suspicious_gravel)$/.test(block.name) &&
+            supportAt({ blockAt: p => p.equals(at) ? block : null }, at.offset(.5, 1, .5), .5)
+          if (surface) standable.push({ x: at.x, y: at.y, z: at.z })
+        }
+      }
+      out.standableFootings = standable
     }
   }
   const body = bot.entity, world = bot.world, dimension = bot.game?.dimension

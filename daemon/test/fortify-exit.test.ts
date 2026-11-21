@@ -43,6 +43,15 @@ test('коробка без безопасного прохода не откр�
   }
 })
 
+test('ordinary breakout can still counterattack through the opening before digging at the feet', async () => {
+  const s = scene()
+  let swings = 0
+  const result = await s.exit(s.bot, new Vec3(0, 0, 0), {}, { onHole: async () => {
+    assert.equal(s.breaks.length, 1); swings++; return true
+  } })
+  assert.equal(result.ok, true); assert.equal(swings, 3); assert.equal(s.breaks.length, 2)
+})
+
 test('за стеной обрыв — выход в сам пролом, если под ним пол и лавы нет', async () => {
   const s = scene({ drop: true })
   const result = await s.exit(s.bot, new Vec3(0, 0, 0))

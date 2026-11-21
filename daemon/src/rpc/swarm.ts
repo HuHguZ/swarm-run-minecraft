@@ -3,6 +3,7 @@
 // Фабрика методов над контекстом демона (rpc/context.ts); обработчики перенесены из src/index.ts.
 import type { RpcContext } from './context'
 import { antidoteMethods } from './antidotes'
+import { assistTimeoutMs, swarmHoldTimeoutMs } from '../swarm/common'
 
 function swarmMethods ({ session, gameClock }: RpcContext) {
   return {
@@ -18,14 +19,23 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
     items_near: async (p: any = {}) => session.immediate(async () => {
       const bot = session.require(), me = bot.entity.position, r = Math.min(16, p.radius || 8)
       const sees = require('../pvp/last-seen').seesPlayer
-      const items: any[] = []
+      const nearby: { entity: any; d: number }[] = []
       for (const e of Object.values(bot.entities) as any[]) {
-        if (!e || e.name !== 'item' || !e.position || e.position.distanceTo(me) > r) continue
-        let it = null; try { it = e.getDroppedItem() } catch {}
-        if (!it || !sees(bot, e)) continue
-        items.push({ id: e.id, name: it.name, count: it.count, at: { x: e.position.x, y: e.position.y, z: e.position.z }, d: +e.position.distanceTo(me).toFixed(1) })
+        if (e?.name !== 'item' || !e.position) continue
+        const distance = e.position.distanceTo(me)
+        if (distance <= r) nearby.push({ entity: e, d: +distance.toFixed(1) })
       }
-      return { items: items.sort((a, b) => a.d - b.d).slice(0, 12) }
+      // Stable rounded-distance order is part of the RPC. Unseen and empty entities do not use a result slot.
+      nearby.sort((a, b) => a.d - b.d)
+      const items: any[] = []
+      for (const { entity: e, d } of nearby) {
+        if (!sees(bot, e)) continue
+        let it = null; try { it = e.getDroppedItem() } catch {}
+        if (!it) continue
+        items.push({ id: e.id, name: it.name, count: it.count, at: { x: e.position.x, y: e.position.y, z: e.position.z }, d })
+        if (items.length === 12) break
+      }
+      return { items }
     }),
     // Замуроваться в своей клетке (кемпер в углу, пользователь 14.10: «блоками себя заставить»): стены в два блока и крыша,
     // по видимым граням (fortify.boxIn); итог — сколько поставил и замкнута ли коробка.
@@ -114,7 +124,7 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
         if (!patched && !safe.aborted) await S.swarmHold(session, safe, p)
       }
       return inspect() || { camp: 'hold', patched, sealed: F.enclosure(bot, box.cell).sealed }
-    }, { timeoutMs: p.camp === true ? 12000 : p.whileSmash || p.whileDraw ? 21000 : 5000, interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
+    }, { timeoutMs: swarmHoldTimeoutMs(p), interruptOn: ['death', 'kicked', 'disconnected'], params: p }),
     swarm_pillar: async (p: any = {}) => session.runIntent('swarm_pillar', ctl => require('../swarm-position-work').swarmPillar(session, ctl, p), { timeoutMs: 30000, interruptOn: ['death', 'kicked', 'disconnected'] }),
     swarm_keep: async (p: any = {}) => session.immediate(async () => {
       if (p.cells !== undefined && (!Array.isArray(p.cells) || p.cells.length > 4096)) return { ok: false, why: 'invalid_cells' }
@@ -123,17 +133,32 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
     }),
     swarm_pose: async (p: any = {}) => session.immediate(async () => {
       const bot = session.require(), V = require('vec3')
+      if (p.placementSafety === true) {
+        if (![p.allies, p.contained].every(names => Array.isArray(names) && names.length <= 128 && names.every(n => typeof n === 'string' && n.length <= 32))) return {}
+        const sight = require('../pvp/last-seen').createLastSeen(bot)
+        try {
+          const foe = require('../swarm-work').directThreat(bot, p.allies, 500, sight.observe, { contained: p.contained })
+          return { underThreat: !!foe, safeToResume: !foe || require('../combat-safety').inspect(bot, { entities: [foe], target: foe }).action === 'fight' }
+        } finally { sight.close() }
+      }
       if (p.inspectOnly === true) {
         const points = p.cells === undefined ? [p.at] : p.cells
         const empty = p.cells === undefined ? { poses: [] } : { poses: [], cells: [] }
-        if (!Array.isArray(points) || points.length > 64 || points.some(at => !at || ![at.x, at.y, at.z].every(Number.isSafeInteger))) return empty
+        // Both deck heights share 45 room cells and four five-cell exit columns.
+        if (!Array.isArray(points) || points.length > (p.outpost === true ? 65 : 64) || points.some(at => !at || ![at.x, at.y, at.z].every(Number.isSafeInteger))) return empty
         // An empty visible cell has no block outline. Reuse the combat LOS view, keeping hidden/unloaded cells unknown.
         const world = require('../pvp/search').observedCollision(bot), eye = require('../pick').eyeOf(bot)
+        const entities = p.occupants === true ? Object.values(bot.entities || {}) : undefined
         const cells = points.map(at => {
           const point = new V(at.x, at.y, at.z)
           const block = point.offset(.5, .5, .5).distanceTo(eye) <= 64 ? world.blockAt(point) : null
           const solid = block && !require('../navigation/geometry').HAZARD.test(block.name) && block.shapes?.some(s => s.every((n, i) => n === (i < 3 ? 0 : 1)))
-          return { at, ...(block ? { existing: { name: block.name, solid: !!solid } } : {}) }
+          return { at, ...(block ? { existing: { name: block.name, solid: !!solid,
+            ...(p.outpost === true && require('../swarm-work').outpostTread(block) && { tread: true }),
+            ...(entities && { occupied: !!require('../build').occupiedByEntity(bot, point, { entities, visibleOnly: true }) ||
+              typeof at.bodyFor === 'string' && !!require('../build').isOurOwnSpace(bot, point, at.bodyFor) }),
+            ...(entities && typeof at.exitFor === 'string' && bot.registry?.blocksByName?.[at.exitFor] &&
+              { exitBlocked: !!require('../build').alliedExitBlocked(bot, point, at.exitFor) }) } } : {}) }
         })
         return p.cells === undefined ? { poses: [], ...(cells[0]?.existing ? { existing: cells[0].existing } : {}) } : { poses: [], cells }
       }
@@ -149,7 +174,7 @@ function swarmMethods ({ session, gameClock }: RpcContext) {
     }),
     // Immediate mailbox update; leave combat events for the owner of the fight.
     // Помощь союзнику (командный бой): зелье лечения ему под ноги / стенка из двух блоков между ним и врагом.
-    assist: async (p) => session.runIntent('assist', (ctl) => require('../pvp/team-assist').assist(session, p || {}, ctl), { timeoutMs: p?.mode === 'deny' || p?.mode === 'pickup' ? 9000 : 5000, params: p || {}, interruptOn: ['death', 'kicked', 'disconnected'] }),
+    assist: async (p) => session.runIntent('assist', (ctl) => require('../pvp/team-assist').assist(session, p || {}, ctl), { timeoutMs: assistTimeoutMs(p?.mode), params: p || {}, interruptOn: ['death', 'kicked', 'disconnected'] }),
     team_hint: async (p) => session.immediate(async () => require('../pvp/team-assist').hint(session, p || {})),
     fight_yield: async (p) => ({ status: 'done', detail: require('../combat').requestStrategicYield(session, p || {}), events: [], state: session.state() }),
     fight_guard: async (p) => ({ status: 'done', detail: require('../combat').requestFightGuard(session, p || {}), events: [], state: session.state() }),

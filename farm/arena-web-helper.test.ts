@@ -10,8 +10,12 @@ function fixture() {
   const calls: any[] = []
   const body = (name, x, inv): any => ({ name, team: 'blue', last: { m: 'goto', pending: false }, c: { call(method, params) {
     if (method === 'swarm_pose') return Promise.resolve({ detail: { existing: { name: 'air', solid: false } } })
-    this.last = { m: method, p: params, pending: true }
-    return new Promise(resolve => calls.push({ name, method, params, reply: detail => resolve({ status: 'done', detail }) }))
+    const actor = ctx.bots.find(o => o.name === name)
+    const action = method === 'stop' ? null : (actor.last = { m: method, p: params, pending: true })
+    return new Promise(resolve => calls.push({ name, method, params, reply: detail => {
+      if (action) action.pending = false
+      resolve({ status: 'done', detail })
+    } }))
   } }, x, inv })
   const a = body('A', 0, {}), b = body('B', 6, { iron_sword: 1 })
   const ctx: any = { round: 1, bots: [a, b], pos: Object.fromEntries([a, b].map(o => [o.name, { p: { x: o.x, y: 64, z: 0 }, inv: o.inv }])),
@@ -19,8 +23,8 @@ function fixture() {
     enemiesOf: () => [], swarmDriver: { panic: () => false, canEngage: () => true }, log() {} }
   installDangers(ctx)
   let observedAt = Date.now()
-  const report = web => a.c.onDanger({ pos: ctx.pos.A.p, observedAt: ++observedAt,
-    dangers: { web: web ? [{ at: { x: 0, y: 64, z: 0 }, cells: 1 }] : [] } })
+  const report = (web, dangers = {}) => a.c.onDanger({ pos: ctx.pos.A.p, observedAt: ++observedAt,
+    dangers: { web: web ? [{ at: { x: 0, y: 64, z: 0 }, cells: 1 }] : [], ...dangers } })
   return { a, b, ctx, calls, report }
 }
 
@@ -38,12 +42,115 @@ for (const change of ['round', 'victim death', 'helper death', 'web ended']) tes
   assert.equal(f.a.webHelper, null)
 })
 
+for (const state of ['walking', 'new owner', 'gliding victim']) test('a freed ally recalls only their own rescue walk: ' + state, async () => {
+  const f = fixture()
+  f.report(true)
+  const walk = f.calls.find(c => c.name === 'B' && c.method === 'goto')
+  assert.ok(walk)
+  if (state === 'new owner') f.b.last = { m: 'goto', pending: true }
+  if (state === 'gliding victim') f.ctx.pos.A.gliding = true
+  f.report(false); f.report(false)
+  assert.equal(f.calls.filter(c => c.name === 'B' && c.method === 'stop').length, state === 'new owner' ? 0 : 1)
+  walk.reply({ ok: false }); await settle()
+  assert.equal(f.calls.some(c => c.name === 'B' && c.method === 'cut_ally_web'), false)
+  assert.equal(f.ctx.busy.has('B'), false)
+})
+
+for (const state of ['emergency', 'dangerous retreat', 'mace defense']) test('a web distress call preserves an ally in ' + state, () => {
+  const f = fixture()
+  if (state === 'emergency') f.ctx.pos.B.tactics = { owner: 'Emergency' }
+  if (state === 'mace defense') f.b.maceDefense = { round: 1, until: Date.now() + 2000 }
+  if (state === 'dangerous retreat') {
+    f.b.last = { m: 'flee', pending: true }
+    f.ctx.swarmDriver.panic = actor => actor === f.b
+  }
+  f.report(true)
+  assert.equal(f.calls.some(c => c.name === 'B'), false)
+  assert.ok(f.calls.some(c => c.name === 'A' && c.method === 'clear_web'))
+})
+
 test('one failed helper is not called repeatedly in the same web', async () => {
   const f = fixture(); f.report(true)
   f.calls.find(c => c.name === 'B' && c.method === 'goto').reply({ ok: false }); await settle()
   f.calls.find(c => c.name === 'B' && c.method === 'cut_ally_web').reply({ ok: false, why: 'не достаю' }); await settle()
   for (let i = 0; i < 20; i++) { f.report(true); await settle() }
   assert.equal(f.calls.filter(c => c.name === 'B' && c.method === 'goto').length, 1)
+})
+
+test('the helper keeps approaching when the upper web clears but the victim is still trapped at the pickup', async t => {
+  const f = fixture()
+  const tick = require('../daemon/test/tick-plugins-fixture') as typeof import('../daemon/test/tick-plugins-fixture')
+  const { dangers } = require('../daemon/src/threats') as typeof import('../daemon/src/threats')
+  const victim = tick.install(tick.testClock())
+  t.after(() => victim.emit('end'))
+  victim.entity.position.set(.5, 64, .5)
+  f.ctx.pos.A.p = victim.entity.position
+  let upper = true
+  victim.blockAt = p => tick.block(p.x === 0 && p.z === 0 && (p.y === 64 || upper && p.y === 65) ? 'cobweb' : 'air', p.floored())
+  const report = () => f.report(true, { web: dangers(victim, { foes: [] }).web })
+  report()
+  const approach = f.calls.find(c => c.name === 'B' && c.method === 'goto')
+  upper = false
+  report()
+  assert.deepEqual(f.calls.filter(c => c.name === 'B').map(c => c.method), ['goto'])
+  approach.reply({ arrived: { x: 2, y: 64, z: 0 } }); await settle()
+  const cut = f.calls.find(c => c.name === 'B' && c.method === 'cut_ally_web')
+  assert.equal(cut?.params.target, 'A')
+  cut.reply({ ok: true, cut: 1 }); await settle()
+  assert.equal(f.b.webRescue, null)
+})
+
+test('web contact beyond the original pickup cancels the old approach', async () => {
+  const f = fixture()
+  f.report(true)
+  const approach = f.calls.find(c => c.name === 'B' && c.method === 'goto')
+  f.ctx.pos.A.p.x = 9
+  f.report(true, { web: [{ at: { x: 9, y: 64, z: 0 }, cells: 1 }] })
+  assert.equal(f.calls.filter(c => c.name === 'B' && c.method === 'stop').length, 1)
+  approach.reply({ ok: false }); await settle()
+  assert.ok(!f.calls.some(c => c.method === 'cut_ally_web'))
+  f.report(true, { web: [{ at: { x: 9, y: 64, z: 0 }, cells: 1 }] })
+  assert.ok(f.calls.some(c => c.name === 'B' && c.method === 'cut_ally_web'))
+})
+
+test('a fresh web at the same pickup cannot revive an approach already cancelled on release', async () => {
+  const f = fixture()
+  f.report(true)
+  const old = f.calls.find(c => c.name === 'B' && c.method === 'goto')
+  f.report(false)
+  f.report(true)
+  old.reply({ arrived: f.ctx.pos.A.p }); await settle()
+  assert.deepEqual(f.calls.filter(c => c.name === 'B').map(c => c.method), ['goto', 'stop'])
+  f.report(true)
+  assert.equal(f.calls.filter(c => c.name === 'B' && c.method === 'goto').length, 2)
+})
+
+test('a helper approaches the reported gallery with the arena boundary and lethal floor', () => {
+  const f = fixture()
+  Object.assign(f.ctx, { X: 0, Y: 64, Z: 0, R: 24, arms: true, L: { y0: 0 } })
+  f.ctx.pos.A.p.y = 72
+  f.report(true, { web: [{ at: { x: 0, y: 72, z: 0 }, cells: 1 }] })
+  const { params } = f.calls.find(c => c.name === 'B' && c.method === 'goto')
+  assert.equal(params.y, 72)
+  assert.equal(params.exactY, true)
+  assert.equal(params.climb, true)
+  assert.equal(params.arena.killY, 61)
+  assert.equal(params.arena.r, 24)
+})
+
+test('a helper that could not reach the web can cut on passing the still-trapped ally later', async () => {
+  const f = fixture()
+  f.ctx.pos.B.p.x = 11
+  f.report(true)
+  f.calls.find(c => c.name === 'B' && c.method === 'goto').reply({ ok: false }); await settle()
+  f.calls.find(c => c.name === 'B' && c.method === 'cut_ally_web').reply({ ok: false, why: 'не достаю' }); await settle()
+  f.ctx.pos.B.p.x = 10
+  f.report(true)
+  assert.equal(f.calls.filter(c => c.name === 'B').length, 2)
+  f.ctx.pos.B.p.x = 2.5
+  f.report(true); f.report(true)
+  assert.deepEqual(f.calls.filter(c => c.name === 'B').map(c => c.method), ['goto', 'cut_ally_web', 'cut_ally_web'])
+  f.calls.at(-1).reply({ ok: true, cut: 1 }); await settle()
 })
 
 test('a live helper approaches and cuts the unchanged web', async () => {
@@ -54,6 +161,51 @@ test('a live helper approaches and cuts the unchanged web', async () => {
   assert.equal(f.b.webRescue, null)
   assert.equal(f.a.webHelper, null)
   assert.equal(f.ctx.busy.has('B'), false)
+})
+
+test('a legacy zero-cut reply cannot confirm that an unseen ally is already free', async () => {
+  const f = fixture(), lines = []
+  f.ctx.log = (...args) => lines.push(args.join(' '))
+  installDangers(f.ctx)
+  f.report(true)
+  f.calls.find(c => c.method === 'goto').reply({ ok: true }); await settle()
+  f.calls.find(c => c.method === 'cut_ally_web').reply({ ok: true, cut: 0 }); await settle()
+  assert.ok(lines.some(s => s.includes('срез не подтверждён')))
+  assert.ok(!lines.some(s => s.includes('союзник уже свободен') || s.includes('вырезал (')))
+})
+
+const aimed = { aims: [{ name: 'Bow', weapon: 'bow', at: { x: 18, y: 64, z: 0 } }] }
+test('a webbed defender raises a shield to the archer while the helper cuts, then releases both actors', async () => {
+  const f = fixture()
+  f.ctx.pos.A.offHand = { item: 'shield' }
+  f.report(true, aimed); f.report(true, aimed)
+  const hold = f.calls.find(c => c.name === 'A')
+  assert.equal(hold?.method, 'swarm_hold')
+  assert.equal(hold.params.whileWebbed, true)
+  assert.equal(hold.params.whileDraw, 'Bow')
+  assert.equal(f.calls.filter(c => c.name === 'A').length, 1)
+  f.calls.find(c => c.name === 'B' && c.method === 'goto').reply({ ok: true }); await settle()
+  f.calls.find(c => c.name === 'B' && c.method === 'cut_ally_web').reply({ ok: true, cut: 1 }); await settle()
+  f.report(false, aimed)
+  hold.reply({ ok: true, why: 'web_cleared' }); await settle()
+  assert.equal(f.ctx.busy.size, 0)
+})
+
+test('a distant archer does not freeze a trapped bot when the shield is unavailable', async () => {
+  const f = fixture()
+  f.ctx.pos.A.offHand = { item: 'shield' }
+  f.report(true, aimed)
+  const hold = f.calls.find(c => c.method === 'swarm_hold')
+  assert.ok(hold)
+  hold.reply({ ok: false, why: 'shield_cooldown' }); await settle()
+  for (let i = 0; i < 3; i++) {
+    f.report(true, aimed)
+    const cut = f.calls.filter(c => c.name === 'A').at(-1)
+    assert.equal(cut.method, 'clear_web')
+    assert.equal(cut.params.force, i === 2)
+    cut.reply(i < 2 ? { ok: false, why: 'direct_threat' } : { ok: true, left: 0 }); await settle()
+  }
+  assert.equal(f.calls.filter(c => c.method === 'swarm_hold').length, 1)
 })
 
 test('an old helper completion cannot clear a newer rescue of the same victim', async () => {

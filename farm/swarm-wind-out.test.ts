@@ -1,10 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import path from 'node:path'
-import vm from 'node:vm'
 import { performance } from 'node:perf_hooks'
-import { REPO_ROOT } from '../daemon/src/paths'
+import { installSight } from './arena/watch'
 
 function fixture({ planDelay = 0, defence = false, noPlan = false, planFailures = [] as string[], names = ['BlueA', 'BlueB'] } = {}) {
   let at = 100000, plans = 0, resetDuringPlan = false, gate: (() => void) | undefined
@@ -44,19 +41,18 @@ function fixture({ planDelay = 0, defence = false, noPlan = false, planFailures 
 // Execute both actual arena wrappers: the inner wrapper records action identity,
 // and the outer one can reject a call before it reaches the atomic RPC.
 function arenaWrappers(f) {
-  const source = readFileSync(path.join(REPO_ROOT, 'farm/arena/watch.ts'), 'utf8').replace(/\r\n/g, '\n')
-  const start = source.indexOf('  const CLIMB_OK = '), end = source.indexOf('\n}\n\nexport function watchStatus')
-  assert.ok(start > 0 && end > start)
-  const js = require('esbuild').transformSync(source.slice(start, end), { loader: 'ts' }).code
-  vm.runInNewContext(js, { bots: f.bots, pos: f.sw.pos, arena: f.sw.arena, ctx: { between: false },
-    humanClose: () => false, ascentActive: () => false, L: null, X: 0, Y: 64, Z: 0 })
+  const { arena } = f.sw
+  installSight({ ...f.sw, names: f.bots.map(b => b.name), humans: {}, deathAt: {}, home: () => '0 0',
+    X: arena.x - .5, Y: arena.y ?? 64, Z: arena.z - .5, R: arena.r, L: { ellipse: arena.ellipse } })
 }
 const settleWind = () => new Promise<void>(r => setImmediate(r))
-function wingFixture() {
-  const f = fixture(), gates: (() => void)[] = []
+function wingFixture(names?: string[]) {
+  const f = fixture({ names }), gates: (() => void)[] = []
   f.sw.arena.y = 64; f.sw.boardOf = () => ({ enemies: () => f.seen })
   const seen = [{ ...f.seen[0], airborne: true }]
-  for (const b of f.bots) {
+  const escorts = f.bots.slice(0, 2)
+  for (const b of f.bots.slice(2)) f.sw.pos[b.name].inv.wind_charge = 0
+  for (const b of escorts) {
     Object.assign(f.sw.pos[b.name].inv, { elytra: 1, firework_rocket: 8 }); b.last = { m: 'goto', pending: false }
     const original = b.c.call
     b.c.call = (method, p) => {
@@ -67,8 +63,8 @@ function wingFixture() {
   }
   arenaWrappers(f)
   f.api.windWing(f.bots[0], seen); f.api.windWing(f.bots[0], seen)
-  assert.ok(f.bots.every(b => b.swarmReserved && b.last.m === 'wing_orbit'))
-  for (const b of f.bots) f.sw.pos[b.name].gliding = true
+  assert.ok(escorts.every(b => b.swarmReserved && b.last.m === 'wing_orbit'))
+  for (const b of escorts) f.sw.pos[b.name].gliding = true
   return { ...f, close: async () => { gates.forEach(done => done()); await settleWind(); await settleWind() } }
 }
 
@@ -78,6 +74,26 @@ test('flying throwers request flying reports and dispatch a known-safe shared wi
   assert.equal(await f.api.windObserve(f.bots[0], f.seen, 100000), true)
   assert.ok(f.calls.filter(c => c.method === 'wind_report').every(c => c.p.flying === true))
   assert.equal(f.calls.filter(c => c.method === 'wind_out').length, 2)
+})
+
+test('a pearl reservation belongs to one team and one projectile until cancellation or flight expiry', t => {
+  let wall = 1000
+  t.mock.method(performance, 'now', () => wall)
+  const { api, bots: [a, b] } = fixture()
+  const req = { type: 'wind_bid', id: 1, target: 'Red', entity: 2, tick: 100, ticks: 8, pearl: 9 }
+  assert.equal(api.windBid(a, req), true)
+  assert.equal(api.windBid(b, { ...req, id: 2 }), false)
+  assert.equal(api.windBid(b, { ...req, id: 3, pearl: 10 }), true)
+  assert.equal(api.windBid(b, { ...req, id: 4, pearl: undefined }), true, 'ordinary knockback has its own reservation')
+  api.windBid(a, { ...req, type: 'wind_bid_done' })
+  assert.equal(api.windBid(b, { ...req, id: 5 }), true)
+  api.windBid(a, { ...req, type: 'wind_bid_done' })
+  assert.equal(api.windBid(a, req), false, 'a stale cancellation cannot undo a new owner')
+  api.windBid(b, { ...req, id: 5, type: 'wind_bid_done', shot: { tick: 101, ticks: 8 } })
+  assert.equal(api.windBid(a, req), false)
+  assert.equal(api.windBid({ ...a, team: 'other' }, req), true)
+  wall += 1100
+  assert.equal(api.windBid(a, req), true)
 })
 
 test('an achieved upper reserve can still throw a certified useful wind plan', async () => {
@@ -150,11 +166,98 @@ test('one observed follow-up may coexist with a released lead, but no extra disp
   api.windBid(next, { ...follow, type: 'wind_bid_done', prefix: 43 })
   assert.equal(api.windBid(other, { ...request, id: 3 }), false, 'only the matching follow-up can clear its reservation')
   assert.equal(await api.windObserve(lead, seen), false)
+  assert.equal(calls.filter(c => c.method === 'enemy_wind_plan').length, 0, 'the active follow-up already excludes a shared launch')
   assert.equal(calls.filter(c => c.method === 'wind_out').length, 0)
   api.windBid(next, { ...follow, type: 'wind_bid_done' })
   assert.equal(api.windBid(other, { ...follow, prefix: 0 }), false, 'an invalid projectile ID must not reserve a slot')
   assert.equal(await api.windObserve(lead, seen), true)
   assert.equal(calls.filter(c => c.method === 'wind_out').length, 3)
+})
+
+test('twenty observers skip a reserved shared target, then launch from the same sightings after its release', async t => {
+  const f = fixture({ names: Array.from({ length: 20 }, (_, i) => 'Blue' + i) })
+  const q = { type: 'wind_bid', id: 1, entity: 7, target: 'Red', tick: 100, ticks: 16 }
+  assert.equal(f.api.windBid(f.bots[0], q), true)
+  const scans = t.mock.fn(f.bots.filter)
+  f.bots.filter = scans
+  for (const b of f.bots) assert.equal(await f.api.windObserve(b, f.seen), false)
+  assert.equal(scans.mock.callCount(), 0, 'a live bid on the only target needs no new readiness scan')
+  assert.equal(f.calls.filter(c => c.method === 'enemy_wind_plan').length, 0)
+  assert.equal(f.calls.filter(c => c.method === 'wind_report').length, 0)
+  f.api.windBid(f.bots[0], { ...q, type: 'wind_bid_done' })
+  assert.equal(await f.api.windObserve(f.bots[0], f.seen), true)
+  assert.equal(f.calls.filter(c => c.method === 'enemy_wind_plan').length, 1)
+  assert.equal(f.calls.filter(c => c.method === 'wind_out').length, 20)
+})
+
+test('a reserved edge target leaves the other visible enemy and the other team free to launch', async () => {
+  const f = fixture({ names: ['BlueA', 'BlueB', 'Gold'] })
+  f.sw.hostile = () => true; f.bots[2].team = 'gold'
+  const q = { type: 'wind_bid', id: 1, entity: 7, target: 'Red', tick: 100, ticks: 16 }
+  assert.equal(f.api.windBid(f.bots[0], q), true)
+  const other = { ...f.seen[0], id: 'Second', position: { x: 1, y: 64, z: 0 } }
+  assert.equal(await f.api.windObserve(f.bots[0], [...f.seen, other]), true)
+  assert.equal(await f.api.windObserve(f.bots[2], f.seen), true)
+  assert.deepEqual(f.calls.filter(c => c.method === 'enemy_wind_plan').map(c => c.p.target), ['Second', 'Red'])
+  assert.equal(f.calls.filter(c => c.method === 'wind_out').length, 3)
+})
+
+for (const release of ['expired', 'new round']) test(`the shared plan resumes for an unchanged target after ${release}`, async t => {
+  let wall = 1000
+  t.mock.method(performance, 'now', () => wall)
+  const f = fixture(), q = { type: 'wind_bid', id: 1, entity: 7, target: 'Red', tick: 100, ticks: 4 }
+  assert.equal(f.api.windBid(f.bots[0], q), true)
+  f.api.windBid(f.bots[0], { ...q, type: 'wind_bid_done', shot: { tick: 100, ticks: 4 } })
+  assert.equal(await f.api.windObserve(f.bots[0], f.seen), false)
+  if (release === 'expired') wall += 601
+  else f.sw.generation++
+  assert.equal(await f.api.windObserve(f.bots[0], f.seen), true)
+  assert.equal(f.calls.filter(c => c.method === 'enemy_wind_plan').length, 1)
+})
+
+test('a bid granted during the native forecast still wins the race to launch', async () => {
+  const f = fixture(); f.blockPlan()
+  const pending = f.api.windObserve(f.bots[0], f.seen)
+  await settleWind()
+  assert.equal(f.calls.filter(c => c.method === 'enemy_wind_plan').length, 1)
+  const q = { type: 'wind_bid', id: 1, entity: 7, target: 'Red', tick: 100, ticks: 16 }
+  assert.equal(f.api.windBid(f.bots[0], q), true)
+  f.releasePlan()
+  assert.equal(await pending, false)
+  assert.equal(f.calls.filter(c => c.method === 'wind_out').length, 0)
+})
+
+test('a bid received while collecting the roster prevents a now unusable native forecast', async () => {
+  const f = fixture(), q = { type: 'wind_bid', id: 1, entity: 7, target: 'Red', tick: 100, ticks: 16 }
+  const pending = f.api.windObserve(f.bots[0], f.seen)
+  assert.equal(f.calls.filter(c => c.method === 'wind_report').length, 2)
+  assert.equal(f.api.windBid(f.bots[0], q), true)
+  assert.equal(await pending, false)
+  assert.equal(f.calls.filter(c => c.method === 'enemy_wind_plan').length, 0)
+})
+
+for (const reply of ['missed ticks', 'planning_deadline', 'no_useful_native_chain']) test('a solo lease arriving during the shared forecast preserves the next opening: ' + reply, async () => {
+  const f = fixture({ names: Array.from({ length: 20 }, (_, i) => 'Blue' + i),
+    planDelay: 250, planFailures: reply === 'missed ticks' ? [] : [reply] })
+  const [observer, thrower] = f.bots
+  const bid = { type: 'wind_bid', id: 9, entity: 7, target: 'Red', tick: 100, ticks: 16 }
+  const native = observer.c.call
+  let granted = false
+  observer.c.call = async (method, params) => {
+    const result = native(method, params)
+    if (method === 'enemy_wind_plan' && !granted) {
+      granted = f.api.windBid(thrower, bid)
+      assert.ok(granted)
+    }
+    return result
+  }
+  assert.equal(await f.api.windObserve(observer, f.seen), false)
+  assert.equal(f.calls.filter(c => c.method === 'wind_report').length, 20, 'the new lease already owns the target before a retry can ask twenty bodies')
+  assert.equal(f.calls.filter(c => c.method === 'wind_out').length, 0)
+  f.api.windBid(thrower, { ...bid, type: 'wind_bid_done' })
+  assert.equal(await f.api.windObserve(observer, f.seen, f.sw.now()), true, 'the interrupted forecast cannot cache an unchanged target across the lease')
+  assert.equal(f.calls.filter(c => c.method === 'enemy_wind_plan').length, 2)
+  assert.equal(f.calls.filter(c => c.method === 'wind_out').length, 20)
 })
 
 test('shared wind considers a visible opponent at the physical edge before the nearer central opponent', async () => {
@@ -676,6 +779,27 @@ test('the exact wing movement lease survives real wrapper queries, shared dispat
   assert.ok(f.bots.every(b => !b.swarmReserved))
 })
 
+test('a target-bound wind escort keeps its own opening when a second visible foe is closer to the rim', async t => {
+  const f = wingFixture(Array.from({ length: 20 }, (_, i) => 'Blue' + i))
+  t.after(f.close)
+  f.sw.hostile = (_b, id) => id === 'Red' || id === 'Other'
+  const other = { ...f.seen[0], id: 'Other', position: { x: 9, y: 66, z: 0 } }
+  for (const b of f.bots) assert.equal(await f.api.windObserve(b, [other]), false)
+  assert.equal(f.calls.filter(c => c.method === 'wind_report').length, 0, 'no eligible thrower for Other')
+
+  const observer = f.bots[2]
+  assert.equal(await f.api.windObserve(observer, [other, ...f.seen]), true)
+  const proposal = f.calls.find(c => c.method === 'enemy_wind_plan')
+  assert.equal(proposal.p.target, 'Red')
+  assert.equal(proposal.p.allies.length, 20)
+  assert.deepEqual(f.calls.filter(c => c.method === 'wind_out').map(c => c.name), ['Blue0', 'Blue1'])
+  assert.equal(await f.api.windObserve(observer, [{ ...other, visible: false }]), false)
+  f.sw.pos[observer.name].inv.wind_charge = 1
+  assert.equal(await f.api.windObserve(observer, [other, ...f.seen]), true)
+  assert.deepEqual(f.calls.filter(c => c.method === 'enemy_wind_plan').map(c => c.p.target), ['Red', 'Other'])
+  assert.deepEqual(f.calls.filter(c => c.method === 'wind_out').map(c => c.name), ['Blue0', 'Blue1', observer.name])
+})
+
 test('real arena wrappers retain the wing action for queries and atomic wind, with movement and climbing protected', async () => {
   const f = wingFixture()
   try {
@@ -975,14 +1099,27 @@ test('overlapping reports share one pending team chain and release it after comp
   assert.equal(f.calls.filter(c => c.method === 'enemy_wind_plan').length, 1)
 })
 
-test('arena wrappers keep the movement owner for wind radio and beside throws; reports remain available during digging', () => {
-  const source = readFileSync(path.join(REPO_ROOT, 'farm/arena/watch.ts'), 'utf8')
-  const climb = vm.runInNewContext(source.match(/const CLIMB_OK = (\/[^\n]+\/)/)![1])
-  const passive = vm.runInNewContext(source.match(/const action = (\/[^\n]+\/)\.test\(m\)/)![1])
-  for (const method of ['wind_report', 'enemy_wind_plan', 'wind_out']) assert.equal(passive.test(method), true, method + ' must not replace the pending fight/defence')
-  for (const method of ['wind_report', 'enemy_wind_plan']) assert.equal(climb.test(method), true, method + ' is a read-only report')
-  assert.equal(climb.test('wind_out'), false, 'a beside throw cannot interrupt a dig hand action')
-  assert.equal(passive.test('fight'), false); assert.equal(passive.test('swarm_hold'), false)
+test('arena wrappers keep the movement owner for wind radio and beside throws; reports remain available during digging', async () => {
+  const f = fixture(), b = f.bots[0], owner = b.last
+  b.c.call = async method => { f.calls.push({ method }); return { status: 'done' } }
+  arenaWrappers(f)
+  for (const method of ['wind_report', 'enemy_wind_plan', 'wind_out']) {
+    await b.c.call(method, {})
+    assert.equal(b.last, owner)
+  }
+  b.climbing = true
+  for (const method of ['wind_report', 'enemy_wind_plan']) {
+    const before = f.calls.length
+    await b.c.call(method, {})
+    assert.equal(f.calls.length, before + 1)
+    assert.equal(b.last, owner)
+  }
+  assert.equal((await b.c.call('wind_out', {})).status, 'skipped')
+  b.climbing = false
+  for (const method of ['fight', 'swarm_hold']) {
+    await b.c.call(method, {})
+    assert.equal(b.last.m, method)
+  }
 })
 
 test('a free gliding spear fighter can follow a recently wind-hit enemy without holding a charge', async () => {

@@ -11,8 +11,8 @@ import obsidianMod = require('../obsidian')
 import { HOLDING } from './shared'
 
 function parkour(this: any, p: Parameters<typeof navigate>[2] & { timeoutSeconds?: number }) {
-  const timeoutMs = p.mode === 'route' || p.mode === 'options'
-    ? (Math.max(1, Math.min(p.mode === 'route' ? 3600 : 600, p.timeoutSeconds ?? 120)) + 20) * 1000 : 60000
+  if (p.mode === 'options') return this.immediate(() => navigate(this.require(), { aborted: false }, p))
+  const timeoutMs = p.mode === 'route' ? (Math.max(1, Math.min(3600, p.timeoutSeconds ?? 120)) + 20) * 1000 : 60000
   return this.runIntent('parkour', (ctl: any) => navigate(this.bot, ctl, p), {
     timeoutMs, interruptOn: HOLDING, params: p
   })

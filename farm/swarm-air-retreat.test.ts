@@ -35,8 +35,7 @@ test('проигранный размен в контакте: на насест
   }
 })
 
-test('полное хп против сильного (выжить < убить, но не смертельно): бой, не насест', async () => {
-  // Игра пользователя 23.10: «воздушный отход» с хп 20 против незерита и меча — бой бросали ради насеста за гребнем.
+for (const protectedArmor of [false, true]) test(`железный меч против незерита: решение об отходе учитывает видимый блеск брони (${protectedArmor})`, async () => {
   const calls: any[] = []
   const bot = { name: 'A', team: 'blue', c: { async call(method, params) { calls.push({ method, params }); return { status: 'done', detail: { ok: true } } } } }
   const pos = { A: { p: { x: 0, y: 64, z: 0 }, hp: 20, inv: { iron_sword: 1, firework_rocket: 47 },
@@ -45,9 +44,10 @@ test('полное хп против сильного (выжить < убить
   const driver = createSwarmDriver({ bots: [bot], pos, alive: () => true, aggressive: true, now: () => 1000, arena,
     perches: [{ x: -18, y: 76, z: 0 }], home: () => pos.A.p, hostile: () => true, log: () => {} })
   driver.observe(bot, [{ id: 'Foe', visible: true, position: { x: 2, y: 64, z: 0 },
-    equipment: { weapon: 'netherite_sword', enchanted: true, armor: ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots'] } }])
+    equipment: { weapon: 'netherite_sword', weaponEnchanted: true, armorEnchanted: Array(4).fill(protectedArmor), armor: ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots'] } }])
   await driver.turn(bot)
-  assert.equal(calls.find(c => c.method === 'fly_to'), undefined)
+  assert.equal(calls.some(c => c.method === 'fly_to'), protectedArmor)
+  assert.equal(calls.some(c => c.method === 'fight'), !protectedArmor)
 })
 
 test('занятый насест закрывает только посадку, потолок над ботом — и следующий взлёт', async () => {

@@ -1,5 +1,6 @@
 'use strict'
 import { owAirEmergency, owDeathWaterOn, inWater } from './movement/water'
+import { burnContact, hotSupport } from './pvp/lava-exit'
 const gameClock: typeof import('./game-clock') = require('./game-clock')
 // One session owns the hands. AsyncLocalStorage distinguishes a suspended worker,
 // its late continuations, and the reflex, including callbacks created before takeover.
@@ -35,7 +36,7 @@ function magmaSupport (s) {
   if (owAirEmergency(b) || owDeathWaterOn(b) && inWater(b) && state(s).active?.source === 'Surface') return false
   return process.env.ND_MAGMA_ESCAPE === '1' && (b?.health ?? 0) > 0 && !b.vehicle &&
     b.entity?.onGround && !b.entity.isInLava && b.supportFeature?.('newPlayerInputPacket') &&
-    b.blockAt(b.entity.position.offset(0, -.01, 0))?.name === 'magma_block'
+    hotSupport(b) === 'magma_block' && !burnContact(b)
 }
 function keepMagmaSneak (s) {
   if (!magmaSupport(s)) return false

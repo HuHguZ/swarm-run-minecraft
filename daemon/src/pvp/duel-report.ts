@@ -39,6 +39,7 @@ export function installReport (ctx: DuelCtx) {
     bot.removeListener('blockBreakProgressEnd', onCrackEnd)
     bot.removeListener('path_update', onRoutePath)
     bot.removeListener('entityDead', onDead)
+    if (ctx.onDeathNotice) bot.removeListener('message', ctx.onDeathNotice)
     tt.close()
     if (session.tempo === tt) session.tempo = null
     mc.close()
@@ -92,6 +93,7 @@ export function installReport (ctx: DuelCtx) {
       target: ctx.label,
       search: st.search,
       kills: kills.length ? kills : undefined,
+      playerDeaths: ctx.playerDeaths?.size ? [...ctx.playerDeaths.values()] : undefined,
       assessment: ctx.planText || undefined,
       arrows: st.arrows || undefined,
       blocks: st.blocks || undefined,

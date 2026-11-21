@@ -86,6 +86,21 @@ test('Q10 подход не возвращается к колонне поза�
   assert.equal(archerCover(f.bot, eye, { advance: true }), null, 'повторный возврат к задней колонне не приближает к лучнику')
 })
 
+test('an incoming bolt keeps its immediate dodge before the duel runs for the opposite column', async t => {
+  const f = scene(t, true, -3)
+  const ctx: any = { bot: f.bot, entity: f.foe, prof: { player: true }, clear: f.bot.clearControlStates,
+    set: f.bot.setControlState, dodgeLine: { id: 3 }, dodgeKey: 'left', ready: () => false, sleep: async () => {},
+    spearChargeFar: () => assert.fail('an immediate shot takes precedence over a spear run') }
+  const turn: any = { d: 13, hp: 20, seesBody: true, aimedCb: { steadyMs: 500 }, bolt: { name: 'arrow' } }
+  assert.equal(await farApproachTurn(ctx, turn), 'next')
+  assert.equal(f.controls.left, true)
+  assert.equal(f.controls.right, false)
+  turn.bolt = null
+  assert.equal(await farApproachTurn(ctx, turn), 'next')
+  assert.equal(f.controls.right, true)
+  assert.equal(f.controls.left, false)
+})
+
 test('a supported arena pursuer releases inherited sneak only for a safe standing step', async t => {
   for (const mode of ['clear', 'ceiling', 'shoulder', 'lip', 'shield', 'reflex', 'parkour', 'melee', 'outside arena']) await t.test(mode, async t => {
     const f = scene(t, false), { bot, controls } = f, original = bot.blockAt

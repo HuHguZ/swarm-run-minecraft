@@ -41,6 +41,7 @@ test('known last strong foe: all swords finish, mace and harming retain their at
   assert.equal(plan.get('harm')!.kind, 'fight', 'harming potions go past his armour')
   const middle = new SwarmBoard('blue', () => 10000, 3000)
   middle.setMembers(team)
+  middle.observe('s1', 10000, { id: 'champ', position: p(), visible: true, ...CHAMP })
   middle.observe('s0', 10000, { id: 'champ', position: p(), visible: true, ...CHAMP, hpEstimate: 20,
     hitProof: { healed: 1.6, hits: Array.from({ length: 8 }, (_, i) => ({ ago: (8 - i) * 500, damage: .2, lowDamage: .2, healed: i * .2 })) } })
   const ordinary = onHim(planPvp(middle, team, { aggressive: true, quorum: 2 }))

@@ -81,7 +81,7 @@ function weakest (bot, positions) {
 }
 
 // Сломать блок самым быстрым, что есть. Возвращает { ok, ms, tool }.
-async function breakFast (bot, pos, { maxMs = 8000 }: any = {}) {
+async function breakFast (bot, pos, { maxMs = 8000, ctl = null }: any = {}) {
   const b = bot.blockAt(pos)
   if (clear(b)) return { ok: true, ms: 0 }
   const plan = bestFor(bot, b)
@@ -89,7 +89,8 @@ async function breakFast (bot, pos, { maxMs = 8000 }: any = {}) {
   if (plan.item && (!bot.heldItem || bot.heldItem.name !== plan.item.name)) {
     try { await bot.equip(plan.item, 'hand') } catch {}
   }
-  try { await withTimeout(bot.dig(b, true), plan.ms + 1500) } catch {}
+  if (ctl?.aborted) return { ok: false, ms: 0, why: 'прервано' }
+  try { await withTimeout(ctl ? bot.dig(b, true, undefined, ctl) : bot.dig(b, true), plan.ms + 1500) } catch {}
   return { ok: clear(bot.blockAt(pos)), ms: Math.round(plan.ms), tool: plan.item ? plan.item.name : 'рука' }
 }
 

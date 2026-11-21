@@ -7,6 +7,8 @@
 
 // Best tier first, so "find the first match" already means "find the best".
 const TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden']
+// Copper and stone have the same sword/axe damage and attack speed in 1.21.11.
+const WEAPON_TIERS = TIERS.flatMap(tier => tier === 'stone' ? ['stone', 'copper'] : [tier])
 
 // Tiers worth *making* on the spot, best first. Netherite is not craftable at
 // a table and gold is left out on purpose: 32 swings is worse than the stone
@@ -507,12 +509,15 @@ function missingHarvestTool (bot, block, mcData) {
 }
 
 function bestWeapon (bot) {
-  const items = bot.inventory.items()
-  for (const tier of TIERS) {
+  const carried = bot.inventory.items()
+  // Window.items() includes the hotbar but stops just before the offhand slot.
+  const off = bot.inventory.slots?.[45]
+  const items = off ? carried.concat(off) : carried
+  for (const tier of WEAPON_TIERS) {
     const sword = items.find(i => i.name === `${tier}_sword`)
     if (sword) return sword
   }
-  for (const tier of TIERS) {
+  for (const tier of WEAPON_TIERS) {
     const axe = items.find(i => i.name === `${tier}_axe`)
     if (axe) return axe
   }

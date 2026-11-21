@@ -147,7 +147,7 @@ test('swarm PvP: full team allocations spread targets and match local fighters w
   const members = Array.from({ length: 12 }, (_, i) => member('a' + i, { position: p(i < 6 ? 0 : 35), strength: 20 + i }))
   const f = scene(members)
   for (const m of members) f.see(m.id, 'left', p(5))
-  f.see('a0', 'right', p(40))
+  for (const m of members.slice(6)) f.see(m.id, 'right', p(40))
   const plan = planPvp(f.board, members)
   assert.equal(plan.size, 12)
   const targets = [...plan.values()].map(t => t.data?.target)
@@ -173,6 +173,82 @@ test('swarm PvP: wounded recover, healer and cover coordinate, unseen HP cannot 
   const before = JSON.stringify([...plan])
   f.see('strong', 'enemy', p(5), { hp: 1, inventory: { netherite_sword: 99 } })
   assert.equal(JSON.stringify([...planPvp(f.board, members)]), before)
+})
+
+for (const nearer of ['stale', 'nametag', 'opening', 'in reach', 'only stale']) test(`swarm PvP: guard identifies the actual pursuer of a recovering ally (${nearer})`, () => {
+  const armor = ['iron_boots', 'iron_leggings', 'iron_chestplate', 'iron_helmet']
+  const team = [member('hurt', { health: 6, armor, inventory: { bread: 2 } }),
+    member('guard', { strength: 55, position: p(-2), offHand: 'shield', armor, weapon: 'iron_sword', inventory: { iron_sword: 1 } })]
+  const f = scene(team)
+  const gap = nearer === 'opening' ? 6 : 2
+  assert.ok(f.see('guard', 'nearer', p(gap), { visible: nearer !== 'nametag', nametag: nearer === 'nametag', velocity: p(.27, 0, 0) }))
+  if (nearer === 'stale' || nearer === 'only stale') f.advance(700)
+  if (nearer !== 'only stale') assert.ok(f.see('hurt', 'pursuer', p(8), { velocity: p(-.27, 0, 0) }))
+  const plan = planPvp(f.board, team, { doctrine: 'hunt' })
+  assert.equal(plan.get('hurt')?.kind, 'recover')
+  const order = plan.get('guard')!
+  assert.equal(order.data?.cover, 'hurt')
+  assert.equal(order.data?.target, nearer === 'in reach' || nearer === 'only stale' ? 'nearer' : 'pursuer')
+  assert.equal(order.kind, nearer === 'only stale' ? 'goto' : 'fight')
+  if (nearer === 'only stale') {
+    assert.equal(order.data?.search, true)
+    f.advance(3000)
+    assert.equal(planPvp(f.board, team, { doctrine: 'hunt' }).get('guard')?.data?.cover, undefined)
+  }
+})
+
+test('a retreating wounded ally does not summon a lone under-equipped guard into a losing charge', () => {
+  const armor = tier => ['boots', 'leggings', 'chestplate', 'helmet'].map(n => tier + '_' + n)
+  const team = [member('ward', { health: 4, armor: armor('iron'), inventory: { bread: 1, iron_sword: 1 } }),
+    member('guard', { position: p(-26), inventory: { wooden_sword: 1 } })]
+  const f = scene(team)
+  f.see('ward', 'champion', p(3), { velocity: p(-.27, 0, 0),
+    equipment: { weapon: 'netherite_sword', weaponEnchanted: true, enchanted: true, armor: armor('netherite') } })
+  const plan = planPvp(f.board, team, { doctrine: 'hunt', lootZones: [{ ...p(-28), tier: 3 }] })
+  assert.equal(plan.get('ward')?.kind, 'flee')
+  assert.equal(plan.get('guard')?.data?.cover, undefined)
+  assert.notEqual(plan.get('guard')?.kind, 'fight')
+})
+for (const mode of ['block', 'shield ready', 'only far', 'healer busy', 'builder recovering', 'stale archer', 'melee contact']) {
+  test(`a wounded ally calls local cover against an observed distant bow draw: ${mode}`, () => {
+    const archer = p(20), armor = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
+    const ward = member('ward', { health: 5, armor, inventory: { bread: 1 }, bowAims: [{ name: 'archer', at: archer }] })
+    const helper = member('near', { position: p(0, 64, mode === 'only far' ? 3.1 : 1), armor,
+      health: mode === 'builder recovering' ? 6 : 20, inventory: { iron_sword: 1, stone: 1, bread: 1 },
+      role: mode === 'healer busy' ? 'healer' : 'fighter', canHeal: mode === 'healer busy' })
+    const other = member('alternate', { position: mode === 'shield ready' ? p(3) : p(0, 64, 2.5), armor,
+      offHand: mode === 'shield ready' ? 'shield' : undefined, inventory: { iron_sword: 1, dirt: mode === 'only far' ? 0 : 2 } })
+    const team = [ward, helper, other], f = scene(team)
+    f.see('ward', 'archer', archer, { equipment: { weapon: 'bow', armor: [] } })
+    if (mode === 'stale archer') f.advance(700)
+    if (mode === 'melee contact') f.see('ward', 'swordsman', p(2), { equipment: { weapon: 'wooden_sword', armor: [] } })
+    const plan = planPvp(f.board, team, { doctrine: 'hunt' }), cover = [...plan.values()].find(t => t.data?.cover === 'ward')
+    assert.ok(['flee', 'recover'].includes(plan.get('ward')!.kind))
+    if (mode === 'only far' || mode === 'stale archer') { assert.equal(cover, undefined); return }
+    if (mode === 'melee contact') { assert.equal(cover?.data?.target, 'swordsman'); assert.ok(!cover?.data?.coverWall); return }
+    assert.equal(cover?.assignedTo, mode === 'block' ? 'near' : 'alternate')
+    assert.equal(cover?.kind, 'fight')
+    assert.equal(cover?.data?.target, 'archer')
+    assert.equal(!!cover?.data?.coverWall, mode !== 'shield ready')
+    if (mode === 'healer busy') assert.equal(plan.get('near')?.kind, 'heal')
+    if (mode === 'builder recovering') assert.ok(['flee', 'recover'].includes(plan.get('near')!.kind))
+  })
+}
+
+test('a claimed cover assignment changes between a wall and a ready shield without changing its ally or archer', () => {
+  const archer = p(20), armor = ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots']
+  const ward = member('ward', { health: 5, inventory: { bread: 1 }, bowAims: [{ name: 'archer', at: archer }] })
+  const helper = member('helper', { position: p(2), armor, inventory: { stone: 1, diamond_sword: 1 } })
+  const team = [ward, helper, member('fighter', { position: p(-2), armor, inventory: { diamond_sword: 1 } })], f = scene(team)
+  for (const shield of [false, false, true, true, false]) {
+    helper.offHand = shield ? 'shield' : undefined
+    f.advance(50)
+    f.see('ward', 'archer', archer, { equipment: { weapon: 'bow', armor: [] } })
+    const order = planPvp(f.board, team, { doctrine: 'hunt' }).get('helper')!
+    assert.equal(order.data?.cover, 'ward')
+    assert.equal(!!order.data?.coverWall, !shield)
+    assert.equal((order.claim || f.board.claim(order.id, 'helper', 3000)?.claim)?.owner, 'helper')
+  }
 })
 
 test('swarm PvP: a pinned ally is never its own cover; another free member guards it (Kimi AUDIT 1)', () => {
@@ -229,6 +305,46 @@ test('swarm: shared successful doctrines survive round reset, observations and c
   assert.equal(f.board.tasks().length, 0)
   assert.equal(f.board.enemies().length, 0)
   assert.deepEqual(f.board.tacticStats().line, { successes: 1, failures: 0 })
+})
+
+test('the next round learns from fielded doctrines once per fighter, including allies who died', () => {
+  const f = scene()
+  f.board.fieldDoctrine('a', 'line')
+  f.board.fieldDoctrine('a', 'line')
+  f.board.fieldDoctrine('enemy', 'cocoon')
+  f.board.fieldDoctrine('b', 'line')
+  f.board.fieldDoctrine('a', 'wave')
+  f.board.setDoctrine('hunt')
+  f.board.setMembers([])
+  f.board.resetRound(true)
+  const stats = f.board.tacticStats()
+  assert.equal(stats.line?.roundWins, 2 / 3)
+  assert.equal(stats.wave?.roundWins, 1 / 3)
+  assert.equal(stats.line?.successes, 0)
+  assert.equal(stats.hunt, undefined)
+  assert.equal(stats.cocoon, undefined)
+  f.board.resetRound(false)
+  assert.deepEqual(f.board.tacticStats(), stats)
+  f.board.setMembers(f.members)
+  f.board.fieldDoctrine('b', 'line')
+  f.board.resetRound()
+  assert.deepEqual(f.board.tacticStats(), stats)
+  const team = Array.from({ length: 4 }, (_, i) => member('wing' + i))
+  const challenger = scene(team)
+  assert.equal(selectDoctrine(challenger.board, team), 'buffalo')
+  for (let round = 0; round < 2; round++) {
+    challenger.board.setMembers(team)
+    challenger.board.fieldDoctrine('wing0', 'line')
+    challenger.board.resetRound(true)
+  }
+  challenger.board.setMembers(team)
+  assert.equal(selectDoctrine(challenger.board, team), 'line')
+  for (let round = 0; round < 2; round++) {
+    challenger.board.fieldDoctrine('wing0', 'line')
+    challenger.board.resetRound(false)
+    challenger.board.setMembers(team)
+  }
+  assert.equal(selectDoctrine(challenger.board, team), 'buffalo')
 })
 
 test('swarm PvP: a single known enemy gets enough force, reserves and old sightings get search tasks', () => {

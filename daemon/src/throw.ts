@@ -228,7 +228,9 @@ function landing (bot, from, yaw, pitch, k, u = null, airborne = false, collideE
   const pick: typeof import('./pick') = require('./pick')
   const solid = { blockAt(p, extra) { const b = bot.blockAt(p, extra); return b?.boundingBox === 'block' ? b : null } }
   const bodies = collideEntities ? (Object.values(bot.entities || {}) as any[]).filter(e => e && e !== bot.entity && e.id !== bot.entity?.id && e.position && e.isValid !== false &&
-    (e.username || e.type === 'player' || e.type === 'mob') && bot.players?.[e.username]?.gamemode !== 3 && e._ndVisible !== false && pick.canHit(bot, e, { range: 64 })) : []
+    (e.username || e.type === 'player' || e.type === 'mob') && bot.players?.[e.username]?.gamemode !== 3 && e._ndVisible !== false && pick.canHit(bot, e, { range: 64 }) &&
+    (!(e.username || e.type === 'player') || !(Number(e.metadata?.[0]) & 0x20) ||
+      (require('./pvp/last-seen') as typeof import('./pvp/last-seen')).seesPlayer(bot, e))) : []
   const l = launch(pitch, k)
   let v = new Vec3(-Math.sin(yaw) * l.vh, l.vy, -Math.cos(yaw) * l.vh)
   if (u) v = v.plus(new Vec3(u.x, airborne ? u.y : 0, u.z))
@@ -314,7 +316,13 @@ function canSurvivePearl (bot) {
 // бросок — на тике отрыва; в ответе jump: 'stand' | 'run' | null.
 // Итог броска: thrown — ушёл ли предмет; why — отказ; ticks, land — расчётный полёт и приземление.
 export interface ThrowResult { thrown: boolean; why?: string; jump?: string | null; hand?: string; yawDeg?: number; pitchDeg?: number; ticks?: number; airborne?: any; moved?: any; land?: any }
-async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null, pick = null, preferOffhand = false, jump = false, sprint = false, runYaw = null }: any = {}): Promise<ThrowResult> {
+/** Use the accepted movement packet for pearl inheritance; an unmeasured correction voids the aim. */
+export function pearlReleaseFrame(bot, aimed) {
+  const from = (require('./pick') as typeof import('./pick')).eyeOf(bot).offset(0, -.1, 0)
+  const moved = bot._ndLaunchMovement?.() ?? (from.distanceTo(aimed.from) < 1e-7 ? aimed.moved : null)
+  return moved ? { from, moved, airborne: !bot.entity.onGround } : null
+}
+async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null, pick = null, collideEntities = false, preferOffhand = false, jump = false, sprint = false, runYaw = null }: any = {}): Promise<ThrowResult> {
   const held = bot.heldItem
   const it = item || held
   if (!it) return { thrown: false, why: 'нечего бросать' }
@@ -384,7 +392,7 @@ async function throwAt (bot, target, { item = null, mode = 'exact', onAim = null
           : aim(from, target, k, moved, airborne)
       }
       if (sol) bot.look(sol.yaw, sol.pitch, true).catch(() => {})
-      const land = sol ? landing(bot, from, sol.yaw, sol.pitch, k, mode === 'old' ? null : moved, airborne, !!sol.entityCollision) : null
+      const land = sol ? landing(bot, from, sol.yaw, sol.pitch, k, mode === 'old' ? null : moved, airborne, collideEntities || !!sol.entityCollision) : null
       const shot = { sol, land, from, airborne, moved: { ...moved } }
       ;(require('./edges') as typeof import('./edges')).afterPacket(bot, () => {
         if (!sol) { resolve(shot); return }

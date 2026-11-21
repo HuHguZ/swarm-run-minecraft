@@ -218,6 +218,49 @@ test('swarm bow hold returns to another defence immediately when its native shie
   } finally { a.ctl.abort(); if (pending) await pending; a.close() }
 })
 
+test('a covering shield faces the visible archer and releases as soon as the ally leaves its line', async () => {
+  const a = actor()
+  const work = sourceModule('swarm-position-work', { './combat': a.combat,
+    './threats': { dangers: () => ({ aims: [{ name: 'Foe', weapon: 'bow' }], arrows: [] }) },
+    './swarm-work': { directThreat: () => null } })
+  const archer = a.bot.entities[2] = { ...a.bot.entities[2], name: 'player', type: 'player', username: 'Foe' }
+  const ward = { ...archer, id: 3, username: 'Ward', position: a.bot.entity.position.offset(0, 0, -2) }
+  a.bot.players = { Ward: { entity: ward } }; a.bot.entities[3] = ward
+  a.session.current = { name: 'swarm_hold', ctl: a.ctl }
+  let face, pending: Promise<any>
+  a.bot.setControlState = () => {}
+  a.bot.lookAt = async p => { face = p; a.bot.entity.yaw = Math.PI }
+  try {
+    pending = work.swarmHold(a.session, a.ctl, { shield: true, requireShield: true, whileDraw: 'Foe', coverAlly: 'Ward',
+      enemies: ['Foe'], allies: ['Ward'], seconds: 20 })
+    await turn(); a.metadata(3); a.age(1001)
+    for (let tick = 2; tick < 14; tick++) { a.age(1000 + tick); a.c.advanceTicks(1); await turn() }
+    assert.equal(a.writes.length, 1)
+    assert.equal(face.z, archer.position.z)
+    assert.equal(a.releases(), 0)
+    const shot = { name: 'arrow', blockable: true, from: archer.position.offset(0, 1.4, 0) }
+    const covered = a.session.current.coveredBow
+    assert.equal(covered(shot), true)
+    assert.equal(covered({ ...shot, from: shot.from.offset(4, 0, 0) }), false, 'oblique shot outside the shielded line')
+    assert.equal(covered({ ...shot, from: shot.from.offset(0, 0, -10) }), false, 'rear attack')
+    assert.equal(covered({ ...shot, name: 'splash_potion', blockable: false }), false)
+    a.bot._ndShieldDisabledUntil = a.c.now() + 500
+    assert.equal(covered(shot), false, 'an axe-disabled shield cannot cover even the frontal shot')
+    assert.equal(covered({ name: 'Foe', weapon: 'bow', at: archer.position }), false)
+    delete a.bot._ndShieldDisabledUntil
+    a.bot.inventory.slots[45] = null
+    assert.equal(covered({ name: 'Foe', weapon: 'bow', at: archer.position }), false)
+    a.bot.inventory.slots[45] = a.shield
+    ward.position = ward.position.offset(2, 0, 0)
+    a.c.advanceTicks(2); await turn()
+    const result = await pending
+    assert.equal(result.why, 'cover_lane_lost')
+    assert.ok(result.shield.blockingSeconds > 0)
+    assert.equal(a.releases(), 1)
+    assert.equal(a.session.current.coveredBow, undefined)
+  } finally { a.ctl.abort(); if (pending) await pending; a.close() }
+})
+
 test('swarm bow hold keeps its facing when the shooter disappears behind cover but his arrow remains', async () => {
   const a = actor(); let drawing = true, arrow = false, pending: Promise<any>, done = false, spins = 0, looks = 0
   const work = sourceModule('swarm-position-work', { './combat': a.combat,
@@ -239,6 +282,72 @@ test('swarm bow hold keeps its facing when the shooter disappears behind cover b
     assert.equal(a.bot.entity.yaw, yaw, 'the last arrow meets the shield front, not a scanning turn')
   } finally { a.ctl.abort(); if (pending) await pending; a.close() }
 })
+
+for (const state of ['already free', 'cut', 'arrow in flight', 'ordinary bow hold', 'web at eyes', 'stone beyond web'] as const) {
+  test(`webbed shield hold observes its own collision and the last incoming arrow: ${state}`, async t => {
+    const a = actor(), bot = a.bot
+    const conditional = state !== 'ordinary bow hold'
+    let web = conditional && state !== 'already free', result: any, pending: Promise<any> | undefined
+    // The shoulder can touch a neighbouring web, or a web can entirely cover the eyes.
+    bot.entity.position.z = .8; bot.entity.velocity = new Vec3(0, 0, 0)
+    const read = bot.blockAt
+    const webZ = state === 'web at eyes' || state === 'stone beyond web' ? 0 : 1
+    bot.blockAt = p => {
+      const block = read(p), cell = block.position
+      if (web && cell.x === 0 && cell.y === 65 && cell.z === webZ) return { ...block, name: 'cobweb' }
+      if (state === 'stone beyond web' && cell.x === 4) return { ...block, ...read(new Vec3(0, 63, 0)), position: cell }
+      return block
+    }
+    const shooter = bot.entities[2] = { id: 2, username: 'Bow', name: 'player', type: 'player', isValid: true,
+      position: new Vec3(12.5, 64, .5), velocity: new Vec3(0, 0, 0), width: .6, height: 1.8, onGround: true,
+      yaw: Math.PI / 2, pitch: 0, metadata: [], equipment: [{ name: 'bow' }] }
+    shooter.metadata[a.key] = 1; bot.players = { Bow: { entity: shooter, gamemode: 0 } }
+    bot.setControlState = () => {}
+    bot.lookAt = async p => { bot.entity.yaw = Math.atan2(bot.entity.position.x - p.x, bot.entity.position.z - p.z) }
+    const dangers = require('../src/threats') as typeof import('../src/threats')
+    const hazards = require('../src/hazards') as typeof import('../src/hazards')
+    const contact = t.mock.fn(hazards.webCells), forecast = t.mock.fn(dangers.projectileDangers)
+    const makeShield = t.mock.fn(a.combat.makeShield)
+    const work = sourceModule('swarm-position-work', { './combat': { makeShield }, './swarm-work': { directThreat: () => null },
+      './hazards': { ...hazards, webCells: contact }, './threats': { ...dangers, projectileDangers: forecast } })
+    t.mock.method(require('../src/drops'), 'velocityFromRaw', () => ({ x: -2, y: 0, z: 0 }))
+    const fire = id => {
+      bot.entities[id] = { id, name: 'arrow', position: new Vec3(6.5, 65, .5), height: .25, width: .25 }
+      bot._client.emit('packet', { entityId: id, type: bot.registry.entitiesByName.arrow.id, x: 6.5, y: 65, z: .5, objectData: 2 },
+        { name: 'spawn_entity' }, Buffer.alloc(0))
+    }
+    const tick = async () => { a.c.advanceTicks(1); bot.emit('physicsTick'); await turn() }
+    try {
+      pending = work.swarmHold(a.session, a.ctl, { shield: true, requireShield: true, whileDraw: 'Bow', whileWebbed: conditional,
+        enemies: ['Bow'], seconds: 20 }).then(r => { result = r })
+      await turn()
+      if (state === 'already free') {
+        assert.equal(makeShield.mock.callCount(), 0); assert.equal(forecast.mock.callCount(), 0)
+        assert.equal(a.writes.length, 0); assert.equal(result?.ok, false); assert.equal(result?.why, 'not_webbed'); return
+      }
+      if (state === 'stone beyond web') {
+        assert.equal(makeShield.mock.callCount(), 0); assert.equal(result?.why, 'no_visible_threat'); return
+      }
+      a.metadata(3); a.age(1001)
+      for (let n = 0; n < 7; n++) await tick()
+      assert.equal(a.writes.length, 1); assert.equal(a.releases(), 0); assert.equal(result, undefined)
+      if (!conditional) {
+        assert.equal(contact.mock.callCount(), 0); assert.equal(forecast.mock.callCount(), 0); return
+      }
+      if (state === 'arrow in flight') {
+        dangers.thrownTracker(bot); fire(31); shooter.metadata[a.key] = 0
+      }
+      web = false; await tick()
+      if (state === 'arrow in flight') {
+        assert.equal(result, undefined); assert.equal(a.releases(), 0)
+        delete bot.entities[31]; fire(32); shooter.metadata[a.key] = 1
+        await tick()
+      }
+      assert.equal(result?.ok, true); assert.equal(result?.why, 'web_cleared'); assert.equal(a.releases(), 1)
+      assert.equal(a.ctl.onAbort.length, 0)
+    } finally { a.ctl.abort(); if (pending) await pending; a.close() }
+  })
+}
 
 test('OW visible draw is a shield reason before the first arrow and expires on its actual release', () => {
   const a = actor()

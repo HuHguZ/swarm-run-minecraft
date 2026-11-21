@@ -5,6 +5,10 @@ import combat = require('../combat')
 import * as flee from '../flee'
 import fauna = require('../fauna')
 import bow = require('../bow')
+import { createLastSeen } from '../pvp/last-seen'
+import { stablePearlPost } from '../navigation/pearl-stand'
+import { observedCollision } from '../pvp/search'
+import { incoming } from '../threats'
 import * as throwMod from '../throw'
 import lootMod = require('../loot')
 import { sleep } from './shared'
@@ -102,6 +106,25 @@ function shoot (this: any, p: any = {}) {
     const count = Math.max(1, Math.min(20, p.count ?? 1))
     return this.runIntent('shoot', async ctl => {
       const bot = this.require()
+      if (p.fromPost) {
+        const at = p.fromPost, raw = bot.players?.[p.target]?.entity
+        // A pillar receipt can arrive while the last placement jump is still settling.
+        const onPost = () => bot.entity && Math.hypot(bot.entity.position.x - at.x, bot.entity.position.y - at.y, bot.entity.position.z - at.z) < 1
+        const guardedPost = p.pearlPost || p.stablePost
+        const terrain = guardedPost ? observedCollision(bot) : null
+        const safe = () => !terrain || stablePearlPost(bot, p.arena, terrain) && !incoming(bot).length
+        if (!raw || !onPost() || !safe()) return { shot: false, why: 'потеряна цель или стойка' }
+        const sight = createLastSeen(bot)
+        try {
+          const seen = sight.observe(raw)
+          if (!seen || !seen._ndVisible) return { shot: false, why: 'цель скрыта' }
+          bot.pathfinder?.setGoal(null)
+          bot.clearControlStates()
+          return await bow.shoot(bot, seen, { follow: false, shouldStop: () =>
+            ctl.aborted || !onPost() || bot.players[p.target]?.entity !== raw || !sight.visible(seen) ||
+            guardedPost && bot.heldItem?.name !== 'bow' || !safe() })
+        } finally { sight.close() }
+      }
       const target = bot.nearestEntity(e => e && e.name === p.target && e.position)
       if (!target) throw new Error(`не вижу ${p.target}`)
       const shots = []

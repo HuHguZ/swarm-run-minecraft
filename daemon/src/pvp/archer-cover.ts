@@ -7,13 +7,14 @@ import { observedCollision } from './search'
 
 interface Cover { at: Vec3; path: Vec3[]; distance: number; arena?: any }
 const plans = new WeakMap<object, any>()
+const bodySamples = [[0, 0], [-1, -1], [1, 1], [-1, 1], [1, -1]]
 
 // Неизвестный блок не даёт укрытия: луч pick пересекает только уже увиденные формы.
 export function archerCovered (bot, eye: Vec3, at = bot.entity.position, world = observedCollision(bot)) {
   const { half, height } = dimensions(bot)
-  const d = at.minus(eye), length = Math.hypot(d.x, d.z) || 1
-  for (const h of [.15, height / 2, height - .1]) for (const shoulder of [-half, 0, half]) {
-    const body = at.offset(-d.z / length * shoulder, h, d.x / length * shoulder)
+  // Хитбокс игрока остаётся квадратным и при диагональном выстреле: луч к дальнему углу может пройти мимо колонны.
+  for (const h of [.01, height / 2, height - .01]) for (const [x, z] of bodySamples) {
+    const body = at.offset(x * half, h, z * half)
     const ray = body.minus(eye), distance = ray.norm()
     if (!distance || !pick.blockOnRay(world, eye, ray.scaled(1 / distance), distance)) return false
   }

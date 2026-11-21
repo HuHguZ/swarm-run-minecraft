@@ -14,6 +14,7 @@ import { findItem, potionOf } from './potions'
 import { ANGRY_IF_HIT, EYE, HOSTILE_MOB, TICK_MS, isPlayer } from './rules'
 import { Vec3 } from './vec3'
 import { type DuelCtx } from './turn'
+import { clientDeathNotice } from './death-credit'
 import { isAlly } from '../combat/ally-safety'
 import { smashShieldAim } from '../combat/shield'
 import { shieldHold } from '../reflex-lock'
@@ -21,6 +22,33 @@ import { shieldHold } from '../reflex-lock'
 // Удары и смерти, другие нападающие, мобы, двое на одного, утилиты, фаерболы, его лук.
 export function installEvents (ctx: DuelCtx) {
   const { attackers, bot, bowWatch, ctl, dead, mobHits, noteExchange, session, st, swatted, tt, used, vision } = ctx
+  const ownHits = new Map<number, number>()
+  ctx.playerDeaths = new Map()
+  const recordPlayerDeath = e => {
+    let death = ctx.playerDeaths.get(e.username)
+    if (!death || death.id !== e.id) {
+      death = { victim: e.username, id: e.id, hits: ownHits.get(e.id) || 0 }
+      ctx.playerDeaths.set(e.username, death)
+    }
+    return death
+  }
+  ctx.onDeathNotice = (message, position) => {
+    const notice = clientDeathNotice(message, position)
+    if (!notice) return
+    const { victim, killer } = notice
+    let death = ctx.playerDeaths.get(victim)
+    if (ctx.entity.username === victim && !isAlly(bot, ctx.entity)) {
+      dead.add(ctx.entity.id); ctx.killed = true
+      death = recordPlayerDeath(ctx.entity)
+    }
+    if (!death || !killer || death.killer) return
+    death.killer = killer
+    if (killer !== bot.username) { if (death.hits) death.assisted = true; return }
+    if (ctx.kills.includes(death.victim)) return
+    ctx.kills.push(death.victim)
+    if (ctx.lastStand) session.bus?.emit('last_stand_kill', { target: death.id, swings: st.swings, landed: death.hits, health: bot.health })
+  }
+  bot.on('message', ctx.onDeathNotice)
   const onHurt = ctx.onHurt = (victim, source) => {
     if (isAlly(bot, victim)) return
     if (victim?.id === ctx.entity.id) { ctx.targetHurtAt = gameClock.now(); ctx.targetHurtBy = source ? (source.id === bot.entity?.id ? bot.username : source.username || null) : null; ctx.strikeSlotAt = 0 }
@@ -28,6 +56,7 @@ export function installEvents (ctx: DuelCtx) {
     if (source && bot.entity && ((victim?.id === ctx.entity.id && source.id === bot.entity.id) || (victim === bot.entity && source.id === ctx.entity.id))) noteExchange()
     if (victim?.id === ctx.entity.id && source === bot.entity) {
       st.landed++
+      if (victim.username) ownHits.set(victim.id, (ownHits.get(victim.id) || 0) + 1)
       if (ctx.lastStand) session.bus?.emit('last_stand_hit', { target: ctx.entity.id, swings: st.swings, landed: st.landed,
         targetHealth: healthOf(bot, vision.source(ctx.entity)), health: bot.health })
       if (gameClock.now() - ctx.lastSwing < 400 && ctx.swingCrit) st.crits++
@@ -56,7 +85,8 @@ export function installEvents (ctx: DuelCtx) {
     if (e) dead.add(e.id)
     if (e?.id === ctx.entity.id && !isAlly(bot, e)) {
       ctx.killed = true
-      if (ctx.lastStand) session.bus?.emit('last_stand_kill', { target: ctx.entity.id, swings: st.swings, landed: st.landed, health: bot.health })
+      if (ctx.prof.player && e.username) recordPlayerDeath(e)
+      else if (ctx.lastStand) session.bus?.emit('last_stand_kill', { target: ctx.entity.id, swings: st.swings, landed: st.landed, health: bot.health })
     }
   }
   const onSelfDeath = ctx.onSelfDeath = () => { ctx.selfDied = true }

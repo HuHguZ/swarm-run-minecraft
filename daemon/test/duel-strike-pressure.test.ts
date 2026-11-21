@@ -50,7 +50,44 @@ function scene(t) {
     return frame
   }
   t.after(() => { ctx.foeEst.stop(); for (const close of ctx.ctl.onAbort) close(); vision.close(); bot.removeAllListeners(); bot._client.removeAllListeners(); time.dispose(); clock.activate(null) })
-  return { bot, enemy, ally, vision, ctx, time, player, hit, turn, exchanges: () => exchanges }
+  return { bot, enemy, ally, vision, ctx, time, player, hit, turn, packets, exchanges: () => exchanges }
+}
+
+for (const lane of ['in front', 'beside', 'behind', 'hidden', 'spectator', 'crosses while lowering shield', 'leaves while lowering shield']) {
+  test('ordinary sword packet with teammate ' + lane, async t => {
+    const f = scene(t), { bot, ctx, ally } = f
+    Object.assign(bot.entity, { yaw: -Math.PI / 2, pitch: 0, velocity: new Vec3(0, 0, 0) })
+    require('../src/pick').install(bot)
+    const mf = ctx.mf = require('../src/melee').fight(bot, { target: () => ctx.entity })
+    t.after(() => mf.close())
+    bot.heldItem = ctx.weapon = { name: 'iron_sword' }
+    ctx.combo = { note() {} }
+    const clear = lane === 'beside' || lane === 'crosses while lowering shield'
+    ally.position.set(lane === 'behind' ? .8 : -1, 64, clear ? .9 : .5)
+    if (lane === 'hidden') ally._ndVisible = false
+    if (lane === 'spectator') bot.players.Y.gamemode = 3
+    if (lane.includes('lowering shield')) {
+      ctx.guard = { stats: { worn: false }, async raise() { await Promise.resolve(); ally.position.z = clear ? .5 : .9 } }
+    }
+    const frame = f.turn()
+    assert.equal(frame.canHit, true)
+    await strikeTurn(ctx, frame)
+    const attacks = () => f.packets.filter(p => p.name === 'use_entity' && p.packet.mouse === 1).map(p => p.packet.target)
+    const blocked = lane === 'in front' || lane === 'crosses while lowering shield'
+    assert.deepEqual(attacks(), blocked ? [] : [f.enemy.id])
+    assert.equal(mf.st.swings, blocked ? 0 : 1)
+    assert.equal(ctx.st.swings, blocked ? 0 : 1)
+    if (blocked) {
+      ctx.guard = null; ally.position.z = .9
+      await strikeTurn(ctx, f.turn())
+      assert.deepEqual(attacks(), [f.enemy.id], 'a refused attack spent no sword cooldown')
+    }
+    f.time.advanceTicks(20)
+    const zombie = { id: 17, name: 'zombie', type: 'hostile', position: new Vec3(0, 64, .5), width: .6, height: 1.95 }
+    bot.entities[zombie.id] = zombie
+    bot.attack(zombie)
+    assert.deepEqual(attacks(), [f.enemy.id, zombie.id])
+  })
 }
 
 for (const hand of ['cobblestone', 'water_bucket', null]) test(`a changed ${hand || 'empty'} hand restores the sword without sending a weak melee packet`, async t => {

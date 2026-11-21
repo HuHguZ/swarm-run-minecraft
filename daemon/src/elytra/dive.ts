@@ -264,7 +264,8 @@ async function diveSmash (bot, ctl, e, { vel = () => ({ x: 0, y: 0, z: 0 }), sta
             try {
               if (ctl.aborted || e.isValid === false || bot.entity.elytraFlying || !(S.fd > 1.5) || bot.entity.velocity.y >= 0 || !pick.canHit(bot, e, { range: REACH })) { hit = null; return }
               // Его щит поднят — «оглушающий»: топор и булава в одном тике (mace.slamHit).
-              ;(require('../mace') as typeof import('../mace')).slamHit(bot, e, stats)
+              const strike = (require('../mace') as typeof import('../mace')).slamHit(bot, e, stats)
+              if (strike?.blocked) hit = null
             } catch {}
           }
           hit = { at: gameClock.now(), fd: r2(S.fd), sinceSwap: gameClock.now() - swapped, fly: !!b.elytraFlying }

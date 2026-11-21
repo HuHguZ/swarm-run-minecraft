@@ -33,11 +33,40 @@ function fixture() {
   return { bot, foe, reports, options }
 }
 
+test('one release tick can certify a native ray past 38 unrelated bodies while a visible crossing still blocks it', t => {
+  const { bot, foe, reports } = fixture(), frames = Array.from({ length: 66 }, () => ({
+    pos: foe.position.clone(), vel: new Vec3(0, 0, 0), onGround: false }))
+  const ray = (deadline?: number) => enemyWindShot(bot, foe, reports[0], frames, { height: .4 }, undefined, deadline)
+  const expected = ray()
+  assert.ok(expected)
+  for (let i = 0; i < 38; i++) bot.entities[i + 10] = { id: i + 10, username: 'Body' + i, type: 'player',
+    position: new Vec3(i / 10, 1, 12), width: .6, height: 1.8 }
+  let ms = 0, visible = true
+  const reads = t.mock.method(pick, 'canHit', () => { ms += 2; return visible })
+  t.mock.method(wall, 'monotonic', () => ms)
+  const unlimited = ray()
+  assert.deepEqual(unlimited, expected)
+  assert.equal(reads.mock.callCount(), 0)
+  ms = 0
+  assert.deepEqual(ray(25), expected, 'one 40 TPS release tick')
+  ms = 26
+  assert.equal(ray(25), null, 'an already expired release still fails')
+  assert.deepEqual(ray(51), expected, 'the next window uses the current geometry')
+  bot.entities[10].position = new Vec3(0, 1.35, .5)
+  assert.equal(ray(), null, 'a publicly visible body in the projectile path still blocks the shot')
+  visible = false
+  assert.deepEqual(ray(), expected, 'an occluded body cannot alter the next shot')
+  visible = true
+  bot.entities[10].position = new Vec3(4.6, 1.35, 5)
+  bot.entities[10].width = .6 * 16
+  assert.equal(ray(), null, 'the broad phase retains a maximally scaled player whose feet are off the ray')
+})
+
 test('one synchronous native chain reuses fair LOS across candidates and outcome bounds', t => {
   const { bot, foe, reports, options } = fixture(), expected = planEnemyWind(bot, foe, reports, options)
   assert.ok(expected)
   for (let i = 0; i < 19; i++) bot.entities[10 + i] = { id: 10 + i, username: `Blue${i}`, type: 'player',
-    position: new Vec3(-3 + i / 10, 1, 4), width: .6, height: 1.8 }
+    position: new Vec3(-3 + i / 10, 1, 12), width: .6, height: 1.8 }
   const calls = new Map<any, number>()
   let visible = true
   t.mock.method(pick, 'canHit', (_bot, entity) => {
@@ -45,11 +74,15 @@ test('one synchronous native chain reuses fair LOS across candidates and outcome
     calls.set(entity, (calls.get(entity) || 0) + 1); return visible
   })
   assert.deepEqual(planEnemyWind(bot, foe, reports, options), expected, 'visibility memoization cannot alter native shots or safety')
-  assert.equal(calls.size, 19)
-  assert.ok([...calls.values()].every(n => n === 1), `repeated LOS counts: ${[...calls.values()]}`)
+  assert.equal(calls.size, 0, 'none of these bodies crosses a candidate ray')
+  const crossing = bot.entities[10]
+  crossing.position = new Vec3(-.5, 1, .5); crossing.width = 3; crossing.height = 4
   calls.clear(); visible = false
-  assert.deepEqual(planEnemyWind(bot, foe, reports, options), expected, 'the next synchronous plan observes the new LOS state')
-  assert.ok([...calls.values()].every(n => n === 1))
+  assert.deepEqual(planEnemyWind(bot, foe, reports, options), expected)
+  assert.deepEqual([...calls], [[crossing, 1]], 'all candidate rays share the same observed occlusion')
+  calls.clear(); visible = true
+  planEnemyWind(bot, foe, reports, options)
+  assert.deepEqual([...calls], [[crossing, 1]], 'the next synchronous plan queries the new LOS state')
 })
 
 for (const mode of ['begin', 'team warmup', 'candidate bounds']) test(`the native planner stops its ${mode} at the existing deadline`, t => {
@@ -71,6 +104,26 @@ test('a sufficient physical planning window preserves the full native result', t
   assert.ok(expected)
   t.mock.method(wall, 'monotonic', () => 1000)
   assert.deepEqual(planEnemyWind(bot, foe, reports, { ...options, deadline: 2000 }), expected)
+})
+
+test('an expired release forecast stops simulating and the next window gets its full trajectory', t => {
+  const { bot, foe, options } = fixture()
+  const forecast = (deadline?: number) => wind.enemyWindFrames(bot, foe, options.arena, [], 0, true, undefined, deadline)
+  const expected = forecast()
+  assert.ok(expected.length > 3)
+  let elapsed = 0, steps = 0
+  t.mock.method(wall, 'monotonic', () => elapsed)
+  const simulate = bot.physics.simulatePlayer.bind(bot.physics)
+  t.mock.method(bot.physics, 'simulatePlayer', (...args) => {
+    if (++steps === 3) elapsed += 70
+    return simulate(...args)
+  })
+  assert.deepEqual(forecast(25), [])
+  assert.equal(steps, 3)
+  bot.ndClock.ticks++
+  steps = 0
+  assert.deepEqual(forecast(elapsed + 150), expected)
+  assert.equal(steps, expected.length - 1)
 })
 
 test('one synchronous plan checks ally safety once for each identical impact', t => {
@@ -211,11 +264,16 @@ test('a short collision forecast keeps all twenty allies without eagerly simulat
   const team = [reports[0], ...Array.from({ length: 19 }, (_, i) => ({ ...reports[0], id: `Blue${i}`,
     position: { x: -6 + i % 7, y: 1, z: i % 2 ? -4 : 4 } }))]
   let steps = 0
-  t.mock.method(bot.physics, 'simulatePlayer', (...args) => { steps++; return native(...args) })
+  const worlds = new Set()
+  t.mock.method(bot.physics, 'simulatePlayer', (...args) => { steps++; worlds.add(args[1]); return native(...args) })
   const frames = Array.from({ length: 66 }, () => ({ pos: foe.position.clone(), vel: new Vec3(0, 0, 0), onGround: false }))
   const shot = enemyWindShot(bot, foe, reports[0], frames, { height: .4, allies: team })
   assert.ok(shot)
   assert.ok(steps <= 19 * shot.ticks, `${steps} native steps for ${team.length} bodies and arrival ${shot.ticks}`)
+  assert.equal(worlds.size, 1, 'all twenty allied paths read the same synchronous collision snapshot')
+  const floor = bot.blockAt
+  bot.blockAt = p => p.floored().x === 0 ? { name: 'stone', position: p.floored(), boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] } : floor(p)
+  assert.equal(enemyWindShot(bot, foe, reports[0], frames, { height: .4, allies: team }), null, 'a new release sees a wall built in this same tick')
 })
 
 test('an exact local release reuses its ally collision tracks for burst safety', t => {

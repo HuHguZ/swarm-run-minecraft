@@ -5,6 +5,7 @@ import test = require('node:test')
 import assert = require('node:assert/strict')
 import { spawnSync } from 'node:child_process'
 import path = require('node:path')
+import { tmpdir } from 'node:os'
 import * as fs from 'node:fs'
 import * as vm from 'node:vm'
 import { createRequire } from 'node:module'
@@ -76,7 +77,7 @@ test('scene env carries one selected tick rate after per-scene overrides', () =>
 
 // Exercise the actual farm wiring with process/filesystem/RCON boundaries mocked.
 // No Java process, world or network socket is created by these integration tests.
-function farmHarness ({ running = [], prepareChanged = false, failReload = 0, unknownOwners = [], limits = { maxUp: 4, cores: 'ccd1' } }: any = {} as Record<string, any>) {
+function farmHarness ({ running = [], prepareChanged = false, failReload = 0, unknownOwners = [], limits = { maxUp: 4, cores: 'ccd1' }, tempRoot, env = {} }: any = {} as Record<string, any>) {
   const events = []; const files = new Map(); const cli = path.join(__dirname, 'farm.js'); const probes: number[][] = []
   const load = createRequire(cli)
   const fakeFs = {
@@ -91,20 +92,20 @@ function farmHarness ({ running = [], prepareChanged = false, failReload = 0, un
     readdirSync: () => []
   }
   const context = vm.createContext(cjsContext({
-    require: name => name === 'fs' ? fakeFs : name === 'child_process' ? {
+    require: name => name === '../daemon/src/paths' && tempRoot ? { REPO_ROOT: tempRoot } : name === 'fs' ? tempRoot ? fs : fakeFs : name === 'child_process' ? {
       execFileSync: () => { throw new Error('unexpected shell operation') },
       spawn: (exe, args, options) => {
         const child = { pid: 1234 + events.length, unref () {}, on (event, listener) { if (event === 'exit') queueMicrotask(() => listener(0)) } }
         events.push({ kind: 'spawn', args, env: options.env, cwd: options.cwd }); return child
       }
     } : load(name),
-    __dirname, __filename: cli, process: { env: {} as Record<string, any>, execPath: process.execPath },
+    __dirname, __filename: cli, process: { env, execPath: process.execPath },
     console: { log () {}, error () {} }, Buffer, setTimeout: fn => { fn(); return 1 }, clearTimeout () {}, queueMicrotask,
     events, running, prepareChanged, failReload, unknownOwners, probes
   }))
   const source = fs.readFileSync(cli, 'utf8').split(/\n;?\s*\(async \(\) => \{/)[0]
   assert.ok(!source.includes('process.argv.slice(2)'), 'fixture excludes farm CLI entry point')
-  vm.runInContext(source + '\nthis.api = { cmdUp, cmdDown, cmdRun, cmdTick, parseArgs, tickSelection, prepareSlot, slot };\n' +
+  vm.runInContext(source + '\nthis.api = { cmdUp, cmdDown, cmdRun, cmdTick, parseArgs, tickSelection, prepareSlot, slot, jar: JAR };\n' +
     'listeners = ports => { probes.push(ports); return new Map([...running.map(i => [25600+i, 123]), ...unknownOwners.filter(p => ports.includes(p)).map(port => [port, 0])]) };\n' +
     'prepareSlot = (s, options) => { events.push({kind:"prepare",slot:s.i,options}); return prepareChanged };\n' +
     'startServer = async s => events.push({kind:"server",slot:s.i});\n' +
@@ -269,6 +270,37 @@ test('farm startup permits accelerated survival movement without the vanilla flo
   api.prepareSlot(selected, { seed: '1', fresh: false, world: null })
   assert.match(files.get(file), /^allow-flight=true$/m)
   assert.match(files.get(file), /^gamemode=survival$/m)
+})
+
+test('slot capacity survives ordinary preparation and world replacement while a new slot uses the farm default', t => {
+  const tempRoot = fs.mkdtempSync(path.join(tmpdir(), 'neurodown-slot-capacity-'))
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }))
+  const template = path.join(tempRoot, 'server-twin'), imported = path.join(tempRoot, 'import')
+  fs.mkdirSync(template); fs.mkdirSync(path.join(imported, 'world'), { recursive: true })
+  fs.writeFileSync(path.join(template, 'server.properties'), 'max-players=20\r\n')
+  fs.writeFileSync(path.join(imported, 'server.properties'), 'max-players=99\n')
+  fs.writeFileSync(path.join(imported, 'world', 'level.dat'), 'map')
+  const env: Record<string, string> = {}
+  const { api } = farmHarness({ tempRoot, env })
+  fs.writeFileSync(path.join(template, api.jar), 'test jar')
+  const prepare = (i, options = {}) => {
+    const s = api.slot(i)
+    assert.equal(path.dirname(path.dirname(s.dir)), tempRoot)
+    api.prepareSlot(s, { seed: '1', ...options })
+    return fs.readFileSync(path.join(s.dir, 'server.properties'), 'utf8').match(/^max-players=(\d+)$/m)?.[1]
+  }
+  assert.equal(prepare(31), '6')
+  env.FARM_MAX_PLAYERS = '41'
+  assert.equal(prepare(31), '41')
+  delete env.FARM_MAX_PLAYERS
+  assert.equal(prepare(31), '41')
+  assert.equal(prepare(31, { fresh: true }), '41')
+  fs.unlinkSync(path.join(api.slot(31).dir, api.jar))
+  assert.equal(prepare(31, { world: imported }), '41')
+  assert.equal(fs.readFileSync(path.join(api.slot(31).dir, 'world', 'level.dat'), 'utf8'), 'map')
+  assert.equal(prepare(1, { world: imported }), '6')
+  env.FARM_MAX_PLAYERS = '12'
+  assert.equal(prepare(31), '12')
 })
 
 test('farm profile supplies the default TPS for startup and scenes while explicit flags win', async () => {

@@ -22,6 +22,12 @@ export interface SwarmMember {
   antidote?: { state: import('../pvp/antidotes').AntidoteState; choice?: import('../pvp/antidotes').AntidoteChoice | null; need?: import('../pvp/antidotes').AntidoteChoice | null; using?: boolean; receivedAt: number }
   /** Own usable ammunition; beneficial tipped arrows remain separate inventory items. */
   attackArrows?: number
+  /** Fresh bow draws this member saw directed at its own position. */
+  bowAims?: { name: string; at: SwarmPosition }[]
+  /** Ally is currently placing or mining blocks. */
+  workingBlocks?: boolean
+  /** Own crossbow already loaded with offensive ammunition, including the offhand. */
+  loadedCrossbow?: boolean
   /** Зелья по виду (splash_strong_harming…): в inventory они одним именем splash_potion. */
   potions?: Record<string, number>
   reserve?: Record<string, number>
@@ -39,6 +45,7 @@ export interface EnemyObservation {
   visible: boolean
   // Ник сквозь стену: место без прямой видимости (swarm-senses).
   nametag?: boolean
+  glowing?: boolean
   position: SwarmPosition
   velocity?: SwarmPosition
   // Physical forecast for this observation only; the long-lived board never retains it.

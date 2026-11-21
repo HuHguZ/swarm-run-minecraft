@@ -53,7 +53,7 @@ export function enemyDefense(e: Pick<SharedEnemy, 'equipment'>) {
 }
 function combatProfile(m: SwarmMember, foe: SharedEnemy) {
   const defense = enemyDefense(foe)
-  const weapons = [...new Set([m.weapon, ...Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0 && damage.isMeleeWeapon(n)), null])]
+  const weapons = [...new Set([m.weapon || null, m.offHand || null, ...Object.keys(m.inventory || {}).filter(n => count(m.inventory, n) > 0 && damage.isMeleeWeapon(n)), null])]
   let best: any = null
   for (const weapon of weapons) {
     if (weapon && !damage.isMeleeWeapon(weapon)) continue

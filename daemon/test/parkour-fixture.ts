@@ -30,9 +30,10 @@ function worldOf(cells: Array<[number, number, number, string, Record<string, un
 }
 function drive(bot: Record<string, any>, world: { getBlock(p: Vec3): unknown }) {
   const { IDLE }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
-  let control = { ...IDLE }
+  const control = bot.controlState = { ...IDLE }
   bot.setControlState = (key: string, value: boolean) => { control[key] = value }
-  bot.clearControlStates = () => { control = { ...IDLE } }
+  bot.getControlState = (key: string) => control[key]
+  bot.clearControlStates = () => { Object.assign(control, IDLE) }
   bot.look = async (yaw: number) => { bot.entity.yaw = yaw }
   bot.waitForTicks = async (ticks: number) => {
     for (let tick = 0; tick < ticks; tick++) {

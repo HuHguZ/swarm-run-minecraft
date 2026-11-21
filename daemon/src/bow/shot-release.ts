@@ -8,6 +8,7 @@ import { afterPacket as afterMovePacket } from '../edges'
 import { blockedAt } from './ballistics'
 import { hasObservedVelocity } from './track'
 import type { ShotState } from './shot-state'
+import { observeShotHit } from './shot-hit'
 
 // Слушатели своей стрелы и попадания и спуск release(s, shut, checkedAt, position). Пишет S.arrow, S.me,
 // S.spawnPkt, S.hit, S.releasedAt; при спуске — S.sol и S.sent.
@@ -16,28 +17,20 @@ function armRelease (S: ShotState) {
   // Финальный прицел — на позднем physicTick после planning, перед updatePosition.
   // Сервер берёт взгляд и known movement из пакета движения (1.21.11).
   // Тетива отпускается на ndMovementSent, после movement/tick_end этого кадра.
-  // Ловим свою стрелу: появится у глаз в ближайшие тики.
   S.arrow = null
   S.me = bot.entity.position.clone()
-  const onSpawn = (e) => {
-    if (!S.arrow && e && /arrow$/.test(e.name) && e.position && e.position.distanceTo(S.me) < 3) S.arrow = e
-  }
   // Настоящая начальная скорость стрелы — из пакета появления: позиции летящей
   // стрелы mineflayer почти не обновляет, по ним ничего не измерить.
   // Только для разбора (follow): в бою без него каждый выстрел оставлял
   // слушателя висеть — MaxListenersExceededWarning после десятка стрел.
   S.spawnPkt = null
-  const onRaw = (pkt, meta, bytes) => {
-    if (S.spawnPkt || !pkt || meta?.name !== 'spawn_entity' || pkt.type !== bot.registry?.entitiesByName?.arrow?.id) return
-    const px = pkt.x; const pz = pkt.z
-    if (typeof px !== 'number' || Math.hypot(px - S.me.x, pz - S.me.z) > 3) return
-    S.spawnPkt = { ...pkt, velocity: (require('../drops') as typeof import('../drops')).velocityFromRaw(bytes, 'spawn') }
+  const onSpawn = (pkt, bytes) => {
+    S.arrow = bot.entities?.[pkt.entityId]
+    S.spawnPkt = { ...pkt, velocity: (bytes && (require('../drops') as typeof import('../drops')).velocityFromRaw(bytes, 'spawn')) || pkt.velocity }
   }
   S.hit = false
-  // Урон цели в ближайшие ~2 с после спуска — наша стрела (ближний бой в это
-  // время не идёт: стреляем с дистанции).
-  const onHurt = (victim) => {
-    if (victim?.id !== entity.id || S.hit) return
+  let stopWatching: (() => void) | undefined
+  const hit = () => {
     S.hit = true
     if (onHit) { try { onHit() } catch {} }
   }
@@ -45,9 +38,9 @@ function armRelease (S: ShotState) {
   const release = (s, shut, checkedAt, position) => {
     // Send inside the packet-boundary callback. Awaiting its Promise first
     // lets a synchronous catch-up burst change the server's last movement.
+    if (shouldStop?.()) { S.stopTick(); cancelDraw(); return { s, stopped: true } }
     if (s && !shut) shut = blockedAt(bot, S.eye(), s, S.mode === 'compensate' ? S.myVel() : undefined, S.speed)
     if (!s || shut) { S.stopTick(); cancelDraw(); return { s, shut, checkedAt } }
-    if (shouldStop?.()) { S.stopTick(); cancelDraw(); return { s, stopped: true } }
     const ranged: typeof import('../ranged') = require('../ranged')
     if (!ranged.offensiveArrow(ranged.firstArrow(bot), !!entity?.username || entity?.type === 'player')) { S.stopTick(); cancelDraw(); return { s, stopped: true } }
     if (!charge.ready(short ? 0 : 20)) { S.stopTick(); cancelDraw(); return { s, chargeError: charge.why() || 'bow_charge_not_confirmed' } }
@@ -58,8 +51,7 @@ function armRelease (S: ShotState) {
       S.stopTick(); cancelDraw(); return { s, stopped: true }
     }
     S.sol = s; S.me = position
-    bot.on('entitySpawn', onSpawn); bot.on('entityHurt', onHurt)
-    if (follow) { try { bot._client.on('packet', onRaw) } catch {} }
+    if (follow || onHit) stopWatching = observeShotHit(bot, entity, false, 1, hit, follow ? onSpawn : undefined)
     S.releasedAt = traceAim ? gameClock.serverNow() : null
     if (onRelease) { try { onRelease(S.moved) } catch {} }
     S.stopTick()
@@ -68,7 +60,7 @@ function armRelease (S: ShotState) {
     charge.close()
     return { s, checkedAt, released: true }
   }
-  return { onSpawn, onRaw, onHurt, release }
+  return { stopWatching: () => stopWatching?.(), release }
 }
 
 // Финальный прицел и спуск на ближайшем позднем physicTick (не дольше 300 мс). Обещание: итог release, отказ

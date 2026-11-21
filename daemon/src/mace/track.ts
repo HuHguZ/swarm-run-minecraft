@@ -1,7 +1,7 @@
 // Булава (mace.ts): слежка за ним — взлёт, вершина, булава в руке, угроза «булава сверху», итог толчков, отчёт.
 import * as gameClock from '../game-clock'
 import { install, healthOf, heldName } from './hands'
-import { grounded } from './world'
+import { grounded, visibleGroundReceipt } from './world'
 
 // ---------------------------------------------------------------- слежка
 
@@ -44,7 +44,7 @@ export function track (bot, { enemy, telemetryHp = e => healthOf(bot, e) }: any)
       his.vy = vy
       his.vx = dtT ? (e.position.x - h0.x) / dtT : 0
       his.vz = dtT ? (e.position.z - h0.z) / dtT : 0
-      const air = !grounded(bot, e, vy)
+      const air = !visibleGroundReceipt(e) && !grounded(bot, e, vy)
       if (air && !his.air) { his.airSince = gameClock.now(); his.peak = y }
       if (!air) { his.peak = null; his.launchedAt = 0 }
       his.air = air

@@ -1,7 +1,10 @@
 // Рой: натиск — схватить лучшее у врага, подъём к врагу (лестницы, столбы, пролом), пролом.
 import { ownedCount } from '../../../daemon/src/swarm'
-import { BLOCK, distance, cellKey, underArrowFire } from './common'
+import { withinArena } from '../../../daemon/src/navigation/parkour/model'
+import { BLOCK, distance, cellKey, inDropPile, PILE_MEMORY_MS, underArrowFire } from './common'
 import { followLadder, readyLadder, runAscent } from './ascent'
+import { currentTurn } from './lifecycle'
+import type { SwarmPosition } from '../../../daemon/src/swarm/types'
 import type { SwarmDriverCtx } from './common'
 
 export function swarmClimb (sw: SwarmDriverCtx) {
@@ -43,25 +46,42 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     }
     return true
   }
-  async function grab(b, enemies) {
-    if (b.climbing || underArrowFire(b, now()) || (cooldown.get(`grab:${b.name}`) || 0) > now()) return false
+  async function grab(b, board, teamLoot = false) {
+    const looting = teamLoot || b.swarmTask?.kind === 'loot'
+    if (!pos[b.name]?.p || b.climbing || underArrowFire(b, now()) || (cooldown.get(`grab:${b.name}`) || 0) > now()) return false
+    const owner = b.swarmTurnOwner, round = sw.generation
+    const owns = () => round === sw.generation && owner === b.swarmTurnOwner
+    const active = (reply?) => owns() && currentTurn(sw, b, round) && !!pos[b.name]?.p && !underArrowFire(b, now()) &&
+      !reply?.notStarted && reply?.code !== 'RESCUE_BUSY' && reply?.status !== 'interrupted' && reply?.status !== 'skipped'
     cooldown.set(`grab:${b.name}`, now() + 1500)
+    const raw = await b.c.call('items_near', { radius: 7 }).catch(() => ({}))
+    if (!active(raw)) return false
     const m = pos[b.name], inv = m?.inv || {}
-    if (!m?.p) return false
-    const near = Math.min(Infinity, ...enemies.filter(e => now() - e.seenAt < 1500).map(e => distance(e.position, m.p)))
-    const exposed = enemies.some(e => now() - e.seenAt < 1500 && (e.sources || []).includes(b.name) && distance(e.position, m.p) <= 40)
-    const r = detail(await b.c.call('items_near', { radius: 7 }).catch(() => ({})))
-    if (underArrowFire(b, now())) return false
+    const pressure = feet => {
+      let near = Infinity, exposed = false
+      const time = now()
+      for (const e of board.enemies()) if (time - e.seenAt < 1500) {
+        const gap = distance(e.position, feet)
+        near = Math.min(near, gap)
+        if (gap <= 40 && e.sources?.includes(b.name)) exposed = true
+      }
+      return { near, exposed }
+    }
+    const safe = (it, d, { near, exposed }) => !(near < 5 && (d > 1.5 || armorOf(it.name)) || exposed && d > 1.5) &&
+      (!looting || lootSafe(b, it.at, true))
+    const risk = pressure(m.p), r = detail(raw)
+    // У известного места гибели scavenge делит вещи между подходящими союзниками и сообщает об очищенном полу.
+    const piles = teamLoot && r.items?.length ? sw.knownDrops?.(b)?.filter(d =>
+      d.p && !d.empty && now() - d.at < PILE_MEMORY_MS && d.p.y > (arena.killY ?? -64) + 3) : null
     const best = Math.max(0, ...Object.keys(inv).map(weaponValue))
     const wear = slot => { const n = m.armor?.[slot]; const a = n && armorOf(n); return a ? a.v : 0 }
     const want = (r.items || []).find(it => {
       // Броня — не под носом у врага: надеть её — пауза, а он рядом бьёт (стенд 21.10, чемпион: «беру diamond_leggings в 0.8 бл.
       // (враг в 3 бл.)» — и смерть, пятеро за раунд); оружие, тотем, яблоко в 1.5 бл. — можно.
-      if (near < 5 && (it.d > 1.5 || armorOf(it.name))) return false
       // Под его прицелом (вижу его сейчас — значит, и он меня, до 40 бл.) — за вещами не бежать: выпавшее у убитого —
       // приманка, человек с яруса выше бил подбегающих по одному (игра пользователя 22.10: «на вещи прибежал — я его убил»).
-      if (exposed && it.d > 1.5) return false
-      if (b.swarmTask?.kind === 'loot' && it.at && !lootSafe(b, it.at, true)) return false
+      if (!it.at || !safe(it, it.d, risk)) return false
+      if (piles?.some(d => inDropPile(it.at, d.p))) return false
       if (blocked(b, itemKey(b, it), itemSig(it, inv))) return false
       const a = armorOf(it.name)
       return weaponValue(it.name) > best + 0.4 || (a && a.v > wear(a.slot)) || /^(totem_of_undying|golden_apple|enchanted_golden_apple|elytra)$/.test(it.name) && !inv[it.name]
@@ -70,25 +90,33 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     // Пока бежит за вещью — b.climbing: прочие дела драйвера не рвут короткий забег («булава в 1.2 бл. — goal was changed»).
     const before = ownedCount({ inventory: inv, armor: m.armor }, want.name)
     let g: any = {}, s: any = null
+    const claim = {}
     b.climbing = true
-    b.grabbing = true
+    b.grabbing = claim
     lootStep(b, want.at, 'grab')
     try {
       const approach = await b.c.call('goto', { ...bounded(want.at), range: 0.4, timeoutSeconds: 3, arena: lootArena(b), _hunt: true, _climb: true }).catch(e => ({ why: e.message }))
-      if (underArrowFire(b, now())) return false
+      if (!active(approach)) return false
       g = detail(approach)
       if (approach?.status === 'done' && g.arrived) {
-        const pickup = detail(await b.c.call('assist', { mode: 'pickup', item: want.name, maxD: 2, arena: lootArena(b), _climb: true }).catch(e => ({ why: e.message })))
+        const feet = approach.state?.pos || (Number.isFinite(g.arrived.x) ? g.arrived : pos[b.name]?.p)
+        if (!feet || !safe(want, distance(feet, want.at), pressure(feet))) return false
+        const reply = await b.c.call('assist', { mode: 'pickup', item: want.name, ownedTarget: before + 1, maxD: 2, arena: lootArena(b), _climb: true }).catch(e => ({ why: e.message }))
+        if (!active(reply)) return false
+        const pickup = detail(reply)
         if (!pickup.ok) g.why = pickup.why || 'не подобрал'
       }
       s = await b.c.call('status').catch(() => null)
-    } finally { b.climbing = false; delete b.grabbing }
+      if (!active(s)) return false
+    } finally {
+      if (owns() && b.grabbing === claim) { b.climbing = false; delete b.grabbing }
+    }
     const got = !!s?.state && ownedCount(s.state, want.name) > before
     if (s?.state?.inventory) { pos[b.name].inv = s.state.inventory; pos[b.name].armor = s.state.armor || pos[b.name].armor }
     if (!got) failed(b, itemKey(b, want), itemSig(want, inv)); else cleared(itemKey(b, want))
     cooldown.set(`grab:${b.name}`, now() + 1500)
-    log(`🫳 ${b.name}: беру ${want.name} в ${want.d} бл.${near < 20 ? ` (враг в ${Math.round(near)} бл.)` : ''} — ${got ? 'взял' : String(g.why || g.error || (g.arrived ? 'дошёл, не поднялось' : 'не дошёл')).slice(0, 40)}`)
-    if (got && armorOf(want.name) && !underArrowFire(b, now())) await b.c.call('armor', {}).catch(() => {})
+    log(`🫳 ${b.name}: беру ${want.name} в ${want.d} бл.${risk.near < 20 ? ` (враг в ${Math.round(risk.near)} бл.)` : ''} — ${got ? 'взял' : String(g.why || g.error || (g.arrived ? 'дошёл, не поднялось' : 'не дошёл')).slice(0, 40)}`)
+    if (got && armorOf(want.name) && pressure(s.state.pos || pos[b.name].p).near >= 5) await b.c.call('armor', {}).catch(() => {})
     return got
   }
   async function climbTo(b, foe, at) {
@@ -117,7 +145,7 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     // Жемчуг поднимается на 15–18 бл. (бросок 1.5 бл/т, гравитация 0.03): выше +16 — сперва лезть, бросать с яруса.
     // Жемчуг — 5 хп (ThrownEnderpearl.onHit, без брони): раненый им не лезет (бой роя 24.10: бросок с 7.4 хп → 2.4).
     if ((inv.ender_pearl || 0) > 0 && (m.hp ?? 20) > 10 && dy <= 16 && distance(m.p, foe.position) < 40 && !blocked(b, `pearl:${b.name}`, `${coarse(at)}|${inv.ender_pearl}`)) {
-      const raw = await ascend(b, at, 'pearl_to', { to: at, edgeOk: true, yTop: 45 }), r = detail(raw)
+      const raw = await ascend(b, at, 'pearl_to', { to: at, observed: true, arena }), r = detail(raw)
       if (waitTactics(b, raw)) return true
       if (!r.ok) failed(b, `pearl:${b.name}`, `${coarse(at)}|${inv.ender_pearl}`)
       log(`🟣 ${b.name}: жемчуг к ${foe.id} (+${Math.round(dy)}) — ${r.ok ? 'долетел' : (typeof r.why === 'object' ? JSON.stringify(r.why) : String(r.stop || r.why || 'нет')).slice(0, 80)}`)
@@ -193,16 +221,22 @@ export function swarmClimb (sw: SwarmDriverCtx) {
     if (!r.dug) { failed(b, `dig:${b.name}`); if (sandSpot && distance(m.p, sandSpot) > 12) { await go(b, sandSpot, 6, 8); return true } }
     return (r.dug || 0) > 0
   }
-  async function breach(b, at) {
-    if ((cooldown.get(`breach:${b.name}`) || 0) > now() || blocked(b, `breach:${b.name}`, coarse(at))) return false
+  async function breach(b, at, visibleEntrance?: string) {
+    const key = `breach:${b.name}`, sig = visibleEntrance ? cellKey(at) + ':' + visibleEntrance : coarse(at)
+    if ((cooldown.get(key) || 0) > now() || blocked(b, key, sig)) return false
     const me = pos[b.name]?.p, inv = pos[b.name]?.inv || {}
-    if (me && !Object.keys(inv).some(n => /_pickaxe$/.test(n))) {
+    if (me && !Object.keys(inv).some(n => /_pickaxe$/.test(n) && inv[n] > 0)) {
+      if (visibleEntrance) return false
       const d = distance(me, at) || 1
       if (await blast(b, { x: me.x + (at.x - me.x) / d * 2, y: me.y, z: me.z + (at.z - me.z) / d * 2 }, 'в стену к цели')) return true
     }
-    cooldown.set(`breach:${b.name}`, now() + 2000) // частота опроса, не неудача
-    const r = detail(await b.c.call('dig_to', { at: { x: at.x, y: at.y, z: at.z }, maxSteps: 6, timeoutSeconds: 8 }).catch(e => ({ why: e.message })))
-    if (!r.dug) { failed(b, `breach:${b.name}`, coarse(at)); return false }
+    cooldown.set(key, now() + 2000) // частота опроса, не неудача
+    const raw = await b.c.call('dig_to', { at: { x: at.x, y: at.y, z: at.z }, arena, maxSteps: visibleEntrance ? 1 : 6, timeoutSeconds: 8 }).catch(e => ({ why: e.message }))
+    const r = detail(raw)
+    if (!r.dug) {
+      if (!r.ok && !raw?.notStarted && raw?.status !== 'interrupted' && raw?.status !== 'skipped') failed(b, key, sig)
+      return false
+    }
     log(`⛏ ${b.name}: прокапываюсь к цели — ${r.dug} бл.${r.ok ? ', дошёл' : r.why ? ` (${r.why})` : ''}`)
     return true
   }
@@ -211,18 +245,32 @@ export function swarmClimb (sw: SwarmDriverCtx) {
   // раза, посадка в 1 бл. от сундука крыши) или ряды ближе к цели, если с поля выше +30 (венец +33 — с поля 0 из 2). Высота —
   // по поверхности модели. Место, откуда броска не нашлось или куда не дошёл, — своей записью неудачи (retry.ts).
   const spotKey = (b, c) => `pearlSpot:${b.name}:${c.x},${c.y},${c.z}`
-  const launchSpot = (b, h) => {
-    if (!surfaceY) return null
-    const dx = arena.x - h.x, dz = arena.z - h.z, d = Math.hypot(dx, dz) || 1
+  const avoidKey = bounds => (bounds?.avoid || []).map(e => coarse(e) + '/' + Math.round(e.r)).sort().join('|')
+  const loggedFeet = (p: SwarmPosition) => [p.x, p.y, p.z].map(n => Math.round(n * 100) / 100).join(',')
+  const launches = new Map<string, SwarmPosition[]>()
+  let launchRound = sw.generation
+  const launchSpot = (b, h, from, bounds, danger: string, reports: SwarmPosition[] = []) => {
+    const center = arena ?? from
+    const dx = center.x - h.x, dz = center.z - h.z, d = Math.hypot(dx, dz) || 1
     const spots: any[] = []
-    for (const r of [26, 24, 28, 22, 30, 18, 14, 10]) {
+    for (const r of surfaceY ? [26, 24, 28, 22, 30, 18, 14, 10] : []) {
       const x = h.x + dx / d * r, z = h.z + dz / d * r, y = surfaceY(x, z, h.y - 4)
       if (y == null || h.y - y < 4 || h.y - y > 33) continue
       const cell = { x: Math.floor(x), y, z: Math.floor(z) }
-      if (!blocked(b, spotKey(b, cell))) spots.push({ cell, high: h.y - y > 30, r })
+      const spot = { x: cell.x + .5, y, z: cell.z + .5, cell }
+      if (distance(spot, from) <= 1.5 || !withinArena(b, spot, bounds) || blocked(b, spotKey(b, cell))) continue
+      spots.push({ spot, high: h.y - y > 30 })
     }
-    const best = spots.sort((p, q) => Number(p.high) - Number(q.high))[0]
-    return best ? { x: best.cell.x + .5, y: best.cell.y, z: best.cell.z + .5, cell: best.cell } : null
+    let best = spots.sort((p, q) => Number(p.high) - Number(q.high) || distance(p.spot, from) - distance(q.spot, from))[0]?.spot
+    for (const report of reports) {
+      const gap = distance(report, from)
+      if (best && gap > distance(best, from) || !withinArena(b, report, bounds)) continue
+      const cell = { x: Math.floor(report.x), y: Math.floor(report.y), z: Math.floor(report.z) }
+      const fine = Math.hypot(report.x - from.x, report.z - from.z) <= 2 && Math.abs(report.y - from.y) <= .08
+      const retry = fine ? `pearlStand:${b.name}:${cellKey(report)}` : `pearlWalk:${b.name}:${cellKey(cell)}`
+      if (!blocked(b, retry, fine ? danger : '')) best = { ...report, cell, fine, retry }
+    }
+    return best
   }
   // Наверх жемчугом (пользователь 21.10: «каждый с первого раза точно математическим расчётом закидывает на самый верх, берёт
   // незерит»): отсюда есть бросок (pearl_plan: посадка у цели, дуга по блокам, разброс, бросок в прыжке) — бросить (pearl_up);
@@ -230,37 +278,79 @@ export function swarmClimb (sw: SwarmDriverCtx) {
   // Ответ: { arrived } — долетел; { moved } — идёт к месту броска; { arrived: false, why } — бросок не удался.
   async function pearlUp (b, h) {
     const inv = pos[b.name]?.inv || {}, me = pos[b.name]?.p
-    if (!me || !((inv.ender_pearl || 0) > 0) || (pos[b.name]?.hp ?? 20) <= 10) return null
-    // Неудача — для всех верхних целей с этого места (не вышел бросок к одной — к соседней на той же крыше тоже не выйдет).
-    const to = { x: h.x, y: h.y, z: h.z }, key = `pearlUp:${b.name}`, sig = `${inv.ender_pearl}`
-    if (blocked(b, key, sig)) return null
+    if (!me || me.y <= arena?.killY || !((inv.ender_pearl || 0) > 0) || (pos[b.name]?.hp ?? 20) <= 10) return null
+    const round = sw.generation, owner = b.swarmTurnOwner
+    const ownsTurn = () => round === sw.generation && owner === b.swarmTurnOwner
+    const stopped = () => !ownsTurn() || !currentTurn(sw, b, round) || underArrowFire(b, now())
+    if (launchRound !== round) { launches.clear(); launchRound = round }
+    const to = { x: h.x, y: h.y, z: h.z }, key = `pearlUp:${b.name}:${cellKey(to)}`
+    const reportKey = `${b.team || b.name}:${cellKey(to)}`, reports = launches.get(reportKey)
+    const reportCount = reports?.length || 0
+    const routeArena = () => lootArena?.(b) ?? arena
+    const signature = bounds => [inv.ender_pearl, reportCount, avoidKey(bounds)].join('|')
+    const bounds = routeArena()
+    if (stopped()) return { moved: true }
+    if (blocked(b, key, signature(bounds)) || !withinArena(b, to, bounds)) return null
     // Два жемчуга и больше — сразу бросок с цепочкой до двух (pearl-hop.planRoute: промежуточная посадка на ярусе); один —
     // только если отсюда есть одиночный бросок (pearl_plan). Броска нет — к месту броска (следующий ход бросит оттуда).
-    const plan = (inv.ender_pearl || 0) >= 2 ? { ok: true, arc: 'цепочка', jump: '' } : detail(await b.c.call('pearl_plan', { to }).catch(e => ({ why: e.message })))
-    if (underArrowFire(b, now())) return { moved: true }
+    const preview = (inv.ender_pearl || 0) === 1
+    const check = preview ? await b.c.call('pearl_plan', { to, arena: bounds }).catch(e => ({ why: e.message })) : null
+    if (stopped() || check?.notStarted || check?.status === 'interrupted' || check?.status === 'skipped') return { moved: true }
+    const plan = preview ? detail(check) : { ok: true, arc: 'цепочка', jump: '' }
+    const launchBounds = preview ? routeArena() : bounds
+    if (!withinArena(b, to, launchBounds)) return null
     let why = plan.why
     if (plan.ok) {
       b.climbing = true
-      const r = detail(await b.c.call('pearl_up', { to, maxHops: 2, _climb: true }).catch(e => ({ why: e.message })).finally(() => { b.climbing = false }))
-      if (underArrowFire(b, now())) return { moved: true }
-      log(`🟣 ${b.name}: жемчугом наверх (+${Math.round(h.y - me.y)}, ${plan.jump || 'с места'}, ${plan.arc}) — ${r.ok ? 'долетел' : String(r.stop || (typeof r.why === 'object' ? JSON.stringify(r.why) : r.why) || 'нет').slice(0, 80)}${r.at ? ' → ' + cellKey(r.at) : ''}`)
-      if (r.ok) { cleared(key); return { arrived: true, at: r.at } }
+      delete b.swarmPearlPost
+      const raw = await b.c.call('pearl_up', { to, arena: launchBounds, maxHops: 2, _climb: true }).catch(e => ({ why: e.message })).finally(() => { if (ownsTurn()) b.climbing = false })
+      if (stopped() || raw?.notStarted || raw?.status === 'interrupted' || raw?.status === 'skipped') return { moved: true }
+      const r = detail(raw)
+      const footing = (!raw?.status || raw.status === 'done') && !r.ok && r.hops > 0 && r.stop === 'нет броска' && r.partialLanding
+      const partial = footing && [footing.x, footing.y, footing.z].every(Number.isFinite) && withinArena(b, footing, launchBounds)
+      const outcome = r.ok ? 'долетел' : partial ? 'сел на промежуточную опору, дальше нет броска' : String(r.stop || (typeof r.why === 'object' ? JSON.stringify(r.why) : r.why) || 'нет').slice(0, 80)
+      log(`🟣 ${b.name}: жемчугом наверх (+${Math.round(h.y - me.y)}, ${plan.jump || 'с места'}, ${plan.arc}) — ${outcome}${r.at ? ' → ' + cellKey(r.at) : ''}, цель ${cellKey(to)}`)
+      if (r.ok) {
+        if (r.hops > 0 && r.landing?.y > me.y && [r.landing.x, r.landing.y, r.landing.z].every(Number.isFinite) && withinArena(b, r.landing, launchBounds))
+          b.swarmPearlPost = { at: r.landing, round }
+        if (r.hops > 0 && r.launchAt && [r.launchAt.x, r.launchAt.y, r.launchAt.z].every(Number.isFinite)) {
+          const sites = launches.get(reportKey) ?? []
+          // Two certified positions can have different arcs inside one block. Coalesce overlapping .08-block stances.
+          if (!sites.some(p => distance(p, r.launchAt) <= .16)) {
+            sites.push({ ...r.launchAt })
+            launches.set(reportKey, sites)
+          }
+        }
+        cleared(key); return { arrived: true, at: r.at }
+      }
       // Бросил и не долетел — неудача с этого места; не нашёл броска (жемчуг цел) — к месту броска.
-      if (r.hops || r.stop !== 'нет броска') { failed(b, key, sig); return { arrived: false, why: r.stop || r.why } }
+      if (r.hops || r.stop !== 'нет броска') {
+        failed(b, key, signature(launchBounds))
+        return { arrived: false, why: r.stop || r.why, ...(partial && { at: footing }) }
+      }
       why = r.why || r.stop
     }
     const here = { x: Math.floor(me.x), y: Math.floor(me.y), z: Math.floor(me.z) }
     failed(b, spotKey(b, here)) // отсюда броска нет — это место броска не годится (пока стоим тут)
-    const spot = launchSpot(b, h)
-    if (!spot || distance(spot, me) < 1.5) { failed(b, key, sig); log(`🟣 ${b.name}: наверх (+${Math.round(h.y - me.y)}) броска нет — ${JSON.stringify(why || '?').slice(0, 90)}`); return null }
+    const walkBounds = routeArena()
+    if (!withinArena(b, to, walkBounds)) return null
+    const danger = avoidKey(walkBounds)
+    const spot = launchSpot(b, h, me, walkBounds, danger, reports)
+    if (!spot) { failed(b, key, signature(walkBounds)); log(`🟣 ${b.name}: наверх (+${Math.round(h.y - me.y)}) броска нет — ${JSON.stringify(why || '?').slice(0, 90)}, цель ${cellKey(to)}`); return null }
     // К месту броска — с подъёмом (ряды ступенями: без climb путь по ним часто «не найден»).
     b.climbing = true
-    const raw: any = await b.c.call('goto', { ...bounded(spot), range: 1.5, timeoutSeconds: 16, arena, climb: true, _climb: true, _hunt: true }).catch(e => ({ status: 'failed', why: e.message })).finally(() => { b.climbing = false })
+    const at = { x: spot.x, y: spot.y, z: spot.z }
+    const walk = spot.fine
+      ? b.c.call('pearl_stand', { at, arena: walkBounds, _climb: true })
+      : b.c.call('goto', { ...at, range: spot.retry ? 0 : 1.5, timeoutSeconds: 16, arena: walkBounds, climb: true, exactY: true, _climb: true, _hunt: true })
+    const raw: any = await walk.catch(e => ({ status: 'failed', why: e.message })).finally(() => { if (ownsTurn()) b.climbing = false })
     const r = detail(raw)
     // Поход оборвали (смена фазы, тревога) — не неудача места.
-    if (raw?.status === 'interrupted' || raw?.status === 'skipped' || underArrowFire(b, now())) return { moved: true }
-    log(`🟣 ${b.name}: к месту броска наверх ${cellKey({ x: Math.floor(spot.x), y: spot.y, z: Math.floor(spot.z) })} (цель +${Math.round(h.y - spot.y)}) — ${r.arrived ? 'на месте' : String(r.why || r.stopped || 'не дошёл').slice(0, 50)}`)
-    if (!r.arrived) failed(b, spotKey(b, spot.cell))
+    if (raw?.notStarted || raw?.status === 'interrupted' || raw?.status === 'skipped' || stopped()) return { moved: true }
+    const arrived = spot.fine ? r.ok : r.arrived
+    log(`🟣 ${b.name}: к месту броска наверх ${loggedFeet(at)} (цель +${Math.round(h.y - spot.y)}) — ${arrived ? 'на месте' : String(r.why || r.stopped || 'не дошёл').slice(0, 50)}, цель ${cellKey(to)}${spot.fine && r.at ? ', ноги ' + loggedFeet(r.at) : ''}`)
+    // A reported arrival can still be off the footing. Reprice the shot, then try another approach if nothing changed.
+    if (spot.retry || !arrived) failed(b, spot.retry ?? spotKey(b, spot.cell), spot.fine ? danger : '')
     return { moved: true }
   }
   return { MAT, ARM, weaponValue, armorOf, grab, climbTo, breach, pearlUp }

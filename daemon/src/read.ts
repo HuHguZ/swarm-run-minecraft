@@ -158,6 +158,13 @@ function heldIn (e) {
   const eq = (e && e.equipment) || []
   return { main: eq[0] || null, off: eq[1] || null }
 }
+function heldCrossbowInfo (bot, e) {
+  if (e?._ndVisible === false) return null
+  const primary = e?._ndGearVisible?.[0] === false ? null : crossbowInfo(bot, e?.equipment?.[0])
+  if (primary?.loaded) return primary
+  const secondary = e?._ndGearVisible?.[1] === false ? null : crossbowInfo(bot, e?.equipment?.[1])
+  return secondary?.loaded ? secondary : primary || secondary
+}
 function hasTotemInHand (e) {
   const h = heldIn(e)
   return !!((h.main && h.main.name === 'totem_of_undying') || (h.off && h.off.name === 'totem_of_undying'))
@@ -248,8 +255,7 @@ function watch (bot, { threats = () => [], visible = () => true }: any = {}) {
     const eff: Set<string> = effectsOf(bot, e) as Set<string>
     if (abs > s.absMax) { s.absMax = abs; if (abs > 0) stats.absorb = Math.max(stats.absorb, abs) }
     for (const n of eff) if (!s.seenEff.has(n)) { s.seenEff.add(n); stats.effects[n] = (stats.effects[n] || 0) + 1 }
-    const h = heldIn(e)
-    const cb = crossbowInfo(bot, h.main) || crossbowInfo(bot, h.off)
+    const cb = heldCrossbowInfo(bot, e)
     return {
       hp, abs, ehp: hp == null ? null : hp + abs,
       effects: eff,
@@ -272,8 +278,7 @@ function watch (bot, { threats = () => [], visible = () => true }: any = {}) {
   // Его заряженный арбалет смотрит на нас (угол ≤ maxDeg): чем заряжен и с какими чарами.
   W.aimedAtMe = (e, maxDeg = 10) => {
     if (!e || !e.position || !bot.entity) return null
-    const h = heldIn(e)
-    const cb = crossbowInfo(bot, h.main) || crossbowInfo(bot, h.off)
+    const cb = heldCrossbowInfo(bot, e)
     if (!cb || !cb.loaded) return null
     const ang = aimAngle(bot, e)
     if (ang > maxDeg) return null
@@ -292,6 +297,6 @@ function watch (bot, { threats = () => [], visible = () => true }: any = {}) {
 }
 
 export {
-  watch, installLoaded, absorptionOf, healthRaw, effectsOf, enchLevel, crossbowInfo, aimAngle, lookDir, hasTotemInHand, spearIn,
+  watch, installLoaded, absorptionOf, healthRaw, effectsOf, enchLevel, crossbowInfo, heldCrossbowInfo, aimAngle, lookDir, hasTotemInHand, spearIn,
   EFFECT_COLOR, TOTEM_WINDOW_MS, SHIELD_OFF_MS
 }

@@ -455,14 +455,16 @@ test('the native forecast distinguishes a wall before landing from open interior
   }
 })
 
-test('a supported crossing only stays terminal if the forecast remains outside', () => {
+test('a new supported crossing counts, while holding or leaving a pre-existing exterior perch earns no new exit', () => {
   const f = fixture(), feet = new Vec3(679.5, 120, 600.5)
   const foe = { ...f.foe(), position: feet, onGround: true, yaw: Math.PI / 2 }
+  const crosses = rollout(f.bot, { ...foe, position: new Vec3(677.6, 120, 600.5), velocity: new Vec3(.35, 0, 0) }, [], f.arena, 0)
+  assert.equal(crosses.out, true); assert.equal(crosses.exited, true)
   const stays = rollout(f.bot, foe, [], f.arena, 0)
-  assert.equal(stays.out, true)
+  assert.equal(stays.out, false); assert.equal(stays.exited, false)
   const returns = rollout(f.bot, { ...foe, velocity: new Vec3(-.21, -.0784, 0),
     run: { yaw: Math.PI / 2, control: { forward: true, sprint: true } } }, [], f.arena, 0)
-  assert.equal(returns.exited, true)
+  assert.equal(returns.exited, false)
   assert.equal(returns.out, false)
   assert.equal(returns.ticks, null)
 })

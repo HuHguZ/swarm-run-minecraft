@@ -7,6 +7,17 @@ import { swarmLifecycle } from './swarm/swarm-driver/lifecycle'
 
 const turn = () => new Promise(resolve => setImmediate(resolve))
 
+test('a pushed danger below the death plane cannot spend an item or displace native rescue', () => {
+  const p = { x: 524, y: 62.3, z: 545 }, calls = []
+  const b: any = { name: 'A', c: { call: async m => { calls.push(m); return {} } } }
+  const ctx: any = { arms: true, Y: 120, L: { y0: -4 }, round: 1, bots: [b], pos: { A: { p } },
+    busy: new Set(), out: new Set(), deadNow: new Set(), log() {} }
+  installDangers(ctx)
+  b.c.onDanger({ pos: p, dangers: { aims: [{ name: 'Foe', weapon: 'bow', at: p }] } })
+  assert.equal(b.arrowThreat, undefined)
+  assert.deepEqual(calls, [])
+})
+
 function fixture(t, extra = {}) {
   const calls: any[] = [], queued: any[] = [], p = { x: 0, y: 64, z: 0 }
   let now = 10000, geometry = 'stone'
@@ -36,6 +47,48 @@ function fixture(t, extra = {}) {
   return { b, ctx, calls, aim, dodge, p, report, flush,
     advance: ms => { now += ms }, geometry: value => { geometry = value } }
 }
+
+test('a fresh blast warning retries an interrupted escape from the same block without spamming the body', async t => {
+  const f = fixture(t), source = { id: 7, at: f.p, primed: true, fuse: 28 }
+  const warn = () => f.report({ blasts: [source] })
+  warn(); warn()
+  assert.equal(f.calls.length, 1)
+  f.calls[0].reject(Error('interrupted')); await turn()
+  warn()
+  assert.equal(f.calls.length, 1)
+  f.advance(350); source.fuse = 21; warn()
+  assert.deepEqual(f.calls.map(a => a.method), ['dodge_blast', 'dodge_blast'])
+  f.calls[1].reply({ clear: true }); await turn()
+  f.advance(350); warn()
+  assert.equal(f.calls.length, 2)
+})
+
+test('a visible anchor and TNT start one escape with the observed opponent', t => {
+  const logs: string[] = [], g = fixture(t, {log: line => logs.push(line)})
+  g.report({ blasts: [
+    { kind: 'respawn_anchor', at: g.p, foe: 'Red', fuse: null, reach: 10 },
+    { id: 7, at: g.p, primed: true, fuse: 24 },
+  ] })
+  assert.deepEqual(g.calls.map(c => [c.method, c.params]), [['dodge_blast', { instant: true, enemies: ['Red'] }]])
+  assert.match(logs[0], /якорь/)
+  assert.match(logs[0], /24 т/)
+})
+
+test('a visible arrow on course for a crystal can trigger protection without identifying a shooter', t => {
+  const f = fixture(t)
+  f.report({ blasts: [{ kind: 'end_crystal', at: f.p, projectile: 42, fuse: null }] })
+  assert.deepEqual(f.calls.map(c => c.params), [{ instant: true }])
+})
+
+test('a trapped fighter checks a still visible armed anchor again after the exit can change', async t => {
+  const f = fixture(t), hazards = { blasts: [{ kind: 'respawn_anchor', at: f.p, foe: 'Red', fuse: null }] }
+  f.report(hazards)
+  f.calls[0].reply({ clear: false, cornered: true }); await turn()
+  f.advance(400); f.report(hazards)
+  assert.equal(f.calls.length, 1)
+  f.advance(400); f.report(hazards)
+  assert.equal(f.calls.length, 2)
+})
 
 test('сообщение о спуске печатается без запуска новой реакции', t => {
   const lines: string[] = [], f = fixture(t, { log: line => lines.push(line), between: true })
@@ -268,13 +321,14 @@ for (const reject of [false, true]) test(`a ${reject ? 'rejected' : 'failed'} ma
 
 test('floor taken from under the feet while a foe is near: step off at once, no drop, before a mace reaction', t => {
   // Пользователь 22.10: «ломаю блоки под ними — они в дырки улетают, ничего не делают».
-  const f = fixture(t)
+  const f = fixture(t, { arms: true, X: 0, Y: 64, Z: 0, R: 32, L: { y0: -2 } })
   f.ctx.pos.A.inv = { shield: 1 }
   f.report({ floor: [{ name: 'Foe', at: { x: 0.5, y: 63, z: 0.5 }, from: { x: 3, y: 64, z: 0 }, ticks: 0, holes: 2 }],
     smashes: [{ name: 'Foe', ticks: 10, at: f.p }] })
   assert.equal(f.calls.length, 1)
   assert.equal(f.calls[0].method, 'evade', 'off the cracked floor first')
   assert.equal(f.calls[0].params.maxDrop, 0)
+  assert.deepEqual(f.calls[0].params.arena, { x: .5, y: 64, z: .5, r: 32, killY: 59, ellipse: undefined })
 })
 
 test('a shield raised against a mace stays up when the floor cracks: a step off drops the shield under a one-shot', t => {

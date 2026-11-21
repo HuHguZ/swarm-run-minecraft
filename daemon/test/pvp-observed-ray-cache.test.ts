@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 import * as clock from '../src/game-clock'
 import { observedCollision } from '../src/pvp/search'
+import { windCollisionWorld } from '../src/combat/enemy-wind'
 import { Block, block, data, testBot } from './tick-plugins-fixture'
 
 function scene(t) {
@@ -26,6 +27,20 @@ function once(reads: Map<string, number>) {
   assert.ok(reads.size > 1, 'the real ray must traverse several cells')
   assert.deepEqual([...reads].filter(([, count]) => count > 1), [], 'one synchronous query must read each raw cell at most once')
 }
+
+test('each wind forecast surveys from one eye and a new release sees the current pose and cover', t => {
+  const f = scene(t), pick = require('../src/pick')
+  const eyes = t.mock.method(pick, 'eyeOf')
+  f.put(new Vec3(2, 0, 0), 'stone')
+  const target = new Vec3(4, 0, 0), standing = windCollisionWorld(f.bot)
+  for (let x = 4; x < 12; x++) assert.equal(standing.blockAt(new Vec3(x, 0, 0))?.name, 'air')
+  assert.equal(eyes.mock.callCount(), 1)
+  f.bot.entity.elytraFlying = true
+  assert.equal(windCollisionWorld(f.bot).blockAt(target), null)
+  f.put(new Vec3(2, 0, 0), 'air')
+  assert.equal(windCollisionWorld(f.bot).blockAt(target)?.name, 'air')
+  assert.equal(eyes.mock.callCount(), 3)
+})
 
 test('a visible cell reuses the real LOS read for its final raw block', t => {
   const f = scene(t), target = new Vec3(4, 1, 0)
@@ -154,6 +169,19 @@ test('occluders expire after the synchronous forecast even without a clock tick'
   await Promise.resolve()
   f.put(wall, 'air')
   assert.equal(f.view.blockAt(new Vec3(5, 1, 0))?.name, 'air')
+})
+
+test('a live survey rechecks the same cell when a door closes and reopens between ticks', async t => {
+  const f = scene(t), door = new Vec3(2, 1, 0), target = new Vec3(4, 1, 0)
+  assert.equal(f.view.blockAt(target)?.name, 'air')
+  await Promise.resolve()
+  f.put(door, 'stone'); f.put(target, 'diamond_block')
+  f.reads.clear()
+  assert.equal(f.view.blockAt(target), null)
+  assert.equal(f.reads.has(target.toString()), false)
+  await Promise.resolve()
+  f.put(door, 'air')
+  assert.equal(f.view.blockAt(target)?.name, 'diamond_block')
 })
 
 test('a reused wall cannot hide the visible ray which only grazes its corner', t => {

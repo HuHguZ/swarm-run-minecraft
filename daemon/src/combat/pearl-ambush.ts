@@ -7,6 +7,7 @@ import * as gameClock from '../game-clock'
 import { createLastSeen } from '../pvp/last-seen'
 import { isAlly } from './ally-safety'
 import { worldTick } from './team-wind'
+import { pearlDeadline } from './pearl-clock'
 
 // Взлёт булавы: вершина 8 бл. над точкой взлёта (медиана 261 взлёта арены, 7.9–8.2) — подъём 1.18 бл./т., тяжесть 0.08,
 // сопротивление 0.98. OVERHEAD — тики windSmash от конца заряда до отрыва: ожидание земли, прыжок, полёт заряда.
@@ -88,19 +89,42 @@ async function approachAmbush(session: any, ctl: any, p: any, bot: any, sight: R
   let travel = 'бег'
   // Бьют, пока жду появления, — засада снята: стоять под мечом ради чужого жемчуга нельзя (игра пользователя 24.10).
   const hp0 = bot.health ?? 20, hurt = () => (bot.health ?? 20) < hp0 - 1
-  const current = () => !ctl.aborted && bot.entity === body && (arrivalTick === null || tick() !== null)
-  let targetLife = bot.players?.[p.owner]?.entity, seen = null, armed = false
+  const sameBody = () => bot.entity === body && (!('bot' in session) || session.bot === bot)
+  const owns = () => sameBody() && (!session.current?.ctl || session.current.ctl === ctl)
+  const current = () => !ctl.aborted && owns() && (arrivalTick === null || tick() !== null)
+  const started = gameClock.observationNow()
+  let targetLife = bot.players?.[p.owner]?.entity, seen = null, armed = false, arrived = false
   const real = () => {
     const player = bot.players?.[p.owner], e = player?.entity
     if (!e || e === body || e.isValid === false || player.gamemode === 3 || isAlly(bot, e) || targetLife && e !== targetLife) return null
     targetLife ??= e
     return e
   }
+  // Seeing the owner is optional during the projectile flight. A known replacement life
+  // or spectator cannot be the thrower we were sent to meet.
+  const canCommit = () => {
+    if (!current() || hurt() || isAlly(bot, p.owner)) return false
+    const player = bot.players?.[p.owner]
+    if (player?.gamemode === 3 || targetLife?.isValid === false || targetLife && player?.entity && player.entity !== targetLife) return false
+    return !wind || !!sight.observe(real())?._ndVisible
+  }
   if (wind && (!real() || p.entity !== undefined && targetLife?.id !== p.entity)) return { ok: false, why: 'цель посадки пропала' }
   const strikeTarget = () => {
-    const reached = arrivalTick === null || (tick() ?? -Infinity) >= arrivalTick
-    const e = reached && bot.entity === body && (!wind || !ctl.aborted) ? sight.observe(real()) : null
-    return (seen = e?._ndVisible && (!wind || e.onGround) && e.position.distanceTo(at) < 3 ? e : null)
+    if (!current()) return (seen = null)
+    const reached = left() <= 0
+    if (wind && !reached) return (seen = null)
+    const e = sight.observe(real())
+    if (!e?._ndVisible || wind && !e.onGround || e.position.distanceTo(at) >= 3) return (seen = null)
+    if (!reached && !arrived) {
+      // A pearl can hit something earlier than the forecast. A fresh, directly witnessed
+      // absolute jump beyond the relative movement packet range is public evidence of arrival.
+      const [old, next] = e._ndPositionReceipts || []
+      arrived = !!old && next?.t > started && (next.kind === 'entity_teleport' || next.kind === 'sync_entity_position') &&
+        Math.max(Math.abs(next.x - old.x), Math.abs(next.y - old.y), Math.abs(next.z - old.z)) >= 8
+      if (!arrived) return (seen = null)
+    }
+    if (hands.shieldAtUs(bot, e) && !bot.inventory.slots.slice(36, 45).some(it => it && /_axe$/.test(it.name))) return (seen = null)
+    return (seen = e)
   }
   const here = () => { if (!strikeTarget()) return false; armed = true; return true }
   const refresh = () => {
@@ -115,14 +139,20 @@ async function approachAmbush(session: any, ctl: any, p: any, bot: any, sight: R
   }
   // Before contact the proxy is a steering point. The packet callback rechecks the same live visible target.
   const ghost: any = new Proxy({}, { get (_t, k) {
-    if (k === 'isValid') return bot.entity === body && (!armed || !!strikeTarget())
+    if (k === 'isValid') return current() && (!armed || !!strikeTarget())
     if (k === 'position') return seen?.position || at
-    if (k === 'id') return armed && real() ? seen?.id : undefined
+    if (k === 'id') return armed && current() && real() ? seen?.id : undefined
     return (seen || { username: p.owner, type: 'player', width: .6, height: 1.8 })[k]
   } })
   const track: typeof import('../bow/track') = require('../bow/track')
   const vel = () => { const e = strikeTarget(); return e ? track.observedVelocity(e) : { x: 0, y: 0, z: 0 } }
-  const combo = wind ? 'wind_ambush' : 'pearl_ambush'
+  const combo = { kind: wind ? 'wind_ambush' : 'pearl_ambush', until: 0 }
+  const claim = (grace: number) => { combo.until = gameClock.now() + left() + grace; bot._ndCombo = combo }
+  const release = () => {
+    if (bot._ndCombo !== combo) return
+    delete bot._ndCombo
+    if (owns()) bot.clearControlStates()
+  }
   // Не успеть «добежать, потом взлететь» (жемчуг летит 1.5–2 с, стенд 24.10: 11–15 бл. и взлёт 1.5 с — ни одной засады):
   // прыжок на заряде ветра прямо к точке и на его спуске — булава в точку появления. Путь и удар — одно движение.
   const smashDown = async (travel: string) => {
@@ -131,10 +161,11 @@ async function approachAmbush(session: any, ctl: any, p: any, bot: any, sight: R
     const r: any = await mace.descend(bot, alive, ghost, { vel, ready: here, maxMs: 3000 })
     return { ok: true, hit: !!r.hit, travel, fall: r.hit?.fall, why: r.why, lateMs: -left() }
   }
-  // После отрыва отменяет только смерть: срок засады или новое задание посреди полёта оставили бы падать без булавы.
-  const alive = { get aborted () { return bot.entity !== body || !((bot.health ?? 0) > 0) } }
+  // A timed-out strike may still need to land. Yield the descent as soon as another action owns the body.
+  const alive = { get aborted () { return !owns() || !((bot.health ?? 0) > 0) || bot._ndCombo !== combo } }
   if (!ambushPlan(left(), at.y - me().y, flat() / AMBUSH_RUN * 1000) && bot.entity.onGround && (!wind || refresh())) {
     await hands.ensureHotbar(bot, ['mace']).catch(() => {})
+    if (!canCommit()) return { ok: false, why: 'заход прерван', travel }
     // «Тягун» в грозу или воде — быстрее всего на 10–30 бл.: низкая дуга (вершина от 3 бл. — хватит на удар) за ~1 с и падение
     // булавой в точку; заряд трезубца 10 тиков + разгон. Промах страхует сторож падения (ведро), как в связке боя.
     const td: typeof import('../utility/trident') = require('../utility/trident')
@@ -145,14 +176,15 @@ async function approachAmbush(session: any, ctl: any, p: any, bot: any, sight: R
       const arc = rt.riptideArcs(tri.riptide, me(), at, insured ? 48 : (bot.health ?? 0) - 5, [0, .25, -.25], 3)
         .filter(a => (16 + a.ticks) * 50 <= left() + 300).sort((a, b) => a.ticks - b.ticks)[0]
       if (arc) {
-        bot._ndCombo = { kind: combo, until: gameClock.now() + left() + 3500 }
-        bot._ndRiptideMace = { maxDamage: insured ? 1000 : Math.max(0, (bot.health ?? 0) - 6) }
+        claim(3500)
+        const riptide = { maxDamage: insured ? 1000 : Math.max(0, (bot.health ?? 0) - 6) }
+        bot._ndRiptideMace = riptide
         try {
           const r: any = await td.riptide(bot, arc.yaw, arc.pitch, { ctl: alive })
-          delete bot._ndRiptideMace
+          if (bot._ndRiptideMace === riptide) delete bot._ndRiptideMace
           if (!r.ok) return { ok: false, why: `Тягун: ${r.why}`, travel: 'Тягун' }
           return await smashDown('Тягун+спуск')
-        } finally { delete bot._ndRiptideMace; delete bot._ndCombo; bot.clearControlStates() }
+        } finally { if (bot._ndRiptideMace === riptide) delete bot._ndRiptideMace; release() }
       }
     }
     // Прыжок на заряде ветра к точке и на его спуске — булава в точку появления. Клетка посадки — любая из кольца вокруг
@@ -163,17 +195,17 @@ async function approachAmbush(session: any, ctl: any, p: any, bot: any, sight: R
         .sort((a, b) => a.distanceTo(me()) - b.distanceTo(me()))
       const over = (pos: Vec3) => pos.y - at.y >= 2.5 && Math.hypot(at.x - pos.x, at.z - pos.z) <= 3.5
       // Refresh may move the landing point. Both leap calls price the current point through this same predicate.
-      const options = { arena: p.arena, ...(wind ? { handoffAt: over, canLaunch: () => !!real() && !hurt() && left() > 0 } : {}) }
+      const options = { arena: p.arena, canLaunch: () => canCommit() && left() > 0, ...(wind ? { handoffAt: over } : {}) }
       let to: Vec3 | null = null
       for (const c of ring) { const d: any = await wl.leap(session, ctl, c, { ...options, dryRun: true }).catch(() => null); if (d?.ok) { to = c; break } }
       if (to && current() && !hurt() && (!wind || refresh())) {
-        bot._ndCombo = { kind: combo, until: gameClock.now() + left() + 3500 }
+        claim(3500)
         try {
           const lp: any = await wl.leap(session, ctl, to, { ...options, handoff: () => (!wind || !bot.entity.onGround) && over(me()) }).catch((e: any) => ({ ok: false, why: e.message }))
           if (lp?.handedOff) return await smashDown('ветер+спуск')
           // No leap plan means no movement started. A refreshed route may still be possible on foot.
           if (!wind || lp?.plan !== null) return { ok: false, why: `прыжок на ветре: ${lp?.ok ? 'сел рядом, без спуска' : lp?.why || '?'}`, travel: 'ветер' }
-        } finally { delete bot._ndCombo; bot.clearControlStates() }
+        } finally { release() }
       }
     }
   }
@@ -208,7 +240,7 @@ async function approachAmbush(session: any, ctl: any, p: any, bot: any, sight: R
   }
   let plan = ambushPlan(left(), at.y - me().y, flat() / AMBUSH_RUN * 1000)
   if (!plan) return { ok: false, why: `${travel}: опоздал — до появления ${left()} мс`, travel }
-  bot._ndCombo = { kind: combo, until: gameClock.now() + left() + 2500 }
+  claim(2500)
   try {
     // Бег к месту взлёта до срока (прямо: поле открытое; встал рядом — стоять).
     while (current() && !hurt()) {
@@ -223,43 +255,29 @@ async function approachAmbush(session: any, ctl: any, p: any, bot: any, sight: R
       const d = Math.hypot(stand.x - me().x, stand.z - me().z)
       if (d > .6) {
         await bot.look(Math.atan2(-(stand.x - me().x), -(stand.z - me().z)), 0, true).catch(() => {})
+        if (!current()) break
         bot.setControlState('forward', true); bot.setControlState('sprint', d > 2)
         bot.setControlState('jump', !!bot.entity.isCollidedHorizontally)
       } else bot.clearControlStates()
       await new Promise(r => gameClock.setTimeout(r, 50))
     }
-    bot.clearControlStates()
+    if (current()) bot.clearControlStates()
     if (!current() || hurt()) return { ok: false, why: hurt() ? 'меня бьют' : 'прервали', travel }
     if (distance() > 4.5) return { ok: false, why: `не добежал: до точки ${distance().toFixed(1)} бл.`, travel }
-    const r: any = await mace.windSmash(bot, ctl, ghost, { chargeTicks: plan.charge, ready: here, vel,
-      ...(wind ? { stillOk: () => current() && !hurt() && !!sight.observe(real())?._ndVisible } : {}) })
+    const r: any = await mace.windSmash(bot, ctl, ghost, { chargeTicks: plan.charge, ready: here, vel, stillOk: canCommit })
     return { ok: !!r.launched, hit: !!r.hit, travel, plan, why: r.launched ? undefined : r.note, note: r.note, dealt: r.dealt, fall: r.fall }
-  } finally { delete bot._ndCombo; bot.clearControlStates() }
+  } finally { release() }
 }
 
 // Подброс в точке появления: заряд ветра в пол под ней — всплеск через тик после телепорта (WindCharge 1.5 бл./т., без
 // тяжести: время полёта точно). Дальнему не надо бежать; подброшенного дальше жонглирует ветер (wind-out) и бьёт булава.
 export async function pearlPop(session: any, ctl: any, p: any = {}) {
   const bot = session.bot, hands: typeof import('../mace/hands') = require('../mace/hands'), tw: typeof import('./team-wind') = require('./team-wind')
-  const body = bot?.entity, nativeClock = bot?.ndClock, eta = Number(p.eta)
-  if (!body || !p.at || ![p.at.x, p.at.y, p.at.z, eta].every(Number.isFinite) || eta < 0)
-    return { ok: false, why: 'нет действительного прогноза посадки' }
-  let lastTick = worldTick(bot)
-  const timed = p.gameTick !== undefined
-  if (timed && (!Number.isSafeInteger(p.gameTick) || !Number.isSafeInteger(p.gameTick + eta) || lastTick === null || p.gameTick > lastTick + 20))
-    return { ok: false, why: 'нет действительного прогноза посадки' }
-  const at = new Vec3(p.at.x, p.at.y, p.at.z), arrival = gameClock.now() + eta * 50
-  const arrivalTick = timed ? p.gameTick + eta : null
-  const current = () => !ctl.aborted && session.bot === bot && bot.entity === body && bot.ndClock === nativeClock && !nativeClock?.disposed && !nativeClock?.frozen
-  const timeToFire = (flight: number) => {
-    if (!current()) return -Infinity
-    const flightMs = flight * 50 - 50
-    if (arrivalTick === null) return arrival - gameClock.now() - flightMs
-    const tick = worldTick(bot)
-    if (tick === null || lastTick !== null && tick < lastTick) return -Infinity
-    lastTick = tick
-    return (arrivalTick - tick) * 50 - flightMs
-  }
+  const deadline = pearlDeadline(session, bot, ctl, p)
+  if (!deadline) return { ok: false, why: 'нет действительного прогноза посадки' }
+  const at = new Vec3(p.at.x, p.at.y, p.at.z)
+  const current = () => Number.isFinite(deadline.left())
+  const timeToFire = (flight: number) => deadline.left() - (flight - 1) * 50
   const late = (ticks: number) => ({ ok: false, why: `поздно: полёт заряда ${ticks} т.` })
   if (!hands.offWind(bot) && !(await hands.ensureHotbar(bot, ['wind_charge']).catch(() => false))) return { ok: false, why: 'нет заряда в хотбаре' }
   // Пол — верх блока, в который попал жемчуг (он упадёт на него), или первый твёрдый под точкой появления.
@@ -297,17 +315,17 @@ const HARMFUL = /^(strong_|long_)?(harming|poison|weakness|slowness)$/
 export async function pearlPotion(session: any, ctl: any, p: any = {}) {
   const bot = session.require()
   const T: typeof import('../throw') = require('../throw'), potionOf = (require('../pvp') as typeof import('../pvp')).potionOf
-  const arrival = gameClock.now() + Number(p.eta) * 50
+  const deadline = pearlDeadline(session, bot, ctl, p)
+  if (!deadline || deadline.left() < 0) return { ok: false, why: 'нет действительного прогноза посадки' }
   const rank = (i: any) => (i.name === 'lingering_potion' ? 0 : 2) + (/harming/.test(String(potionOf(i))) ? 0 : 1)
   const it = bot.inventory.items().filter((i: any) => /^(lingering|splash)_potion$/.test(i.name) && HARMFUL.test(String(potionOf(i) || ''))).sort((a: any, b: any) => rank(a) - rank(b))[0]
   if (!it) return { ok: false, why: 'нет вредного зелья' }
   const at = new Vec3(p.at.x, p.at.y, p.at.z), eye = () => bot.entity.position.offset(0, 1.62, 0)
   const sol = T.aim(eye(), at, T.KINDS[it.name as 'splash_potion'])
   if (!sol) return { ok: false, why: `не докинуть: ${eye().distanceTo(at).toFixed(1)} бл.` }
-  const fireAt = it.name === 'lingering_potion' ? gameClock.now() : arrival - sol.ticks * 50
-  if (fireAt < gameClock.now() - 100) return { ok: false, why: `поздно: полёт ${sol.ticks} т.`, potion: potionOf(it) }
-  while (!ctl.aborted && gameClock.now() < fireAt - 25) await new Promise(r => gameClock.setTimeout(r, 25))
-  if (ctl.aborted) return { ok: false, why: 'прервали' }
-  const r = await T.throwAt(bot, at, { item: it })
-  return { ok: !!r.thrown, why: r.why, kind: it.name, potion: potionOf(it), lateMs: Math.round(gameClock.now() + (r.ticks ?? sol.ticks) * 50 - arrival) }
+  const fireIn = (ticks: number) => deadline.left() - ticks * 50
+  if (it.name !== 'lingering_potion') while (fireIn(sol.ticks) > 25) await new Promise(r => gameClock.setTimeout(r, 25))
+  if (fireIn(sol.ticks) < -100) return { ok: false, why: `поздно: полёт ${sol.ticks} т.`, potion: potionOf(it) }
+  const r = await T.throwAt(bot, at, { item: it, onAim: shot => fireIn(shot.sol.ticks) >= -100 })
+  return { ok: !!r.thrown, why: r.why, kind: it.name, potion: potionOf(it), lateMs: -Math.round(fireIn(r.ticks ?? sol.ticks)) }
 }

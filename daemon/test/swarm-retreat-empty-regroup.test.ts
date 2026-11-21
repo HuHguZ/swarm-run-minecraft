@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { SwarmBoard, pvpState } from '../src/swarm/board'
 import { pvpFrame, type PvpPlan } from '../src/swarm/plan-frame'
 import { pvpFlee } from '../src/swarm/plan-flee'
+import { planPvp } from '../src/swarm/plan-pvp'
 import { assessSwarmFight } from '../src/swarm/fight'
 import type { SwarmMember } from '../src/swarm/types'
 import type { RetreatWhy } from '../src/swarm/retreat'
@@ -79,4 +80,33 @@ test('the last own fighter clears its retreat under the existing endgame policy'
   assert.equal(S.endgame, true)
   assert.equal(state.retreats.has('a'), false)
   assert.equal(task, undefined)
+})
+
+test('a turned fighter reconsiders when its visible opponent equips enchanted armor and a sword', () => {
+  let now = 1000
+  const board = new SwarmBoard('blue', () => now)
+  const team: SwarmMember[] = [0, -32, -34, -36].map((x, i) => ({
+    id: 'b' + i, team: 'blue', position: point(x), health: 20, food: 20, role: 'fighter',
+    strength: i ? 60 : 1, weapon: i ? 'iron_sword' : undefined, inventory: i ? { iron_sword: 1 } : {}
+  }))
+  board.setMembers(team)
+  const own = team[0]
+  const seen = { id: 'foe', position: point(2), visible: true, threat: 'melee' as const }
+  board.observe(own.id, now, { ...seen, equipment: { armor: [] } })
+  const retreats = pvpState(board).retreats
+  retreats.set(own.id, { why: 'один', group: 1, foes: [seen.id], turned: seen.id })
+  const decide = () => planPvp(board, team, { foesLeft: 12 }).get(own.id)
+  const fair = decide()
+  assert.equal(fair?.kind, 'fight')
+  assert.equal(fair?.data.turned, true)
+  now += 50
+  board.observe(own.id, now, { ...seen, equipment: {
+    weapon: 'netherite_sword', armor: ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots'], enchanted: true
+  } })
+  const losing = decide()
+  assert.equal(losing?.kind, 'flee')
+  assert.match(losing.data.reason, /пустой размен/)
+  assert.equal(retreats.get(own.id)?.why, 'пустой размен')
+  now += 50
+  assert.equal(decide()?.kind, 'flee')
 })

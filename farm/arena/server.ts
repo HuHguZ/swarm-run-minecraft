@@ -2,7 +2,7 @@
 import { DIST_ROOT } from '../../daemon/src/paths'
 // Сервер слота: команды RCON (одно соединение на слот) или чатом распорядителя в LAN-мире пользователя, постройка
 // Колизея в LAN и игровое время драйвера на ускоренном сервере.
-import { ROOT, sleep, log } from './context'
+import { ROOT, sleep, log, type RoundCommand } from './context'
 import * as fs from 'fs'
 import path = require('path')
 import * as net from 'net'
@@ -12,13 +12,15 @@ const prop = (p, k) => (p.match(new RegExp('^' + k.replace('.', '\\.') + '=(.*)$
 // Одно соединение RCON на слот (колизей 10.10: соединение на команду — 3754 сокета в TIME_WAIT за три постройки по
 // ~1800 команд, EADDRINUSE и падение гонки). Ответ — по номеру пакета; оборвалось — следующая команда откроет заново.
 const pkt = (id, type, body) => { const b = Buffer.from(body, 'utf8'); const buf = Buffer.alloc(14 + b.length); buf.writeInt32LE(10 + b.length, 0); buf.writeInt32LE(id, 4); buf.writeInt32LE(type, 8); b.copy(buf, 12); return buf }
-const RCON: Record<number, any> = {}
-function rconConn (i) {
-  if (RCON[i]?.ok) return RCON[i].ready
+const RCON: Record<string, any> = {}
+function rconConn (i, channel?: RoundCommand['channel'], timeoutMs = 8000) {
+  // Paper RconClient.run accepts one request per read. The referee and round announcements each send sequentially.
+  const key = channel ? `${i}:${channel}` : String(i)
+  if (RCON[key]?.ok) return RCON[key].ready
   const p = props(i)
   const port = Number(prop(p, 'rcon.port')); const pass = prop(p, 'rcon.password')
   const s: any = { ok: true, wait: new Map(), id: 10, acc: Buffer.alloc(0) }
-  RCON[i] = s
+  RCON[key] = s
   s.sock = net.connect(port, '127.0.0.1', () => s.sock.write(pkt(1, 3, pass)))
   s.ready = new Promise<any>((resolve, reject) => s.wait.set(1, { resolve: (_b, id) => id === -1 ? reject(new Error('rcon auth failed')) : resolve(s), reject }))
   s.sock.on('data', d => {
@@ -35,7 +37,10 @@ function rconConn (i) {
   const fail = e => { s.ok = false; for (const w of s.wait.values()) w.reject(e); s.wait.clear() }
   s.sock.on('error', fail)
   s.sock.on('close', () => fail(new Error('rcon closed')))
-  s.ready.catch(() => {})
+  if (channel) {
+    const timer = setTimeout(() => s.sock.destroy(new Error('rcon timeout')), timeoutMs)
+    s.ready.then(() => clearTimeout(timer), () => clearTimeout(timer))
+  } else s.ready.catch(() => {})
   return s.ready
 }
 // LAN-мир пользователя (ARMS_LAN=<порт>, 10.10): RCON нет — команды шлёт бот-распорядитель чатом (в LAN с читами все —
@@ -63,9 +68,10 @@ function lanConn () {
   return lanBot
 }
 let lanAt = 0
-export async function lanCmd (cmd, timeoutMs = 3000, re: RegExp | null = null) {
+export async function lanCmd (cmd, timeoutMs = 3000, re: RegExp | null = null, round?: RoundCommand) {
   const bot = await lanConn()
   const due = Math.max(lanAt + 8, Date.now()); lanAt = due; if (due > Date.now()) await sleep(due - Date.now()) // ≤ 125 команд/с
+  if (round && !round.current()) return ''
   const ent = /^data get entity (\S+)/.exec(cmd)
   re = re || (/^list/.test(cmd) ? /players online/ : ent ? new RegExp(`^(${ent[1]} has the following|No entity was found|Found no elements)`) : null)
   if (!re) { bot.chat('/' + cmd); return '' }
@@ -76,14 +82,21 @@ export async function lanCmd (cmd, timeoutMs = 3000, re: RegExp | null = null) {
 }
 // Сокет закрылся или сервер не ответил (под нагрузкой 30 ботов) — ещё раз по новому соединению: без повтора первая же
 // осечка на старте роняла драйвер (бой роя 24.10: «rcon timeout», «rcon closed» — по 10 минут простоя).
-export function rcon (i, cmd, timeoutMs = 8000) {
-  return rconOnce(i, cmd, timeoutMs).catch(e => /rcon (closed|timeout)|ECONNRESET|EPIPE/.test(String(e?.message)) ? rconOnce(i, cmd, timeoutMs) : Promise.reject(e))
+export function rcon (i, cmd, timeoutMs = 8000, round?: RoundCommand) {
+  const send = () => rconOnce(i, cmd, timeoutMs, round)
+  return send().catch(e => /rcon (closed|timeout)|ECONNRESET|EPIPE/.test(String(e?.message)) ? send() : Promise.reject(e))
 }
-function rconOnce (i, cmd, timeoutMs) {
-  if (LAN) return lanCmd(cmd, Math.min(timeoutMs, 3000))
-  return rconConn(i).then((s: any) => new Promise<any>((resolve, reject) => {
+function rconOnce (i, cmd, timeoutMs, round?: RoundCommand) {
+  if (round && !round.current()) return Promise.resolve('')
+  if (LAN) return lanCmd(cmd, Math.min(timeoutMs, 3000), null, round)
+  return rconConn(i, round?.channel, timeoutMs).then((s: any) => new Promise<any>((resolve, reject) => {
+    if (round && !round.current()) { resolve(''); return }
     const id = ++s.id
-    const t = setTimeout(() => { s.wait.delete(id); reject(new Error('rcon timeout')) }, timeoutMs)
+    const t = setTimeout(() => {
+      s.wait.delete(id)
+      if (round?.channel) { s.ok = false; s.sock.destroy() }
+      reject(new Error('rcon timeout'))
+    }, timeoutMs)
     s.wait.set(id, { resolve: (b) => { clearTimeout(t); resolve(b) }, reject: (e) => { clearTimeout(t); reject(e) } })
     s.sock.write(pkt(id, 2, cmd))
   }))

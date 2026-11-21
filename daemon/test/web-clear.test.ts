@@ -55,6 +55,15 @@ test('self-web is sensed across the body, cut honestly, and never repeatedly can
   assert.equal(stopped, true)
   assert.equal(threatened.detail.left, 1)
 
+  const swordsman = { ...me, id: 2, username: 'Foe', position: me.position.offset(2, 0, 0), velocity: new Vec3(0, 0, 0),
+    isValid: true, equipment: [{ name: 'diamond_sword' }], metadata: [] }
+  bot.entities = { 2: swordsman }
+  bot.dig = async () => { throw new Error('started cutting in melee range') }
+  assert.equal(require('../src/swarm-work').directThreat(bot, [], 500, undefined, { ranged: false }), swordsman)
+  const forced = await hazardMethods({ session, gameClock: guardedClock }).clear_web({ force: true })
+  assert.equal(forced.detail.why, 'direct_threat', 'a retry under ranged fire still yields to a visible swordsman')
+  bot.entities = {}
+
   const { installDangers } = require('../../farm/arena/dangers')
   const calls: string[] = [], pending: Array<(r: any) => void> = []
   const b: any = { name: 'A', team: 'blue', last: { m: 'fight', pending: true }, c: { call (method) {

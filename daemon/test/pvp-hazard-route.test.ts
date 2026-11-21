@@ -42,9 +42,19 @@ test('captured fire cell keeps a native escape despite overlapping soft hazard p
   assert.equal(rawBurn(bot.blockAt(new Vec3(553,136,559))), 30)
   const stopBurn = priceBurnSteps(bot,mv), pricedNeighbors = mv.getNeighbors
   const scope = combatMovement(bot)
+  const finish = result => {
+    while (result.status === 'partial') result = result.context.compute()
+    return result
+  }
   try {
     assert.equal(mv.getNeighbors,pricedNeighbors,'combat reuses the burn price already installed for goto')
-    const r = new AStar(start,mv,new goals.GoalBlock(553,136,559),5000).compute()
+    const search = new AStar(start,mv,new goals.GoalBlock(553,136,559),5000)
+    const normalSlice = search.tickTimeout
+    search.tickTimeout = 0 // Model a tick with no time left to search.
+    const first = search.compute()
+    assert.equal(first.status, 'partial')
+    search.tickTimeout = normalSlice
+    const r = finish(first)
     assert.equal(r.status,'success', 'soft burn/contact prices must not strand the body in fire')
     assert.ok(mv.getNeighbors(new Move(553,136,559,0,0)).every(n => !n.toBreak.length && bot.blockAt(n)?.name !== 'fire'))
     assert.equal(rawBurn(bot.blockAt(new Vec3(554,136,559))),100,'direct burn remains forbidden')
@@ -63,7 +73,7 @@ test('captured fire cell keeps a native escape despite overlapping soft hazard p
   } finally { scope.restore(); stopBurn() }
   const combatOnly = combatMovement(bot,{ x: 600.5, y: 120, z: 600.5, r: 80, killY: 113 })
   try {
-    assert.equal(new AStar(start,mv,new goals.GoalBlock(553,136,559),5000).compute().status,'success',
+    assert.equal(finish(new AStar(start,mv,new goals.GoalBlock(553,136,559),5000).compute()).status,'success',
       'an arena combat wrapper also retains the newly installed origin price')
   } finally { combatOnly.restore() }
 })

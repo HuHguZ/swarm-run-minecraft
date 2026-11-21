@@ -29,6 +29,10 @@ test('a fresh committed fight approaches the observed opponent and attacks on th
     await driver.turn(bots[0])
     assert.equal(calls.at(-1).method, 'fight', 'fresh reported contact must reach the native fight RPC')
     assert.equal(calls.at(-1).params.target, 'Foe')
+    driver.reset('blue')
+    const lessons = driver.snapshot().blue.learning
+    assert.equal(lessons[task.data.doctrine].roundWins, 1, 'a repeated tactical turn shares a single public round win')
+    assert.equal(bots[0]['swarmDoctrine'], undefined, 'an early death next round cannot be charged to yesterday’s order')
   } finally { Date.now = priorNow }
 })
 test('a fresh long-range fight keeps a witnessed ranged high-ground position', async () => {
@@ -200,6 +204,68 @@ function fightLoopFixture() {
   }
   return f
 }
+
+test('one public death credits only its named fighter across simultaneous fights', async () => {
+  const returned = [], calls = []
+  const bots = ['A', 'B', 'C'].map((name, i) => ({ name, team: 'blue', c: { async call(method, p) {
+    if (method !== 'fight') return { detail: {} }
+    calls.push(name)
+    await new Promise(resolve => { returned[i] = resolve })
+    return { status: 'done', detail: { killed: 'Foe', kills: ['Foe'], landed: 0, swings: 0 } }
+  } } }))
+  const armor = { head: 'iron_helmet', torso: 'iron_chestplate', legs: 'iron_leggings', feet: 'iron_boots' }
+  for (const order of ['before', 'after', 'no author', 'new round']) {
+    returned.length = calls.length = 0
+    const pos = Object.fromEntries(bots.map((b, i) => [b.name, { p: { x: 0, y: 64, z: i * .7 }, hp: 20, inv: { iron_sword: 1, iron_pickaxe: 1 }, armor }]))
+    const driver = createSwarmDriver({ bots, pos, alive: () => true, aggressive: true, arena: { x: 0, y: 64, z: 0, r: 64 },
+      home: () => pos.A.p, hostile: (_, id) => id === 'Foe', log() {} })
+    for (const b of bots) driver.observe(b, [{ id: 'Foe', visible: true, position: { x: 2.8, y: 64, z: 0 }, equipment: { weapon: 'wooden_sword' } }])
+    const all = Promise.all(bots.map(b => driver.turn(b)))
+    try {
+      await new Promise(setImmediate)
+      assert.deepEqual(calls.sort(), ['A', 'B', 'C'])
+      if (order === 'before') driver.publicDeath?.('Foe', 'A')
+    } finally { for (const resolve of returned) resolve(); await all }
+    if (order === 'new round') driver.reset()
+    if (order !== 'before') driver.publicDeath?.('Foe', order === 'no author' ? null : 'A')
+    if (order !== 'no author') driver.publicDeath?.('Foe', 'A')
+    const wins = Object.values(driver.snapshot().blue.learning).reduce((n: number, d: any) => n + d.successes, 0)
+    assert.equal(wins, order === 'before' || order === 'after' ? 1 : 0, order)
+  }
+})
+test('a twenty-player side sends enemy names apart from sightings and credits only a witnessed follow-up kill', async () => {
+  for (const order of ['notice first', 'receipt first', 'no receipt']) {
+    let release, orderParams
+    const waiting = new Promise<void>(resolve => { release = resolve })
+    const side = (team: string) => Array.from({ length: 20 }, (_, i) => ({
+      name: team + i, team, c: { async call(method, params) {
+        if (method !== 'fight') return { detail: {} }
+        orderParams = params
+        await waiting
+        return { status: 'done', detail: { playerDeaths: order === 'no receipt' ? [] : [{ victim: 'red1', hits: 1 }],
+          landed: 1, swings: 1 } }
+      } }
+    }))
+    const blue = side('blue'), red = side('red'), pos = Object.fromEntries(blue.map((b, i) => [b.name, {
+      p: { x: i ? 0 : 2, y: 64, z: 0 }, hp: 20, inv: { iron_sword: 1, mace: 1 }, armor: { torso: 'iron_chestplate' } }]))
+    const driver = createSwarmDriver({ bots: [...blue, ...red], pos, alive: () => true, aggressive: true,
+      arena: { x: 0, y: 64, z: 0, r: 64 }, home: () => pos.blue0.p,
+      humanNames: () => ['HumanFoe', 'Neutral'], hostile: (_, id) => id.startsWith('red') || id === 'HumanFoe', log() {} })
+    for (const b of blue.slice(0, 2)) driver.observe(b, [{ id: 'red0', visible: true, position: { x: 4, y: 64, z: 0 }, equipment: { weapon: 'wooden_sword' } }])
+    const turn = driver.turn(blue[0])
+    try {
+      await new Promise(setImmediate)
+      assert.deepEqual(orderParams?.targets, ['red0'], 'ordinary duel and crowd tactics receive only observed contacts')
+      assert.deepEqual(new Set(orderParams.maceOpponents), new Set([...red.map(b => b.name), 'HumanFoe']))
+      assert.deepEqual(driver.enemies(blue[0]).map(e => e.id), ['red0'])
+      if (order !== 'receipt first') driver.publicDeath('red1', 'blue0')
+    } finally { release(); await turn }
+    if (order === 'receipt first') driver.publicDeath('red1', 'blue0')
+    const wins = Object.values(driver.snapshot().blue.learning).reduce((n: number, d: any) => n + d.successes, 0)
+    assert.equal(wins, order === 'no receipt' ? 0 : 1, order)
+  }
+})
+
 test('two completed zero-hit fights breach a close wall; a landed hit resets the streak', async () => {
   const f = fightLoopFixture()
   for (const landed of [0, 1, 0, 0]) {
@@ -209,6 +275,7 @@ test('two completed zero-hit fights breach a close wall; a landed hit resets the
   await f.turn()
   assert.deepEqual(f.calls.filter(c => /^(fight|dig_to)$/.test(c.method)).map(c => c.method),
     ['fight', 'fight', 'fight', 'fight', 'dig_to'])
+  assert.deepEqual(f.calls.find(c => c.method === 'dig_to').params.arena, { x: 0, y: 64, z: 0, r: 100 })
 })
 for (const type of ['cancelled', 'tactical']) test(`an interrupted ${type} fight waits for observation and tactical release`, async () => {
   const f = fightLoopFixture()
@@ -280,13 +347,45 @@ test('погоня: последний бой только при физичес
 // Стенд бота-противника 22.10: резерв в 6 бл. от человека сидел на шифте 32 с. В досягаемости его секунды бега — бой; дальше — к месту.
 test('armed sentries within the foe one-second reach engage instead of holding; farther ones walk to their spots', async () => {
   for (const [gap, fights] of [[6, true], [14, false]] as const) {
+    let now = 10000
     const foe = { x: .5 + gap, y: 64, z: .5 }
     const bots: any[] = ['A', 'B', 'C', 'D'].map(name => ({ name, team: 'blue', calls: [] as string[] }))
     const pos: any = Object.fromEntries(bots.map((b, k) => [b.name, { p: { x: .5, y: 64, z: .5 + k }, hp: 20, inv: { iron_sword: 1 }, armor: {} }]))
     for (const b of bots) b.c = { async call(method, params) { b.calls.push(method); if (method === 'goto') pos[b.name].p = { x: params.x, y: params.y, z: params.z }; return { detail: { arrived: pos[b.name].p } } } }
-    const driver = createSwarmDriver({ bots, pos, alive: () => true, arena: { x: 0, y: 64, z: 0, r: 40 }, home: () => pos.A.p, hostile: (_, id) => id === 'Foe', log: () => {} })
-    for (let k = 0; k < 3; k++) for (const b of bots) { driver.observe(b, [{ id: 'Foe', visible: true, position: foe, equipment: { weapon: 'netherite_sword' } }]); await driver.turn(b) }
+    const driver = createSwarmDriver({ bots, pos, now: () => now, alive: () => true, arena: { x: 0, y: 64, z: 0, r: 40 }, home: () => pos.A.p, hostile: (_, id) => id === 'Foe', log: () => {} })
+    for (const b of bots) {
+      now += 8001 // Separate sightings. Two simultaneous witnesses would turn this into a confirmed team attack.
+      driver.observe(b, [{ id: 'Foe', visible: true, position: foe, equipment: { weapon: 'netherite_sword' } }]); await driver.turn(b)
+    }
     assert.ok(bots.every(b => b.swarmTask?.data?.sentry), 'the plan keeps them as sentries')
     assert.equal(bots.every(b => b.calls.includes('fight') && !b.calls.includes('swarm_hold')), fights, `gap ${gap}`)
+    if (!fights) assert.ok(bots.every(b => b.calls.includes('goto') && !b.calls.includes('fight')))
   }
+})
+test('a public human elimination changes the active assault on the next turn, even inside the plan cache window', async () => {
+  let at = 1000
+  const logs: string[] = []
+  const bots = ['A', 'B', 'C', 'D', 'E'].map(name => ({ name, team: 'blue', c: { async call() { return { status: 'done', detail: {} } } } }))
+  const armor = { head: 'netherite_helmet', torso: 'netherite_chestplate', legs: 'netherite_leggings', feet: 'netherite_boots' }
+  const pos = Object.fromEntries(bots.map((b, i) => [b.name, { p: { x: 0, y: 64, z: i }, hp: 20, inv: { netherite_sword: 1 }, armor }]))
+  const driver = createSwarmDriver({ bots, pos, alive: () => true, aggressive: true, now: () => at,
+    arena: { x: 0, y: 64, z: 0, r: 40 }, home: () => pos.A.p, hostile: (_, id) => id === 'Human' || id === 'Other', log: s => logs.push(s) })
+  const see = (id: string, x: number, time = at) => {
+    for (const b of bots) driver.observe(b, [{ id, visible: true, position: { x, y: 64, z: 0 }, equipment: { weapon: 'wooden_sword' } }], time)
+  }
+  driver.publicDeath('Human', null)
+  see('Human', 3, at - 1)
+  assert.deepEqual(driver.enemies(bots[0]), [])
+  at += 1
+  see('Human', 3)
+  await driver.turn(bots[0])
+  assert.ok(logs.some(s => s.includes('ШТУРМ на Human')))
+  at += 1
+  see('Other', 5)
+  driver.publicDeath('Human', null)
+  see('Human', 3, at - 1)
+  assert.deepEqual(driver.enemies(bots[0]).map(e => e.id), ['Other'])
+  await driver.turn(bots[1])
+  await driver.turn(bots[2])
+  assert.deepEqual(logs.filter(s => s.includes('цель выбыла') || s.includes('ШТУРМ на Other')).map(s => s.includes('цель выбыла') ? 'end' : 'start'), ['end', 'start'])
 })

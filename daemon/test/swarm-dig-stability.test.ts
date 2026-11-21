@@ -22,7 +22,7 @@ function scene() {
   const options = { digSites: () => [...sites] }
   const run = () => {
     board.setMembers(team); foe.seenAt = time
-    const S: any = { board, team, enemies: [foe], plan: new Map(), aggressive: true, options, weak: () => false, state: pvpState(board) }
+    const S: any = { board, team, enemies: [foe], plan: new Map(), aggressive: true, options, confirmed: () => true, weak: () => false, state: pvpState(board) }
     pvpDiggers(S)
     for (const task of board.tasks()) board.cancel(task.id)
     for (const [id, d] of S.diggers) board.upsert({ id: `pvp:${id}`, kind: 'goto', assignedTo: id, position: d.site,
@@ -98,7 +98,7 @@ test('a confirmed cleared top is avoided as a support while its lower layer rema
   f.board.upsert({ id: 'pvp:b02', kind: 'goto', assignedTo: 'b02', position: neighbor,
     data: { dig: key(neighbor), target: 'Champ', stands: [unsafe], undermine: true } })
   const S: any = { board: f.board, team: f.team, enemies: [f.foe], plan: new Map(), aggressive: true,
-    options: f.options, weak: () => false, state: pvpState(f.board) }
+    options: f.options, confirmed: () => true, weak: () => false, state: pvpState(f.board) }
   pvpDiggers(S)
   assert.deepEqual(S.diggers.get('b02')?.site.stands, [safe], 'a removed upper block cannot support the neighboring worker')
   assert.ok(S.digAvoid.some(q => key(q) === key(cleared)), 'fighters avoid known partial holes even without a current worker there')

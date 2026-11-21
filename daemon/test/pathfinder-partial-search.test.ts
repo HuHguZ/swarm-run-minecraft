@@ -26,6 +26,28 @@ const { gotoGoal } = movementModule.exports
 const helpers: any = { exports: tickFixture }
 
 const node = (x, z) => new Move(x, 64, z, 0, 1)
+for (const valid of [true, false]) test('a different completed branch can join only through an allowed walk edge: ' + valid, async () => {
+  const bot: any = new EventEmitter()
+  bot.entity = { position: new Vec3(.5, 64, .5), onGround: true }
+  bot.pathfinder = { setGoal() {}, isMoving: () => true, canMove: () => true }
+  const goal = { isEnd: () => false }, walk = gotoGoal(bot, goal)
+  const root = { data: node(0, 0), parent: null }
+  const old = node(0, 1), next = node(1, 0), far = node(2, 0)
+  far.toPlace.push({ x: 2, y: 63, z: 0 })
+  const terminal = { data: far, parent: { data: next, parent: root } }
+  const context = { bestNode: { data: old, parent: root }, openDataMap: new Map([[far.hash, terminal]]),
+    movements: { getNeighbors: () => valid ? [next] : [old] } }
+  try {
+    bot.emit('path_update', { status: 'partial', path: [old], context })
+    const result = { status: 'success', path: [next, far], context }
+    const publication = result.path
+    bot.emit('path_update', result)
+    assert.equal(result.path, publication)
+    assert.deepEqual(result.path, valid ? [next, far] : [old])
+    if (valid) assert.equal(result.path[1].toPlace.length, 1)
+  } finally { walk.cancel(); await assert.rejects(walk, { name: 'PathStopped' }) }
+})
+
 const edges = new Map([
   ['0,64,0', [[1,0], [0,1]]], ['1,64,0', [[0,0]]],
   ['0,64,1', [[0,0], [1,1]]], ['1,64,1', [[0,1], [2,1]]],
@@ -209,6 +231,57 @@ test('a consumed partial prefix lets installed A* finish its connected detour', 
     bot.emit('end')
   }
 })
+
+for (const variant of ['blocked', 'reachable', 'keep marker', 'busy building', 'busy mining', 'cancelled', 'new goal', 'empty']) {
+  test(`a timed-out native search after consuming its prefix: ${variant}`, async () => {
+    // Natural O: the body stopped at 556.5/120/582.67. A stale published head was 11 blocks east.
+    const bot = helpers.exports.install(helpers.exports.testClock(750), { pathfinder: true, physicsEnabled: false })
+    const move = x => Object.assign(new Move(Math.floor(x),120,582,0,1), { x, y: 120, z: 582.5 })
+    bot.entity.position.set(555.5,120,582.67); bot.entity.onGround = true
+    bot.blockAt = p => helpers.exports.block(p.y < 120 || Math.floor(p.x) === 560 && p.y < 125 ? 'stone' : 'air', p)
+    const native = bot.pathfinder, goal = new goals.GoalNear(553,144,557,2)
+    let current = [], starts = 0, action = ''
+    bot.pathfinder = { goal: null, isMoving: () => current.length > 0, canMove: native.canMove,
+      isMining: () => action === 'busy mining', isBuilding: () => action === 'busy building',
+      setGoal(g) { this.goal = g; starts++; bot.emit('goal_updated',g) } }
+    const walk = gotoGoal(bot, goal); walk.catch(() => {})
+    try {
+      const consumed = move(556.5), root = { data: move(555.5), parent: null }
+      const context = { bestNode: { data: consumed, parent: root } }
+      const partial = { status: 'partial', context, path: [consumed] }
+      bot.emit('path_update',partial); current = partial.path; current.shift()
+      bot.entity.position.set(556.5,120,582.67)
+      const next = move(variant === 'reachable' ? 557.5 : 567.5), after = move(next.x + 1)
+      after.toPlace.push({x:558,y:119,z:582,dx:0,dy:1,dz:0})
+      const tail = [next,after]
+      assert.equal(native.canMove(tail), variant === 'reachable')
+      const timed = { status: 'timeout', context, path: variant === 'empty' ? [] : tail.slice() }
+      context.bestNode = { data: after, parent: { data: next, parent: root } }
+      if (variant === 'keep marker') timed.path.unshift(Object.assign(move(556.5), { ndKeep: true }))
+      action = variant
+      bot.emit('path_update',timed); current = timed.path
+      if (variant === 'reachable') {
+        assert.deepEqual(current,tail, 'preserve the ready first edge and its following placement')
+        current.length = 0; bot.emit('physicsTick'); await walk
+        assert.equal(starts,1)
+      } else if (variant === 'empty') {
+        await walk; assert.equal(starts,1, 'a native empty terminal keeps its ordinary outcome')
+      } else {
+        assert.equal(current.length,0, 'the executor may not adopt an obsolete or unproved first edge')
+        if (variant === 'cancelled') walk.cancel()
+        if (variant === 'new goal') bot.pathfinder.setGoal(new goals.GoalBlock(0,120,0))
+        if (action.startsWith('busy')) { bot.emit('physicsTick'); assert.equal(starts,1); action = '' }
+        bot.emit('physicsTick')
+        assert.equal(starts, variant === 'cancelled' ? 1 : 2)
+        if (variant === 'cancelled' || variant === 'new goal') {
+          await assert.rejects(walk, { name: variant === 'cancelled' ? 'PathStopped' : 'GoalChanged' })
+          bot.emit('path_update',timed); bot.emit('physicsTick')
+          assert.equal(starts, variant === 'cancelled' ? 1 : 2, 'late results cannot revive the old walk')
+        } else assert.equal(bot.pathfinder.goal, goal)
+      }
+    } finally { walk.cancel(); await walk.catch(() => {}); bot.emit('end') }
+  })
+}
 
 for (const rejection of ['blocked first edge', 'airborne', 'mining', 'placing', 'first break', 'first placement', 'no physics predicate']) {
   test(`a consumed prefix rebases the terminal chain for ${rejection}`, async () => {

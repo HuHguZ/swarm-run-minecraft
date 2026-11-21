@@ -509,7 +509,12 @@ function meleeHit (mf: MeleeFight, e, { swapTo = -1, after = null, kind = null, 
     bot.setQuickBarSlot(swapTo)
     swapped = true
   }
-  try { bot.attack(e) } catch {}
+  let sent = false
+  try { sent = bot.attack(e) !== false } catch {}
+  if (!sent) {
+    if (swapped) bot.setQuickBarSlot(back)
+    return false
+  }
   {
     const now = gameClock.now()
     if (mf.swingAt && now - mf.swingAt > 300) st.empty++ // прошлый взмах так и не попал

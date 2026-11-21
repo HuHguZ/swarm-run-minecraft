@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createTerrain } from '../src/pvp/terrain'
+import { hiddenFoeTurn, repositionTurn } from '../src/pvp/turn-reach'
+import * as tools from '../src/tools'
 import { installReport } from '../src/pvp/duel-report'
 import * as pick from '../src/pick'
 import { Block, registry, worldOf } from './parkour-fixture'
@@ -139,6 +141,42 @@ test('a failed opening retries on a changed block or usable tool, never clock ag
   now += 60000; await terrain.punchThrough(); assert.equal(digs, 1)
   ms = 100; await terrain.punchThrough(); assert.equal(digs, 2)
   state++; await terrain.punchThrough(); assert.equal(digs, 3)
+})
+
+test('a nearby two-block seal opens with a pick even when the last sighting is eight blocks away', async () => {
+  const World = require('prismarine-world')('1.21.11'), Chunk = require('prismarine-chunk')('1.21.11')
+  const world = new World().sync
+  world.setColumn(0, 0, new Chunk(), false)
+  const feet = new Vec3(2, 64, 2), head = feet.offset(0, 1, 0)
+  const put = (p, name) => world.setBlockStateId(p, registry.blocksByName[name].defaultState)
+  for (let x = 0; x < 12; x++) { put(new Vec3(x, 63, 2), 'stone'); put(new Vec3(x, 66, 2), 'stone') }
+  put(feet, 'stone'); put(head, 'stone')
+  const tool = { name: 'iron_pickaxe', type: registry.itemsByName.iron_pickaxe.id, slot: 16 }
+  const digs = [], bot: any = { world, registry, entities: {}, blockAt: p => world.getBlock(p),
+    entity: { position: new Vec3(1.5, 64, 2.5), onGround: true, height: 1.8, isCollidedHorizontally: true },
+    inventory: { items: () => [tool] }, async equip(it) { this.heldItem = it },
+    async dig(b) {
+      assert.equal(this.heldItem, tool)
+      assert.ok(pick.blockAim(this, b.position, { range: 4.5, seeThrough: null }))
+      digs.push(b.position); put(b.position, 'air')
+    } }
+  const ctx: any = { bot, entity: { position: new Vec3(9.5, 64, 2.5) }, EYE: 1.62, Vec3, tools, pick,
+    style: { punchLimit: 4 }, punches: 0, after: () => true, ready: () => false, pathTo() {}, clear() {}, async holdWeapon() {}, used() {},
+    miningProgress: () => false, routeInputs: () => 'same', failedHop: { inputs: 'same' }, st: {} }
+  ctx.punchThrough = createTerrain(ctx).punchThrough
+  const turn: any = { d: 8, r: 7.7, dy: 0, me: bot.entity.position, hidden: true }
+  assert.equal(await ctx.punchThrough(true), true, 'the stone directly in front of the bot is reachable')
+  assert.equal(await hiddenFoeTurn(ctx, turn), 'next')
+  assert.deepEqual(digs, [head])
+  turn.seesBody = true
+  turn.hidden = false
+  assert.equal(await repositionTurn(ctx, turn), 'next')
+  assert.deepEqual(digs, [head, feet])
+  assert.equal(world.getBlock(feet.offset(0, -1, 0)).name, 'stone')
+  const outsideReach = head.offset(5, 0, 0)
+  put(outsideReach, 'stone')
+  assert.equal(await ctx.punchThrough(), false, 'the long sighting does not extend pick reach')
+  assert.equal(world.getBlock(outsideReach).name, 'stone')
 })
 
 test('a bucket without a liquid receipt fails and does not resend until its placement cause changes', async () => {

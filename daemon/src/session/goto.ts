@@ -15,7 +15,7 @@ import * as hopgoto from '../hopgoto'
 import { skyLightAt, HOLDING } from './shared'
 import { surfaceWalkOn, startSurfaceWalk, stopSurfaceWalk, surfaceDropGuard, recoverSurface } from './surface-walk'
 import { startWaterRoute, stopWaterRoute, recordWaterRouteFailure, waterRouteRefusal } from './water-route'
-import { supportAt } from '../navigation/geometry'
+import { bodyClear, groundedHazardClear, supportAt } from '../navigation/geometry'
 
 // Ленивые модули (загрузка при первом вызове, как было), запомненные: require из папки части не попадает в быстрый кеш
 // Node по (папка, spec), и в горячем цикле (клетка A*, физический тик) каждый вызов разбирал бы путь заново.
@@ -45,7 +45,7 @@ interface GotoRun {
   ctl: any
   // параметры goto
   x: any; y: any; z: any; range: number; surface: any; bridge: any; pathWait: any; pearl: any; sprint: any; sprintJump: any
-  descent: any; unstuckWanted: any; climb: any; exactY: any; walkOnly: boolean
+  descent: any; unstuckWanted: any; climb: any; exactY: any; walkOnly: boolean; arenaFloor: boolean
   secs: number
   boundedArena: any
   avoiding: boolean
@@ -106,8 +106,9 @@ function supportedNearGoal(bot, x: number, y: number, z: number, range: number, 
 }
 
 // runIntent's clock ran out, and on an abort it throws — so the report was
-function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted, arena, climb, exactY, walkOnly = false }: any): Promise<any> {
+function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuck: unstuckWanted, arena, climb, exactY, walkOnly = false, arenaFloor = false }: any): Promise<any> {
   // Validate before runIntent can cancel another action or change its movement settings.
+  if (arenaFloor && (!Number.isInteger(y) || y !== arena?.y)) throw Object.assign(new Error('arena floor height required'), { code: 'ARENA_BOUNDARY' })
   let boundedArena
   if (arena !== undefined) {
     const bot = this.require(), target = { x: Number(x), y: y == null ? bot.entity.position.y : Number(y), z: Number(z) }
@@ -118,7 +119,7 @@ function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface
     const avoid = arena.avoid?.map(e => Object.freeze({ ...e, r: Math.min(e.r, Math.hypot(start.x - e.x, start.y - e.y, start.z - e.z)) }))
     boundedArena = Object.freeze({ ...arena, ...(avoid ? { avoid: Object.freeze(avoid) } : {}) })
     const within = lazyParkour().withinArena
-    if (!within(bot, target, boundedArena) || !within(bot, { ...target, x: Math.floor(target.x) + .5, z: Math.floor(target.z) + .5 }, boundedArena)) throw Object.assign(new Error('goto target is outside arena bounds'), { code: 'ARENA_BOUNDARY' })
+    if (!within(bot, target, boundedArena) || !within(bot, { ...target, x: Math.floor(target.x) + .5, z: Math.floor(target.z) + .5 }, boundedArena)) throw Object.assign(new Error('goto target is outside arena bounds'), { code: 'ARENA_BOUNDARY', notStarted: true })
   }
   const avoiding = !!boundedArena?.avoid?.length
   const secs = Math.max(5, Math.min(600, timeoutSeconds))
@@ -126,7 +127,7 @@ function goto (this: Session, { x, y, z, range = 2, timeoutSeconds = 90, surface
     const bot = this.require()
     const bounds = gotoArenaBounds.call(this, bot, ctl, boundedArena, avoiding, climb)
     const run: GotoRun = { bot, ctl, x, y, z, range, surface, bridge, pathWait, pearl, sprint, sprintJump, descent, unstuckWanted, climb, exactY, walkOnly,
-      secs, boundedArena, avoiding, bounds }
+      secs, boundedArena, avoiding, bounds, arenaFloor }
     const previousSupport = this.gotoSupport
     const restoreSupport = () => {
       if (this.gotoSupport !== run) return
@@ -226,7 +227,7 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   // Бег вприпрыжку на этот переход (A/B в одном сеансе, try-parkour-sprint): поверх ND_SPRINT_JUMP.
   bot._ndSprintJumpWanted = typeof sprintJump === 'boolean' ? sprintJump : undefined
   // Цель — для выбора бега (болото у цели — шагом), высота — тела, если не задана.
-  this.gotoTarget = bot.entity ? new Vec3(Math.floor(x) + 0.5, y == null ? bot.entity.position.y : Number(y), Math.floor(z) + 0.5) : null
+  this.gotoTarget = run.arenaFloor ? null : bot.entity ? new Vec3(Math.floor(x) + 0.5, y == null ? bot.entity.position.y : Number(y), Math.floor(z) + 0.5) : null
   // Пустой частичный результат поиска — ждать продолжения, а не «дошёл» (movement.gotoGoal): ND_GOTO_WAIT=1,
   // pathWait:true или мост на ходу (обход и мост ищутся дольше 40 мс первого тика).
   const waitPartial = avoiding || (typeof pathWait === 'boolean' ? pathWait : (gotoWaitOn() || !!(this.bridgeWanted ?? blockmoves.on())))
@@ -266,7 +267,7 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   // обходил по 25 с впустую (try-lab-stuck pond, us-pilot1) — оттуда выводит ступенька/лесенка лестницы.
   if (!strict && inWater(bot) && !(un && !lazyUnstuck().landBySwim(bot))) await escapeWater(bot, ctl)
   const goalBelow = () => waitPartial && y != null && Number.isFinite(Number(y)) && Number(y) < bot.entity.position.y - 2
-  let pit: Pit = strict || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
+  let pit: Pit = strict || run.arenaFloor || goalBelow() ? { wasInPit: false } : await escapePit(bot, ctl, { mcData: this.mcData, maxClimb: 24, session: this, toward: this.gotoTarget })
   // ND_BRUTE_MEMORY: «hold» — по цене сейчас дешевле переждать (8 с за вызов, цена ожидания растёт со временем), а не отказ goto:
   // без этого каждый goto бросал BRUTE_MEMORY_REPLAN, вызывающие не переспрашивали (nbt24a 21.10: 7 отказов за 2 с, БЛОКЕР).
   // ND_BAST_BRUTE_EXIT=1 (поток bast 27.10, просьба end): закрытый выход (covered) сдвинул тело — заново оценить выход, а не бросать
@@ -282,7 +283,15 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   let goal
   let arrival: (() => boolean) | undefined
   let resolvedTo
-  if (y === undefined || y === null) {
+  if (run.arenaFloor) {
+    goal = new goals.GoalY(y)
+    resolvedTo = { y, mode: 'arenaFloor' }
+    arrival = () => {
+      const e = bot.entity, at = e.position
+      return e.onGround && Math.abs(at.y - y) < .001 && lazyParkour().withinArena(bot, at, boundedArena) &&
+        Math.abs((supportAt(bot, at, .04)?.top ?? -Infinity) - at.y) < .04 && bodyClear(bot, at) && groundedHazardClear(bot, at, e.velocity.y, true)
+    }
+  } else if (y === undefined || y === null) {
     goal = new goals.GoalNearXZ(bx, bz, Math.max(1, range))
     resolvedTo = { x: bx, y: null, z: bz, mode: 'xz' }
   } else {
@@ -307,7 +316,7 @@ async function gotoPrepare (this: Session, run: GotoRun): Promise<void> {
   // у цели без y клетка «на высоте тела» в колонне горы — внутри камня (небо 0), и strict снимался — штрек сквозь гору
   // (замечание проверки S6c 07.10).
   // Снимается только штраф крыши; запрет копки strict остаётся как до правки.
-  const goalSky = resolvedTo.y == null ? null : skyLightAt(bot, new Vec3(bx, Math.floor(resolvedTo.y), bz))
+  const goalSky = run.arenaFloor || resolvedTo.y == null ? null : skyLightAt(bot, new Vec3(bx, Math.floor(resolvedTo.y), bz))
   const overSurface = surface !== false && (surface === true || this.underSky())
   const surfaceWalk = !walkOnly && ((overSurface && !(goalSky !== null && goalSky <= 7)) ||
     (surfaceWalkOn(bot) && surface === 'strict' && !boundedArena))
@@ -378,7 +387,21 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
   const onReset = (reason) => {
     if (reason === 'place_error' && ++placeErrors >= 6) failPlace(new Error('блок под ноги не ставится — шесть отказов подряд, этот путь не работает'))
   }
+  // A strict arena retry has no dig, shake or equipment change between searches.
+  // Only reuse exhaustion within this attempt and with the same client inputs.
+  const fixedStart = strict && boundedArena && !avoiding && bot.entity.onGround && bot._client?.once
+    ? bot.entity.position.clone() : null
+  const terrainVersion = () => bot._ndFastBlocks?.live ? bot._ndFastBlocks.ver : undefined
+  const firstTerrain = terrainVersion()
+  let changed = false
+  const invalidate = () => { changed = true }
+  if (fixedStart) {
+    bot._client.once('packet', invalidate)
+    bot.once('blockUpdate', invalidate)
+  }
+  let noPath = false
   const onPath = r => {
+    noPath = r?.status === 'noPath'
     // Исчерпан поиск — нет пути в обход; «timeout» с частичным путём — идти по нему (соседи уже вне зоны врага): со срезом
     // 250 мс и отказом на timeout лутающие стояли — путь по колизею в 40 бл. не находился (стенд 15.10: 11–18 сбросов сторожа).
     if (avoiding && (r?.status === 'noPath' || r?.status === 'timeout' && !r.path?.length)) failPlace(Object.assign(new Error('no route outside enemy clearance: ' + r.status), { code: 'AVOID_NO_PATH' }))
@@ -390,7 +413,7 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
     }
   }
   bot.on('path_reset', onReset)
-  if (avoiding || run.waterRoute) bot.on('path_update', onPath)
+  if (boundedArena || run.waterRoute) bot.on('path_update', onPath)
   let pathRequest
   const cancelPath = () => pathRequest?.cancel?.()
   ctl.onAbort.push(cancelPath)
@@ -402,16 +425,24 @@ async function gotoAttempt (this: Session, run: GotoRun, g): Promise<void> {
     // goto резолвит и пустой partial-путь. Достигнутая цель определяется
     // координатами тела, включая высоту для 3D-плана.
     if (!(g === run.goal && run.arrival ? run.arrival() : g.isEnd(bot.entity.position.floored()))) {
-      throw Object.assign(new Error('pathfinder закончил путь, но не достиг цели — не дошёл'), { noStep: true })
+      throw Object.assign(new Error('pathfinder закончил путь, но не достиг цели — не дошёл'), { noStep: true, code: noPath ? 'NO_PATH' : undefined })
     }
+  } catch (err) {
+    if (fixedStart && noPath && err.name === 'NoPath' && !changed && bot.entity.onGround && !this.stuckCells?.size &&
+        terrainVersion() === firstTerrain && bot.pathfinder.movements === mv && fixedStart.equals(bot.entity.position)) err.exhaustedHere = true
+    throw err
   } finally {
+    if (fixedStart) {
+      bot._client.removeListener('packet', invalidate)
+      bot.removeListener('blockUpdate', invalidate)
+    }
     // An Emergency can fence setGoal(null); closing our waiter also cancels its queued lease resume.
     cancelPath()
     const index = ctl.onAbort.indexOf(cancelPath)
     if (index >= 0) ctl.onAbort.splice(index, 1)
     run.failDescent = null
     bot.removeListener('path_reset', onReset)
-    if (avoiding || run.waterRoute) bot.removeListener('path_update', onPath)
+    if (boundedArena || run.waterRoute) bot.removeListener('path_update', onPath)
     this.surfaceWalk = false
     this.pathGoalY = null
     this.surfaceStrict = !!boundedArena && !climb
@@ -429,10 +460,17 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
   }
 
   const tried = []
+  const arrivalPosition = () => ({ arrived: xyz(bot.entity.position), ...(exactY ? { arrivedY: bot.entity.position.y } : {}) })
   let settledRetry = false
   let lastError = null
   const outOfTime = () => gameClock.now() >= deadline
-  const away = () => Math.round(Math.hypot(bot.entity.position.x - bx, bot.entity.position.z - bz))
+  const exactPoint = exactY && resolvedTo.y != null ? new Vec3(bx + .5, resolvedTo.y, bz + .5) : null
+  const away = () => {
+    const p = bot.entity.position
+    if (run.arenaFloor) return Math.round(Math.abs(p.y - y))
+    if (exactPoint) return Math.round(p.distanceTo(exactPoint))
+    return Math.round(Math.hypot(p.x - bx, p.z - bz))
+  }
   const report = why => ({
     at: xyz(bot.entity.position),
     target: { x: bx, y: resolvedTo.y, z: bz, mode: resolvedTo.mode },
@@ -444,7 +482,7 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
     climbedOut: pit.wasInPit ? pit.climbed : undefined
   })
   const ranOut = () => report(
-    `время вышло за ${secs}с — не дошёл, до цели ещё ${away()} блоков по горизонтали` +
+    `время вышло за ${secs}с — не дошёл, до цели ещё ${away()} блоков по ${run.arenaFloor ? 'высоте' : exactPoint ? 'прямой' : 'горизонтали'}` +
     (lastError ? `: ${lastError.message}` : ''))
 
   let progressRetries = 0
@@ -457,13 +495,16 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
   for (const step of plan) {
     if (stuckOut) break
     for (let retry = 0; retry < 2; retry++) {
-      if (outOfTime()) return ranOut()
+      const landedOnField = run.arenaFloor && run.arrival()
+      if (!landedOnField && outOfTime()) return ranOut()
       const away0 = away()
       try {
-        await gotoAttempt.call(this, run, step.goal)
+        if (landedOnField) {
+          if (ctl.aborted || bounds.error) throw bounds.error || new Error('прервано')
+        } else await gotoAttempt.call(this, run, step.goal)
         return {
-          arrived: xyz(bot.entity.position),
-          target: { x: bx, y: resolvedTo.y, z: bz, mode: step.mode },
+          ...arrivalPosition(),
+          target: run.arenaFloor ? resolvedTo : { x: bx, y: resolvedTo.y, z: bz, mode: step.mode },
           attempts: tried.length + 1,
           climbedOut: pit.wasInPit ? pit.climbed : undefined,
           surface: surfaceWalk || undefined,
@@ -503,6 +544,7 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
         }
         lastError = err
         tried.push(`${step.mode}#${retry + 1}: ${err.message}`)
+        if (err.exhaustedHere) break
         const gained = away0 - away()
         if (waitPartial && progressRetries < 12 && gained >= 8 && away() > Math.max(4, range + 2)) {
           progressRetries++
@@ -523,8 +565,9 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
             const hp = (bot.health ?? 0) + (require('../read') as typeof import('../read')).absorptionOf(bot, bot.entity)
             const to = new Vec3(bx + .5, Number(lowerY), bz + .5)
             const options = drops.dropOptions(bot, boundedArena, (end, hurt, ticks) =>
-              end.distanceTo(to) / 5.6 + ticks / 20 + 60 * hurt / (hp - hurt))
-              .filter(o => !o.drop.inspect && !o.drop.exit && o.end.y < bot.entity.position.y - 3).sort((a, b) => a.cost - b.cost)
+              (run.arenaFloor ? Math.abs(end.y - lowerY) : end.distanceTo(to)) / 5.6 + ticks / 20 + 60 * hurt / (hp - hurt))
+              .filter(o => !o.drop.inspect && !o.drop.exit && o.end.y < bot.entity.position.y - 3 &&
+                (!run.arenaFloor || o.drop.hurt <= (run.descentOpt.maxFallDamage ?? Infinity))).sort((a, b) => a.cost - b.cost)
             if (options.length) {
               const guard = (require('../edges') as typeof import('../edges')).guard(bot)
               let landed
@@ -551,11 +594,11 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
             tried.push(`выход с копкой: ${Math.round(moved)} бл.`)
             if (moved >= 3) { retry--; continue }
           }
-          if (y != null && resolvedTo.y != null && !outOfTime()) {
+          if (!run.arenaFloor && y != null && resolvedTo.y != null && !outOfTime()) {
             const parkour = lazyParkour()
             const local = boundedArena ? await parkour.executeJump(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 }, { arena: boundedArena }) : await parkour.tryLocal(bot, ctl, { x: bx + .5, y: resolvedTo.y, z: bz + .5 })
             if (ctl.aborted) throw new Error('прервано')
-            if (local.ok) return { arrived: xyz(bot.entity.position), target: { x: bx, y: resolvedTo.y, z: bz, mode: 'parkour' }, attempts: tried.length + 1, parkour: { ticks: local.ticks } }
+            if (local.ok) return { ...arrivalPosition(), target: { x: bx, y: resolvedTo.y, z: bz, mode: 'parkour' }, attempts: tried.length + 1, parkour: { ticks: local.ticks } }
           }
           if (waitPartial && !settledRetry && (!bot.entity.onGround || bot.entity.isInWater)) {
             settledRetry = true
@@ -580,9 +623,10 @@ async function gotoLoop (this: Session, run: GotoRun): Promise<any> {
   } finally { if (descentWatch) descentWatch.stop() }
   if (un) console.log('[unstuck] goto', JSON.stringify(un.report()))
   if (walkOnly) return report(lastError?.message || 'existing route is blocked')
-  throw new Error(
+  const failure = new Error(
     `не дошёл (${tried.length} попытки)${pit.wasInPit ? `, из ямы вылез на ${pit.climbed}${pit.stopped ? ' — ' + pit.stopped : ''}` : ''}. ` +
     `Последняя: ${lastError.message}`)
+  throw lastError.name === 'NoPath' || lastError.code === 'NO_PATH' ? Object.assign(failure, { code: 'NO_PATH' }) : failure
 }
 
 export { goto }

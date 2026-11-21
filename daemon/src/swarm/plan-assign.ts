@@ -5,14 +5,14 @@ import type { SwarmTask, SwarmMember, SharedEnemy, SwarmPosition } from './types
 import type { PvpPlan } from './plan-frame'
 import { fledAt, markFled } from './board'
 import { distance, cellKey, ratio, count } from './common'
-import { visibleForce, memberFight, attackBeforeBuild } from './fight'
+import { visibleForce, memberFight, attackBeforeBuild, assessSwarmFight } from './fight'
 import { lineRank } from './doctrine'
 import { racesForLoot, behindRace, killMeans, MELEE_CAP } from './race'
 import { SHOVE, SHOVE_REACH, shoveHits } from './shove'
 import { dislodgeSeconds, attackSeconds } from './dislodge'
 import { airUnreachable } from './plan-judges'
 import { pricedLoot } from './plan-doctrines'
-import { visiblyWeakened } from './plan-flee'
+import { closingSpeed, fleePursuit, visiblyWeakened } from './plan-flee'
 
 export function assignFighters(S: PvpPlan): void {
   // Добивание убегающего (командная игра): нас вдвое больше видимых врагов, а цель уходит от нашей середины — без резерва
@@ -22,7 +22,6 @@ export function assignFighters(S: PvpPlan): void {
   // Живых врагов втрое меньше (лента смертей — plan-frame endgame) — добивание и стоящего: резерв беречь не для кого
   // (стенд 15×15, 21.10: 13 синих против 2 красных минуту не добили — восемь строителей сидели в «резерве-разведке»).
   const crushing = outnumber && S.endgame
-  let searchers = 0
   // Сколько бьют в упор каждую цель (без булавы и зелий вреда) — для MELEE_CAP против сильного.
   const meleeOn = new Map<string, number>()
   const rearming = new Set<string>()
@@ -31,12 +30,22 @@ export function assignFighters(S: PvpPlan): void {
   const comboMace = !!(S.state.strongFew || S.state.dislodge) && S.team.some(a => killMeans(a).smash)
   const runner = (e: SharedEnemy) => { const v = e.velocity || { x: 0, y: 0, z: 0 }, sp = Math.hypot(v.x, v.z), dx = e.position.x - S.center.x, dz = e.position.z - S.center.z, d = Math.hypot(dx, dz) || 1
     return sp > .15 && (v.x * dx + v.z * dz) / (sp * d) > .5 }
-  const { board, team, enemies, plan, options, aggressive, doctrine, committed, center, forward, lineDuty, spots, put, assault, regroup, losing, prey, hunting, untouchable, loads, meanStrength, sectorOf, ringAt, shoveOf, gatherers, lastEnemy, diggers, ladderers, campers, hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, targetCost, archer, threatReach } = S
+  const { board, team, enemies, plan, options, aggressive, doctrine, center, forward, lineDuty, spots, put, assault, regroup, losing, prey, hunting, untouchable, loads, meanStrength, sectorOf, ringAt, shoveOf, gatherers, diggers, ladderers, campers, hideoutFor, perchFor, rallyFor, outclassed, weak, improvementOf, targetCost, archer, threatReach } = S
+  const clues = enemies.length ? [] : board.lastKnownEnemies()
+  const duties = board.tasks()
+  const previousById = new Map(duties.map(task => [task.id, task]))
+  const searches: { clue: typeof clues[number]; ageBlocks: number; radius: number; scouts: number }[] = []
+  for (const clue of clues) {
+    // Близкие отметки на одном ярусе задают общий сектор поиска.
+    if (searches.some(s => Math.abs(s.clue.position.y - clue.position.y) < 2 && distance(s.clue.position, clue.position) < 4)) continue
+    const ageBlocks = (S.now - clue.seenAt) * 5.6 / 1000
+    searches.push({ clue, ageBlocks, radius: Math.min(32, ageBlocks), scouts: 0 })
+  }
   // Две границы ценности (cl28b, 28.10: цель по ярусам Колизея, обрыв под ней 17 ↔ 7–9 бл. — сброс включался и выключался
   // каждую секунду, 189 смен при живом крае, бойцы метались между сбросом и резервом): начинают сброс с SHOVE, начатый на
   // эту цель держат, пока падение вообще ранит; край пропал — снят.
   const shoveFloor = (m: SwarmMember, foe: SharedEnemy) => {
-    const was = board.tasks().find(t => t.id === `pvp:${m.id}`)
+    const was = previousById.get(`pvp:${m.id}`)
     return was?.data?.shove && was.data.target === foe.id ? Number.MIN_VALUE : SHOVE
   }
   const worthShove = (m: SwarmMember, foe: SharedEnemy, attack: number, fight = memberFight(m, foe)) => {
@@ -57,17 +66,36 @@ export function assignFighters(S: PvpPlan): void {
   // попаданиям, board), пропадает, если её не добить: 0.8 бл. на каждое снятое хп (полцели ≈ 8 бл. ≈ 1.4 с бега); вплотную в бою —
   // ещё замах и перезапуск боя ~1.5 с ≈ 8 бл. (цикл 20, cl74–76: почти все смены цели — «новая ближе на 4+ бл.»).
   const abandonCost = (m: SwarmMember, prev: SharedEnemy) => {
-    const was = board.tasks().find(t => t.id === `pvp:${m.id}`)
+    const was = previousById.get(`pvp:${m.id}`)
     if (!was || was.data?.target !== prev.id || !/^(fight|goto)$/.test(was.kind)) return 4
     const hurt = Math.max(0, 20 - (prev.hpEstimate ?? 20)) * 0.8
     return 4 + hurt + (was.kind === 'fight' && distance(m.position, prev.position) <= 4.5 ? 8 : 0)
+  }
+  const investigating = new Set<string>()
+  const mayEngage = (m: SwarmMember, e: SharedEnemy) => S.confirmed(e.id) || S.witnesses.get(e.id)?.has(m.id)
+  const chooseTarget = (m: SwarmMember, previous?: SharedEnemy) => {
+    const candidates = S.endgame ? enemies : enemies.filter(e => !untouchable.has(e.id))
+    const ready = candidates.filter(e => mayEngage(m, e))
+    const eligible = ready.length ? ready : candidates.filter(e => !investigating.has(e.id))
+    if (!eligible.length) return candidates[0]
+    if (eligible.length < 2) return eligible[0]
+    // Loads can change at the very next assignment. Price each candidate once for this fighter.
+    let best = eligible[0], bestCost = targetCost(m, best)
+    let previousCost = best === previous ? bestCost : undefined
+    for (let i = 1; i < eligible.length; i++) {
+      const candidate = eligible[i], cost = targetCost(m, candidate)
+      if (candidate === previous) previousCost = cost
+      if ((cost - bestCost || candidate.id.localeCompare(best.id)) < 0) { best = candidate; bestCost = cost }
+    }
+    return previous && previous !== best && previousCost !== undefined && !untouchable.has(previous.id) &&
+      previousCost <= bestCost + abandonCost(m, previous) ? previous : best
   }
   for (const m of [...team].sort((a, b) => b.strength - a.strength || a.id.localeCompare(b.id))) {
     const covering = S.endgame && plan.get(m.id)?.kind === 'fight' && plan.get(m.id)?.data?.cover ? plan.get(m.id) : undefined
     if (S.endgame) {
       // Короткая хилка остаётся; резерв, стройка, лут и укрытие больше не отводят здоровых от последнего боя.
       const assigned = plan.get(m.id)
-      if (assigned?.kind === 'recover' || assigned?.kind === 'heal' || assigned?.data?.antidoteCover) continue
+      if (assigned?.kind === 'recover' || assigned?.kind === 'heal' || assigned?.data?.antidoteCover || assigned?.data?.coverShield || assigned?.data?.coverWall) continue
       plan.delete(m.id)
     }
     const near = [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0]
@@ -78,21 +106,27 @@ export function assignFighters(S: PvpPlan): void {
     const rearm = aggressive && !S.endgame && needsWeapon
     if (rearm) rearming.add(m.id)
     if (plan.has(m.id)) continue
-    if (S.endgame && options.foesLeft === 1 && options.lootOffer && needsWeapon && !covering && near && !visiblyWeakened(near, S.now) &&
-        S.now - near.seenAt <= 1000 && outclassed(m, near) && pricedLoot(S, m, near, personal)) continue
+    if (S.endgame && options.foesLeft === 1 && needsWeapon && !covering && near && S.now - near.seenAt <= 1000 && outclassed(m, near)) {
+      const gap = distance(m.position, near.position)
+      // Последний противник несётся на нас. Если свои не успеют выиграть размен, сначала оторваться и тогда перевооружиться.
+      if (enemies.length === 1 && !near.nametag && !near.glowing && gap <= threatReach(near) && closingSpeed(m, near, gap) > .1 &&
+          assessSwarmFight(m, enemies, team).unsafe) {
+        fleePursuit(S, m, near, gap, archer(near) && gap > 8)
+        continue
+      }
+      if (options.lootOffer && !visiblyWeakened(near, S.now) && pricedLoot(S, m, near, personal)) continue
+    }
     if (diggers.has(m.id)) { const { site: s, foe } = diggers.get(m.id)!; put(m, 'goto', { dig: cellKey(s), undermine: !!(s as any).undermine, blocks: (s as any).blocks, stands: (s as any).stands, drop: (s as any).drop, target: foe.id, enemyPosition: foe.position, reason: (s as any).drop === Infinity ? 'подкоп: под ним пустота' : 'копаю яму-ловушку' }, s); continue }
     if (ladderers.has(m.id)) { const s = ladderers.get(m.id)!; put(m, 'goto', { ladder: s.key, reason: 'ставлю лестницу для своих' }, { x: s.x, y: s.y, z: s.z }); continue }
     if (!S.endgame && campers.has(m.id)) { put(m, 'goto', { hold: 'ambush', camp: cellKey(campers.get(m.id)!), reason: 'засада в углу' }, campers.get(m.id)!); continue }
     // Цель держится, пока жива и видна, а новая не дешевле с запасом (4 — как 4 бл. пути): иначе цель менялась почти
     // каждую секунду, и бот носился между врагами (стенд 15×15, 21.10: d → t → f → ad за 4 с).
-    const best = [...enemies].filter(e => S.endgame || !untouchable.has(e.id)).sort((a, b) => targetCost(m, a) - targetCost(m, b) || a.id.localeCompare(b.id))[0]
-    const prevId = board.tasks().find(t => t.id === `pvp:${m.id}`)?.data?.target
-    const prev = prevId && best && prevId !== best.id ? enemies.find(e => e.id === prevId && !untouchable.has(e.id)) : undefined
+    const was = previousById.get(`pvp:${m.id}`), prevId = was?.data?.target
+    const prevFoe = prevId ? enemies.find(e => e.id === prevId) : undefined
     const covered = covering && enemies.find(e => e.id === covering.data?.target)
-    const foe = covered || (hunting(m) && !untouchable.has(prey!.id) ? prey! : prev && targetCost(m, prev) <= targetCost(m, best!) + abandonCost(m, prev) ? prev : best)
+    const foe = covered || (hunting(m) && !untouchable.has(prey!.id) && mayEngage(m, prey!) ? prey! : chooseTarget(m, prevFoe))
     // Ушёл от летящей цели, которую нечем достать, — запомнить (возврат к ней только в досягаемости); вернулся к ней или её нет — забыть.
     const leftAerial = S.state.leftAerial ??= new Map()
-    const prevFoe = prevId ? enemies.find(e => e.id === prevId) : undefined
     if (prevFoe && foe && foe.id !== prevFoe.id && prevFoe.threat === 'aerial' && airUnreachable(m)) leftAerial.set(m.id, prevFoe.id)
     else if (foe && leftAerial.get(m.id) === foe.id || !enemies.some(e => e.id === leftAerial.get(m.id))) leftAerial.delete(m.id)
     if (!foe && untouchable.size) { put(m, 'goto', { reserve: true, sentry: true }, m.position); continue }
@@ -106,21 +140,26 @@ export function assignFighters(S: PvpPlan): void {
     if (!foe) {
       // Прятался, а враг пропал из виду (за стеной, вне прорисовки) — сидеть в укрытии, пока последнее место врага в 22 бл.
       // (арена 40: прятался → не видно → лут → снова виден → прятался, каждые 3–7 с).
-      const was = board.tasks().find(t => t.id === `pvp:${m.id}` && t.kind === 'flee' && t.position)
-      if (!S.endgame && was && lastEnemy && board.now() - lastEnemy.seenAt < 6000 && distance(lastEnemy.position, m.position) < 22) { put(m, 'flee', was.data || {}, was.position); continue }
+      if (!S.endgame && was?.kind === 'flee' && was.position && clues.some(c => S.now - c.seenAt < 6000 && distance(c.position, m.position) < 22)) { put(m, 'flee', was.data || {}, was.position); continue }
       const improvement = improvementOf(m)
       // Врага не видели (или забыли) — недобор снаряжения добирать лутом (сундуки наверху тоже); видели — охота (Codex 15.10).
       // Слабее типичного врага раунда (память снаряжения, race.ts) — лут; раньше — метка «переигран» на 30 с (21.10: по миру).
-      if (!S.endgame && (weak(m) || improvement > 0 && (!lastEnemy || behindRace(S, m)))) { put(m, 'loot', { improvement, reason: 'лут: врага не видно' }); continue }
+      if (!S.endgame && (weak(m) || improvement > 0 && (!clues.length || behindRace(S, m)))) { put(m, 'loot', { improvement, reason: 'лут: врага не видно' }); continue }
       // Врага не видели вовсе — прочёсывать, без прокопа: «охота» на своё место копала под себя (ночь 15.10: 1686 прокопов
       // в пустом раунде, ~100 ботов провалились под арену).
       // Поиск веером (21.10: двенадцать красных 4 мин искали двоих синих у одного места): каждому своя точка на кольце вокруг
       // последнего места врага радиусом «сколько он мог пробежать» (5.6 бл/с, до 32 бл.) — только знание, где видели и как
       // быстро бегает; через одного — середина кольца. Первый идёт в само место.
-      const at = lastEnemy?.position ?? m.position, k = searchers++
-      const reach = lastEnemy ? Math.min(32, 5.6 * Math.max(0, board.now() - lastEnemy.seenAt) / 1000) : 0
+      let chosen: typeof searches[number] | undefined, bestCost = Infinity
+      for (const area of searches) {
+        // Путь до места, фора пропавшего игрока и уже распределённые радиусы прочёсывания — в блоках.
+        const cost = distance(m.position, area.clue.position) + area.ageBlocks + area.scouts * area.radius
+        if (cost < bestCost) { bestCost = cost; chosen = area }
+      }
+      const lastEnemy = chosen?.clue, at = lastEnemy?.position ?? m.position
+      const reach = chosen?.radius || 0, k = chosen ? chosen.scouts++ : 0
       const spot = !lastEnemy || k === 0 || reach < 4 ? at : { x: at.x + Math.cos(k * 2.4) * reach * (k % 2 ? 1 : .5), y: at.y, z: at.z + Math.sin(k * 2.4) * reach * (k % 2 ? 1 : .5) }
-      put(m, 'goto', { search: true, ...(lastEnemy ? { hunt: true } : {}), ...(S.endgame ? { finishing: true } : {}), enemyPosition: at, searchAt: spot, improvement }, spot); continue
+      put(m, 'goto', { search: true, ...(lastEnemy ? { hunt: true, searchSeenAt: lastEnemy.seenAt, searchEnemy: lastEnemy.id } : {}), ...(S.endgame ? { finishing: true } : {}), enemyPosition: at, searchAt: spot, improvement }, spot); continue
     }
     // Натиск, слабый (weak): ближний враг дальше 16 бл. — лут; 5–16 — к своим по открытому, за спины готовых (пользователь
     // 14.10: «не должны в замкнутые пространства бежать, когда игрок рядом за ними идёт» — комната-тупик с пустыми
@@ -137,7 +176,6 @@ export function assignFighters(S: PvpPlan): void {
     // Рефлекс ветра действует и при отходе; отказ броска не оплачивает кулачную цепь его ценой.
     const deadly = foe === near ? !!shoveUseful : worthShove(m, foe, attackSeconds(m, foe))
     if (process.env.ND_SWARM_TRACE) {
-      const was = board.tasks().find(t => t.id === `pvp:${m.id}`)
       if (was?.data?.target === foe.id && !!was.data.shove !== deadly) {
         const e = S.edgeAt(foe), gap = distance(m.position, foe.position), att = attackSeconds(m, foe)
         const v = foe.velocity || { x: 0, y: 0, z: 0 }
@@ -165,10 +203,10 @@ export function assignFighters(S: PvpPlan): void {
       if (gap > (fled ? far + 6 : far) && !(onPerch && gap < 28)) { fledAt.get(board)?.delete(m.id); put(m, 'loot', { improvement: improvementOf(m), weak: true, reason: `лут: враг в ${Math.round(gap)} бл.${fled ? ' (убегал)' : ''}` }); continue }
       // Граница «не убежать» с запасом от прежней задачи (стенд rush 15.10: на 5–6 бл. «прячусь ↔ бой» каждые 1–2 с, 45 смен
       // у одного бота): убегавший дерётся только вплотную (3.5), дерущийся уходит дальше 6.
-      const prior = board.tasks().find(t => t.id === `pvp:${m.id}`)?.kind
+      const prior = was?.kind
       const edge = prior === 'flee' ? 3.5 : prior === 'fight' ? 6 : 5
-      // Нечем драться — проверить выход даже вплотную; физический тупик решает тело (cornered).
-      const leave = weak(m) || gap > edge
+      // Близость не делает оружие эффективным: если урон не перекрывает лечение, тело сначала проверяет выход.
+      const leave = weak(m) || rearm || gap > edge
       const perch = leave && (onPerch ? m.position : perchFor(m))
       if (perch) { markFled(board, m.id); put(m, 'flee', { target: near.id, enemyPosition: near.position, perch: true, panic: true, reason: `на насест, нечем драться (враг в ${Math.round(gap)} бл.${fled ? ', убегал' : ''})` }, perch); continue }
       // От лучника — сперва за укрытие (своя кучка в чистом поле стрелу не остановит), потом к своим.
@@ -190,7 +228,17 @@ export function assignFighters(S: PvpPlan): void {
         continue
       }
     }
+    if (!mayEngage(m, foe) && !covered) {
+      const vacate = S.digVacate?.get(m.id)
+      if (vacate) put(m, 'goto', { reserve: true, sentry: true, digAvoid: S.digAvoid, swarmStand: vacate }, vacate)
+      else if (!investigating.has(foe.id)) {
+        investigating.add(foe.id)
+        put(m, 'goto', { verify: true, sentry: true, search: true, searchEnemy: foe.id, searchSeenAt: foe.seenAt, enemyPosition: foe.position, searchAt: foe.position }, foe.position)
+      } else put(m, 'goto', { reserve: true, sentry: true }, m.position)
+      continue
+    }
     const nearby = distance(m.position, foe.position) <= 4.5
+    const committed = S.confirmed(foe.id) || !!covered || aggressive || S.endgame || nearby
     // Окно на сундуки и при натиске (пользователь 25.10: «в железке ходят, хотя в сундуках броня лучше, — могли бы выделить время»):
     // враг дальше своей досягаемости с запасом — успею к сундуку раньше, чем он ко мне; ближе — бой, как прежде.
     const closest = aggressive ? [...enemies].sort((a, b) => distance(a.position, m.position) - distance(b.position, m.position))[0] : undefined
@@ -204,8 +252,12 @@ export function assignFighters(S: PvpPlan): void {
       if (race.loot) { put(m, 'loot', { improvement: improvementOf(m), race: true, reason: `лут: слабее их (${Math.round(race.mine)} против ${Math.round(race.theirs!)})` }); continue }
     }
     // Смена линий: ранг не на смене уходит в тыл и из контакта — иначе старый фронт так и стоит в бою (лаборатория 13.10).
-    if (!S.endgame && doctrine === 'line' && !deadly && lineRank(team.indexOf(m), team.length) !== lineDuty) {
-      put(m, 'goto', { reserve: true, line: lineRank(team.indexOf(m), team.length), rotation: lineDuty }); continue
+    let line: { line: number; rotation: number } | undefined
+    if (!S.endgame && doctrine === 'line' && !deadly) {
+      const order = S.state.lineOrder
+      const rank = order ? lineRank(order.indexOf(m.id), order.length) : lineRank(team.indexOf(m), team.length)
+      line = { line: rank, rotation: lineDuty }
+      if (rank !== lineDuty) { put(m, 'goto', { reserve: true, ...line }); continue }
     }
     const demand = visibleForce(foe) * 1.2 / meanStrength
     const engageValue = (1 - (loads.get(foe.id) || 0) / demand) * 15 + 7 - distance(m.position, foe.position) * 0.25
@@ -220,7 +272,7 @@ export function assignFighters(S: PvpPlan): void {
     if (!nearby && !aggressive && !finishing && !deadly && holdUpper && options.travelSeconds) {
       const arrival = options.travelSeconds(m, m.position, foe.position), back = options.travelSeconds(m, foe.position, upper)
       if (Number.isFinite(arrival) && arrival >= 0 && Number.isFinite(back) && back >= 0) {
-        const duties = board.tasks(), fight = foe === near ? personal! : memberFight(m, foe)
+        const fight = foe === near ? personal! : memberFight(m, foe)
         const cover = team.reduce((sum, a) => {
           const duty = plan.get(a.id) || duties.find(t => t.assignedTo === a.id)
           if (a.id === m.id || weak(a) || duty?.status === 'done' || !duty || !/^(fight|goto)$/.test(duty.kind) || duty.data?.target !== foe.id || duty.data.search) return sum
@@ -236,7 +288,8 @@ export function assignFighters(S: PvpPlan): void {
     }
     if (!nearby && !aggressive && !finishing && !deadly && !(m.role === 'miner-builder' && options.lootZones?.length && attackBeforeBuild(m, foe, board.now())) && engageValue < reserveValue) {
       // Резерв не сдаёт занятую высоту, если ближний верхний лут дешевле перехода и этот переход уводит от него.
-      put(m, m.role === 'miner-builder' ? 'scout' : 'goto', { reserve: true, sentry: true }, holdUpper ? m.position : at)
+      if (line) put(m, 'goto', { reserve: true, sentry: true, ...line }, spots.get(m.id))
+      else put(m, m.role === 'miner-builder' ? 'scout' : 'goto', { reserve: true, sentry: true }, holdUpper ? m.position : at)
       continue
     }
     const search = board.now() - foe.seenAt > 500
@@ -266,7 +319,7 @@ export function assignFighters(S: PvpPlan): void {
     // у кого он есть (иначе — только «волна» с запасом зарядов и без булавы).
     const shove = !search && deadly
     const slot = (aggressive || finishing || shove) && !search ? sectorOf(m, foe) : undefined
-    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, push: wind > 0 && (shove || doctrine === 'wave'), ...(shove ? { shove: true, shoveAt: { x: foe.position.x + edge!.x * (edge!.at ?? SHOVE_REACH), y: foe.position.y, z: foe.position.z + edge!.z * (edge!.at ?? SHOVE_REACH) } } : {}), ...(finishing ? { finishing: true } : {}), ...(covering ? { cover: covering.data!.cover } : {}), ...(assault ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
+    put(m, search || !(committed || nearby) ? 'goto' : 'fight', { target: foe.id, enemyPosition: foe.position, sentry: !committed, search, ...(!search && line), ...(search ? { searchEnemy: foe.id, searchSeenAt: foe.seenAt } : {}), push: wind > 0 && (shove || doctrine === 'wave'), ...(shove ? { shove: true, shoveAt: { x: foe.position.x + edge!.x * (edge!.at ?? SHOVE_REACH), y: foe.position.y, z: foe.position.z + edge!.z * (edge!.at ?? SHOVE_REACH) } } : {}), ...(finishing ? { finishing: true } : {}), ...(covering ? { cover: covering.data!.cover } : {}), ...(assault?.target === foe.id ? { assault: true } : {}), ...(means?.smash ? { smash: true } : {}), ...(means?.axe && comboMace ? { axe: true } : {}), ...(slot !== undefined ? { slot } : {}) }, search ? foe.position : slot !== undefined ? ringAt(foe, slot, 2.5) : aggressive ? foe.position : spots.get(m.id))
     loads.set(foe.id, (loads.get(foe.id) || 0) + m.strength / meanStrength)
     if (melee) meleeOn.set(foe.id, (meleeOn.get(foe.id) || 0) + 1)
   }
@@ -277,7 +330,7 @@ export function assignFighters(S: PvpPlan): void {
     const slot = task.data!.slot ?? sectorOf(m, foe)
     const vacate = S.digVacate.get(id)
     const proposed = vacate && !guardStands.some(q => distance(q, vacate) < .6) ? vacate : ringAt(foe, slot, 2.5, guardStands)
-    const old = board.tasks().find(t => t.assignedTo === id && t.kind === task.kind && t.data?.target === foe.id)?.data?.swarmStand
+    const old = duties.find(t => t.assignedTo === id && t.kind === task.kind && t.data?.target === foe.id)?.data?.swarmStand
     // Безопасная прежняя стойка не рвёт бой при перераздаче соседних ям.
     const keep = old && distance(old, foe.position) <= Math.max(SHOVE_REACH, distance(proposed, foe.position)) &&
       !S.digAvoid.some(s => s.y === Math.floor(old.y - .01) && old.x + .3 > s.x && old.x - .3 < s.x + 1 && old.z + .3 > s.z && old.z - .3 < s.z + 1) &&
@@ -295,8 +348,9 @@ export function commitPlan(S: PvpPlan): Map<string, SwarmTask> {
   for (const old of previous) if (![...plan.values()].some(t => t.id === old.id)) board.cancel(old.id)
   for (const [id, task] of plan) {
     const old = previous.find(t => t.id === task.id)
-    const unchanged = old?.claim && old.kind === task.kind && ['digAvoid', 'swarmStand'].every(key => JSON.stringify(old.data?.[key]) === JSON.stringify(task.data?.[key])) && (!task.data?.dig || JSON.stringify(old.data?.stands) === JSON.stringify(task.data.stands)) && ['target', 'ally', 'cover', 'doctrine', 'role', 'committed', 'search', 'reserve', 'panic', 'hold', 'ambush', 'fountain', 'stage', 'regroup', 'hide', 'kite', 'perch', 'rearm', 'gather', 'slot', 'dig', 'undermine', 'camp', 'ladder', 'shove', 'push', 'assault', 'finishing', 'smash', 'axe'].every(key => old.data?.[key] === task.data?.[key])
-    if (unchanged) { plan.set(id, old); continue }
+    const unchanged = old?.claim && old.kind === task.kind && ['digAvoid', 'swarmStand'].every(key => JSON.stringify(old.data?.[key]) === JSON.stringify(task.data?.[key])) && (!task.data?.dig || JSON.stringify(old.data?.stands) === JSON.stringify(task.data.stands)) && ['target', 'ally', 'cover', 'coverWall', 'coverShield', 'doctrine', 'role', 'committed', 'search', 'searchSeenAt', 'searchEnemy', 'reserve', 'line', 'rotation', 'panic', 'hold', 'ambush', 'fountain', 'stage', 'regroup', 'hide', 'kite', 'perch', 'rearm', 'gather', 'slot', 'dig', 'undermine', 'camp', 'ladder', 'shove', 'push', 'assault', 'finishing', 'smash', 'axe'].every(key => old.data?.[key] === task.data?.[key])
+    if (unchanged && old.data?.perchShot === task.data?.perchShot &&
+        (!task.data?.stablePost || old.position && task.position && distance(old.position, task.position) < 1)) { plan.set(id, old); continue }
     if (old?.status === 'done') board.cancel(old.id)
     plan.set(id, board.upsert(task))
   }

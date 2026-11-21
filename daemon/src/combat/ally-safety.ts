@@ -49,34 +49,57 @@ export function allyWorld(bot: any): any {
   return observed
 }
 
-export function allyAt(bot: any, e: any, tick: number): Vec3 {
+function allyPrediction(bot: any, e: any) {
   const observed = allyWorld(bot)
-  return leadTarget(e, () => observedVelocity(e), observed, 0)(tick)
+  const velocity = observedVelocity(e)
+  return leadTarget(e, () => velocity, observed, 0)
+}
+
+type AllyTrack = { predict: ReturnType<typeof allyPrediction>; positions: Map<number, Vec3> }
+
+export function allyAt(bot: any, e: any, tick: number, tracks?: Map<object, AllyTrack>): Vec3 {
+  if (!tracks) return allyPrediction(bot, e)(tick)
+  let track = tracks.get(e)
+  if (!track) {
+    track = { predict: allyPrediction(bot, e), positions: new Map() }
+    tracks.set(e, track)
+  }
+  let pos = track.positions.get(tick)
+  if (!pos) { pos = track.predict(tick); track.positions.set(tick, pos) }
+  return pos
 }
 
 /** Relative segment versus the moving native AABB; also covers a crossing between two ticks. */
-export function allyOnSegment(bot: any, allies: any[], from: Vec3, to: Vec3, tick: number, duration = 1, margin = Math.fround(.3)): any {
+export function allyOnSegment(bot: any, allies: any[], from: Vec3, to: Vec3, tick: number, duration = 1, margin = Math.fround(.3), tracks?: Map<object, AllyTrack>): any {
+  if (!allies.length) return null
+  const step = to.minus(from)
   for (const e of allies) {
-    const box = hitboxOf(bot, e), a = allyAt(bot, e, tick), b = allyAt(bot, e, tick + duration)
-    const direction = to.minus(from).minus(b.minus(a))
+    const box = hitboxOf(bot, e), a = allyAt(bot, e, tick, tracks), b = allyAt(bot, e, tick + duration, tracks)
+    const direction = step.minus(b.minus(a))
     const lo = a.offset(-box.w / 2 - margin, -margin, -box.w / 2 - margin)
     const hi = a.offset(box.w / 2 + margin, box.h + margin, box.w / 2 + margin)
-    const delta = b.minus(e.position), steps = Math.max(1, Math.ceil(delta.norm() / (box.w / 2)))
-    const observed = { blockAt: allyWorld(bot).blockAt, physics: { playerHalfWidth: box.w / 2, playerHeight: box.h } }
-    let clear = true
-    for (let i = 1; i <= steps && clear; i++) clear = bodyClear(observed, e.position.plus(delta.scaled(i / steps)), { water: true, web: true, powder: true })
-    if (!clear) {
-      // A wall, ceiling or unknown cell may stop the ally anywhere along this forecast.
-      for (const axis of ['x', 'y', 'z']) {
-        const half = axis === 'y' ? 0 : box.w / 2
-        lo[axis] = Math.min(lo[axis], e.position[axis] - half - margin, b[axis] - half - margin)
-        hi[axis] = Math.max(hi[axis], e.position[axis] + (axis === 'y' ? box.h : half) + margin, b[axis] + (axis === 'y' ? box.h : half) + margin)
-      }
-      if (rayBox(from, to.minus(from), lo, hi, 1) !== null) return e
-    }
-    // Unknown terrain may stop a fall earlier; do not approve a shot only because the forecast fell through it.
+    // A fall can stop on unknown terrain; its current head height stays exposed.
     if (e.onGround === false && !e.elytraFlying) hi.y = Math.max(hi.y, e.position.y + box.h + margin)
     if (rayBox(from, direction, lo, hi, 1) !== null) return e
+    // If both the forecast and the entire possible stopped body miss, terrain cannot change this answer.
+    for (const axis of ['x', 'y', 'z']) {
+      const half = axis === 'y' ? 0 : box.w / 2
+      lo[axis] = Math.min(lo[axis], e.position[axis] - half - margin, b[axis] - half - margin)
+      hi[axis] = Math.max(hi[axis], e.position[axis] + (axis === 'y' ? box.h : half) + margin, b[axis] + (axis === 'y' ? box.h : half) + margin)
+    }
+    if (rayBox(from, step, lo, hi, 1) === null && rayBox(from, direction, lo, hi, 1) === null) continue
+    const delta = b.minus(e.position), length = delta.norm()
+    if (!Number.isFinite(length)) return e
+    const steps = Math.max(1, Math.ceil(length / (box.w / 2)))
+    // A stop beyond both endpoints plus the body's full reach cannot meet this
+    // projectile segment. Keep the original spacing, including the first sample past contact.
+    const radius = Math.hypot(box.w / 2 + margin, box.h + margin, box.w / 2 + margin)
+    const reach = Math.max(e.position.distanceTo(from), e.position.distanceTo(to)) + radius
+    const last = length > reach ? Math.min(steps, Math.ceil(reach / (length / steps)) + 1) : steps
+    const observed = { blockAt: allyWorld(bot).blockAt, physics: { playerHalfWidth: box.w / 2, playerHeight: box.h } }
+    for (let i = 1; i <= last; i++) {
+      if (!bodyClear(observed, e.position.plus(delta.scaled(i / steps)), { water: true, web: true, powder: true })) return e
+    }
   }
   return null
 }

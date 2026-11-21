@@ -130,7 +130,11 @@ export function watchHumans (ctx: ArenaContext) {
   let humanBusy = false
   let humanErrAt = 0
   // Выбывший человек (соло: наблюдатель до конца раунда) — не цель: рой лез и копал к нему, летающему над ареной (15.10).
-  ctx.hostile = (b, name) => names.includes(name) ? name !== b.name && (!teams || teamOf(name) !== b.team) : !ctx.humanOut?.has(name) && (!teams || (HUMAN_TEAM ? teamOfHuman(name, HUMAN_TEAM) !== b.team : (rel[b.team]?.[name] || 0) < 0))
+  ctx.hostile = (b, name) => {
+    if (names.includes(name)) return name !== b.name && (!teams || teamOf(name) !== b.team)
+    const assigned = teamOfHuman(name, HUMAN_TEAM)
+    return !ctx.humanOut?.has(name) && (!teams || (assigned ? assigned !== b.team : (rel[b.team]?.[name] || 0) < 0))
+  }
   const watchedFoes = new Map<string, string>()
   const humanT = setInterval(async () => {
     if (humanBusy) return
@@ -161,7 +165,7 @@ export function watchHumans (ctx: ArenaContext) {
       const fresh = !humans[h]
       humans[h] ||= { hp: 20 }
       if (fresh && !SOLO) ctx.kitHuman(h).catch(() => {})
-      if (fresh && HUMAN_TEAM && !started.has(h)) { started.add(h); ctx.humanStart(h).catch(e => log(`⚠ ${h}: в команду не поставил — ${e.message}`)) }
+      if (fresh && teams && teamOfHuman(h, HUMAN_TEAM) && !started.has(h)) { started.add(h); ctx.humanStart(h).catch(e => log(`⚠ ${h}: в команду не поставил — ${e.message}`)) }
     }
     } catch (e: any) { if (Date.now() - (humanErrAt || 0) > 10000) { humanErrAt = Date.now(); log(`⚠ слежка за игроками: ${e.message}`) } } finally { humanBusy = false }
   }, 250)

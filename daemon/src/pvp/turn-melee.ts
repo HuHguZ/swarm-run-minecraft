@@ -201,6 +201,9 @@ function coveredShoveFloor (bot, to: { x: number; y: number; z: number }) {
   return true
 }
 
+// Reuse the sight for the same five game ticks as the local terrain forecast, including between sword swings.
+const shoveLandings = new WeakMap<DuelCtx, { to: object; foe: number | string; checked: number; covered: boolean; alternatives: ReturnType<typeof hazards.hazardsNear>; ordered: boolean }>()
+
 // Край и опасности: толкнуть его, не стоять спиной к яме или стене.
 export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { bot, ready, rest, st, used } = ctx
@@ -214,13 +217,31 @@ export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
   const order = ctx.session?.current?.params
   const to = order?.target && order.target === ctx.entity.username ? order.shoveAt : null
   let push = ctx.push
+  let visibleAlternatives: typeof ctx.nearFoe
   if (to && [to.x, to.y, to.z].every(Number.isFinite) && turn.inSight && !ctx.theirPit && !ctx.myPit && d < 6) {
     // Дальняя цепь: держим один край и бьём спринтом; с неверной стороны сначала обходим, иначе откатим его назад.
     const p = ctx.entity.position, dx = to.x - p.x, dz = to.z - p.z, n = Math.hypot(dx, dz)
     if (Number.isFinite(n) && n > .3) {
       const aligned = ((p.x - me.x) * dx + (p.z - me.z) * dz) / (n * (Math.hypot(p.x - me.x, p.z - me.z) || 1)) > .9
-      const covered = turn.canHit && !aligned && !pressing && p.y === to.y && coveredShoveFloor(bot, to)
-      if (!covered) {
+      let sight = shoveLandings.get(ctx)
+      const foe = ctx.entity.id ?? ctx.entity.username
+      const same = sight?.to === to && sight.foe === foe
+      const inspect = p.y === to.y && (aligned || turn.canHit && !pressing || same && sight.covered)
+      if (inspect && (!same || now - sight.checked >= 250)) {
+        const covered = coveredShoveFloor(bot, to)
+        const view = covered && ctx.nearFoe.length ? observedCollision(bot) : null
+        const alternatives = view ? ctx.nearFoe.flatMap(h => hazards.hazardsNear(view, new Vec3(h.pos.x, h.pos.y + 1, h.pos.z), 0)) : []
+        if (covered && sight?.ordered && ctx.hitKind === 'sprint') ctx.hitKind = null
+        sight = { to, foe, checked: now, covered, alternatives, ordered: false }
+        shoveLandings.set(ctx, sight)
+      }
+      const covered = inspect && sight?.covered
+      if (covered) {
+        // The reported opening has visibly closed. A second nearby hazard can justify another line of attack.
+        push = null
+        visibleAlternatives = sight.alternatives
+      } else {
+        if (aligned && sight) sight.ordered = true
         push = { now: aligned ? 'sprint' : null, stand: { x: p.x - dx / n * 2.5, z: p.z - dz / n * 2.5 }, sure: !pressing }
         if (!aligned && !pressing) turn.canHit = false
       }
@@ -250,7 +271,7 @@ export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
       if (ready('pushNote')) { rest('pushNote', 3000); used('захожу, чтобы столкнуть') }
     }
   }
-  const hz = !turn.pushing && !ctx.theirPit && !ctx.myPit ? hazards.nearest(ctx.nearFoe, ctx.entity.position) : null
+  const hz = !turn.pushing && !ctx.theirPit && !ctx.myPit ? hazards.nearest(visibleAlternatives || ctx.nearFoe, ctx.entity.position) : null
   if (hz && hz.d >= 0.6 && hz.d <= 2.8 && !ctx.fleeingSwell) {
     const hx = hz.pos.x + 0.5 - ctx.entity.position.x
     const hzz = hz.pos.z + 0.5 - ctx.entity.position.z
@@ -261,9 +282,14 @@ export function edgeTurn (ctx: DuelCtx, turn: TurnFrame) {
     const cos = (fx * hx + fz * hzz) / (fn * hn)
     if (cos > 0.8) {
       turn.pushing = true
+      if (visibleAlternatives && hz.kind === 'лава') turn.edgeHit = 'sprint'
       if (cooldownLeft <= 150) { turn.forward = true; turn.sprint = true; turn.back = false }
       if (ready('pushNote')) { rest('pushNote', 4000); used(`толкаю его в ${hz.kind === 'лава' ? 'лаву' : hz.kind === 'паутина' ? 'паутину' : 'яму'}`) }
     } else if (!(FIX && pressing)) {
+      if (visibleAlternatives && hz.kind === 'лава' && !pressing && !ctx.lastStand && !turn.axeTap) {
+        const canFinish = ctx.calc?.entity === ctx.entity && turn.meleeDmg >= ctx.foeEst?.()?.hi
+        if (!canFinish) turn.canHit = false
+      }
       const px = ctx.entity.position.x - hx / hn * 2.4 - me.x
       const pz = ctx.entity.position.z - hzz / hn * 2.4 - me.z
       const yaw = bot.entity.yaw
@@ -652,7 +678,7 @@ export async function strikeTurn (ctx: DuelCtx, turn: TurnFrame) {
         const sprintHit = mf.clock.srvSprint && charge > 0.9
         ctx.swingCrit = falling && !mf.clock.srvSprint
         const after = sprintHit ? (closing > 0.1 && theirR < 3.2 && !turn.pushing ? 'stap' : 'wtap') : null
-        mf.hit(ctx.entity, { swapTo, after, kind: ctx.hitKind, diag: { jumped: ctx.jumpedForCrit, race: race && theirR <= 2.6 } })
+        if (mf.hit(ctx.entity, { swapTo, after, kind: ctx.hitKind, diag: { jumped: ctx.jumpedForCrit, race: race && theirR <= 2.6 } }) === false) return NEXT
         // Щит (пункт H): удар по поднятому щиту — топором (выключит) или сбоку/сзади вне его 90° (BlocksAttacks);
         // урон, прошедший при поднятом щите, считает onTickDmg (окно 600 мс). Звено комбо — вид удара.
         if (blocking) {

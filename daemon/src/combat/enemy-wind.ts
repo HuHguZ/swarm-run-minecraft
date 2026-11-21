@@ -17,7 +17,7 @@ interface Frame { pos: Vec3; vel: Vec3; onGround: boolean }
 type WindCollision = ReturnType<typeof observedCollision>
 /** One synchronous release pass owns both raw Blocks and observed collision results, including unknowns. */
 export function windCollisionWorld(bot: any): WindCollision {
-  const raw = edges.worldOf(bot), sight = observedCollision(bot, p => raw.getBlock(p), true), seen = edges.worldOf(sight)
+  const raw = edges.worldOf(bot), sight = observedCollision(bot, p => raw.getBlock(p), true, pick.eyeOf(bot)), seen = edges.worldOf(sight)
   return { ...sight, blockAt: (p: Vec3) => seen.getBlock(p) }
 }
 export { WIND_FORECAST_TICKS } from './team-wind'
@@ -25,7 +25,7 @@ export interface EnemyWindShot {
   thrower: string; fireDelay: number; ticks: number; from: Vec3; aim: Vec3; yaw: number; pitch: number
   velocity: Vec3; burst: Vec3; feet: Vec3; aimHeight?: number; fireTick?: number; arrivalTick?: number
 }
-export interface EnemyWindOptions { arena: WindArena; startTick?: number; maxShots?: number; allies?: WindReport[]; delays?: number[]; reactAfterHit?: boolean; juggle?: boolean; deadline?: number; waitForHit?: boolean; collision?: WindCollision; protect?: Array<{ x: number, y: number, z: number }>; visiblePrefix?: boolean; expectedPrefix?: number; certifyRelease?: boolean }
+export interface EnemyWindOptions { arena: WindArena; startTick?: number; maxShots?: number; allies?: WindReport[]; delays?: number[]; reactAfterHit?: boolean; juggle?: boolean; deadline?: number; waitForHit?: boolean; collision?: WindCollision; protect?: Array<{ x: number, y: number, z: number }>; visiblePrefix?: boolean; waitForRelaySlot?: boolean; expectedPrefix?: number; certifyRelease?: boolean }
 
 // Blast Protection has a separate attribute from netherite's ordinary knockback resistance; glint hides its level.
 export function windResistance(foe: any): { lo: number; hi: number } {
@@ -171,7 +171,7 @@ export function windAllyTailSafe(bot: any, foe: any, shot: EnemyWindShot, allies
   return true
 }
 
-function windCoverClear(bot: any, { from, velocity, burst, ticks }: EnemyWindShot, blockShapes: Map<string, number[][] | null>, deadline?: number) {
+export function windCoverClear(bot: any, { from, velocity, burst, ticks }: Pick<EnemyWindShot, 'from' | 'velocity' | 'burst' | 'ticks'>, blockShapes: Map<string, number[][] | null>, deadline?: number) {
   const end = Math.min(ticks, burst.minus(from).dot(velocity) / velocity.dot(velocity))
   const cells = new Set<string>(), full = [0, 0, 0, 1, 1, 1], spread = WIND.speed * WIND.dispersion
   for (let start = 0; start < end; start++) {
@@ -199,25 +199,68 @@ function windCoverClear(bot: any, { from, velocity, burst, ticks }: EnemyWindSho
   return true
 }
 
-function segment(bot: any, foe: any, feet: Point, from: Vec3, velocity: Vec3, age: number, owner?: string, tick = age, sight?: Map<any, boolean>,
-  previousFeet?: Point, surface?: Vec3, eitherAllyPhase = false, previousBodies?: Map<any, Point>) {
+function rayTerrain(bot: any, from: Vec3, velocity: Vec3, age: number) {
   const origin = from.plus(velocity.scaled(age - 1)), length = velocity.norm(), direction = velocity.scaled(1 / length)
-  if (windAboveWorld(bot, origin)) return { blocked: true }
+  if (windAboveWorld(bot, origin)) return null
   let unknown = false
   const world = { blockAt(p: Vec3) { const b = bot.blockAt(p, false); if (!b) unknown = true; return b } }
   const block = pick.blockOnRay(world, origin, direction, length)
-  if (unknown) return { blocked: true }
-  const box = foe.position ? pick.hitboxOf(bot, foe) : { w: foe.width, h: foe.height }
+  return unknown ? null : { origin, length, direction, block }
+}
+
+// The aim and recoil branches share one observed block snapshot. Entity intersections depend on each branch.
+class WindPlanSight extends Map<any, boolean> {
+  private rays = new WeakMap<Vec3, { from: Vec3; steps: ReturnType<typeof rayTerrain>[] }>()
+  private roster?: { table: any; self: any; bodies: any[] }
+  private boxes = new WeakMap<object, { w: number; h: number }>()
+  bodies(bot: any) {
+    if (!this.roster || this.roster.table !== bot.entities || this.roster.self !== bot.entity) {
+      const bodies = [bot.entity, ...Object.values(bot.entities || {})].filter(e => e && (e.username || e.type === 'player' || e.type === 'mob'))
+      this.roster = { table: bot.entities, self: bot.entity, bodies }
+    }
+    return this.roster.bodies
+  }
+  dimensions(bot: any, foe: any) {
+    let box = this.boxes.get(foe)
+    if (!box) {
+      const { w, h } = pick.hitboxOf(bot, foe)
+      this.boxes.set(foe, box = { w, h })
+    }
+    return box
+  }
+  terrain(bot: any, from: Vec3, velocity: Vec3, age: number) {
+    let ray = this.rays.get(velocity)
+    if (!ray || ray.from !== from) this.rays.set(velocity, ray = { from, steps: [] })
+    if (ray.steps[age] === undefined) ray.steps[age] = rayTerrain(bot, from, velocity, age)
+    return ray.steps[age]
+  }
+}
+
+function segment(bot: any, foe: any, feet: Point, from: Vec3, velocity: Vec3, age: number, owner?: string, tick = age, sight?: Map<any, boolean>,
+  previousFeet?: Point, surface?: Vec3, eitherAllyPhase = false, previousBodies?: Map<any, Point>) {
+  const terrain = sight instanceof WindPlanSight ? sight.terrain(bot, from, velocity, age) : rayTerrain(bot, from, velocity, age)
+  if (!terrain) return { blocked: true }
+  const { origin, length, direction, block } = terrain
+  const box = !foe.position ? { w: foe.width, h: foe.height } : sight instanceof WindPlanSight ? sight.dimensions(bot, foe) : pick.hitboxOf(bot, foe)
   const hit = bodyHit(origin, direction, length, feet, age, box.w, box.h, previousFeet)
   const blockFirst = block && (hit === null || block.t < hit)
   if (blockFirst && (!surface || !block.pos.equals(surface))) return { blocked: true }
   const terminal = blockFirst ? block.t : hit
-  for (const entity of [bot.entity, ...Object.values(bot.entities || {})] as any[]) {
+  // Widest vanilla 1.21.11 player (scale attribute max 16) plus ProjectileUtil's maximum margin.
+  const side = Math.fround(.6) * 16 / 2 + Math.fround(.3)
+  const x0 = origin.x + Math.min(0, velocity.x) - side, x1 = origin.x + Math.max(0, velocity.x) + side
+  const z0 = origin.z + Math.min(0, velocity.z) - side, z1 = origin.z + Math.max(0, velocity.z) + side
+  const bodies = sight instanceof WindPlanSight ? sight.bodies(bot) : [bot.entity, ...Object.values(bot.entities || {})]
+  for (const entity of bodies as any[]) {
     if (entity === bot.entity && bot._ndWindOwnReported) continue
     if (!entity?.position || entity.id === foe.id || !!owner && (entity.username === owner || entity.id === bot.entity?.id && bot.entity?.username === owner) ||
         !(entity.username || entity.type === 'player' || entity.type === 'mob')) continue
     if (!entity._ndReportedAlly && entity !== bot.entity) {
-      const visible = sight?.get(entity) ?? pick.canHit(bot, entity, { range: 64 })
+      const p = entity.position
+      if (entity.type === 'player' && !previousBodies?.has(entity) &&
+          (p.x < x0 || p.x > x1 || p.z < z0 || p.z > z1)) continue
+      const visible = sight?.get(entity) ?? (pick.canHit(bot, entity, { range: 64 }) &&
+        (!(Number(entity.metadata?.[0]) & 0x20) || !(entity.username || entity.type === 'player') || seesPlayer(bot, entity)))
       sight?.set(entity, visible)
       if (!visible) continue
     }
@@ -242,7 +285,7 @@ function segment(bot: any, foe: any, feet: Point, from: Vec3, velocity: Vec3, ag
 }
 
 /** Aimed entity hit, including gravity in the supplied native body frames; no invented air detonation point. */
-export function enemyWindShot(bot: any, foe: any, report: WindReport, frames: Frame[], { fireDelay = 0, height = 1.4, allies = [] as WindReport[], tracks = new Map<WindReport, Frame[]>() } = {}, sight = new Map<any, boolean>(), deadline?: number, collision?: WindCollision): EnemyWindShot | null {
+export function enemyWindShot(bot: any, foe: any, report: WindReport, frames: Frame[], { fireDelay = 0, height = 1.4, allies = [] as WindReport[], tracks = new Map<WindReport, Frame[]>() } = {}, sight: Map<any, boolean> = new WindPlanSight(), deadline?: number, collision?: WindCollision): EnemyWindShot | null {
   if (expired(deadline) || !finite(report.position) || !finite(report.velocity) || report.launchMovement !== undefined && !finite(report.launchMovement) ||
       !frames.length || !Number.isSafeInteger(fireDelay) || fireDelay < 0) return null
   const box = foe.position ? pick.hitboxOf(bot, foe) : { w: foe.width, h: foe.height }
@@ -358,7 +401,7 @@ export function windTeamSafe(bot: any, allies: WindReport[], shots: Array<Pick<E
   return true
 }
 
-function teamFrames(bot: any, report: WindReport, tracks: Map<WindReport, Frame[]>, deadline?: number, horizon = WIND_FORECAST_TICKS): Frame[] | null {
+function teamFrames(bot: any, report: WindReport, tracks: Map<WindReport, Frame[]>, deadline?: number, horizon = WIND_FORECAST_TICKS, sharedWorld?: ReturnType<typeof edges.worldOf>): Frame[] | null {
   if (expired(deadline) || !Number.isSafeInteger(horizon) || horizon < 0 || horizon > WIND_FORECAST_TICKS) return null
   let frames = tracks.get(report)
   if (!frames) {
@@ -369,8 +412,8 @@ function teamFrames(bot: any, report: WindReport, tracks: Map<WindReport, Frame[
     tracks.set(report, frames)
   }
   if (frames.length > horizon) return frames
-  const state = (frames as any).nativeState, world = edges.worldOf(bot), simulate = edges.simOf(bot)
-  if (!state) { tracks.delete(report); return teamFrames(bot, report, tracks, deadline, horizon) }
+  const state = (frames as any).nativeState, world = sharedWorld ?? edges.worldOf(bot), simulate = edges.simOf(bot)
+  if (!state) { tracks.delete(report); return teamFrames(bot, report, tracks, deadline, horizon, world) }
   while (frames.length <= horizon) {
     if (expired(deadline)) { tracks.delete(report); return null }
     simulate(state, world); frames.push({ pos: state.pos.clone(), vel: state.vel.clone(), onGround: state.onGround })
@@ -380,11 +423,15 @@ function teamFrames(bot: any, report: WindReport, tracks: Map<WindReport, Frame[
 
 function teamWorld(bot: any, team: WindReport[], tracks: Map<WindReport, Frame[]>, deadline?: number) {
   const entities = { ...bot.entities }, snapshot = { ...bot, entities, _ndWindOwnReported: team.some(ally => ally.id === bot.entity.username) }
+  let world: ReturnType<typeof edges.worldOf> | undefined
   for (const ally of team) {
     const frames = teamFrames(snapshot, ally, tracks, deadline, 0)
     if (!frames) return null
     const lazy = new Proxy(frames, { get(target, key, receiver) {
-      if (typeof key === 'string' && /^\d+$/.test(key)) return teamFrames(snapshot, ally, tracks, deadline, Number(key))?.[Number(key)]
+      if (typeof key === 'string' && /^\d+$/.test(key)) {
+        const tick = Number(key)
+        return teamFrames(snapshot, ally, tracks, deadline, tick, world ??= edges.worldOf(snapshot))?.[tick]
+      }
       return Reflect.get(target, key, receiver)
     } })
     const position = vec(ally.position), seen: Point & { ageTicks?: number } = ally.velocity
@@ -428,6 +475,9 @@ function rollout(bot: any, foe: any, shots: WindRay[], arena: WindArena, resista
   let beforeImpact: ReturnType<typeof edges.stateOf> | null = null
   let endpointTick: number | null = !shots.length && state.onGround ? 0 : null
   let blockedBeforeLanding = false
+  // A living player can stand on an exterior ledge or a player-built bridge inside the referee's field.
+  // From that support, only an actual fall or a new crossing after re-entering counts as an ejection.
+  let onExteriorLedge = !!arena.ellipse && state.onGround && windOutside(arena, state.pos, foe.width)
   let out = false, exited = false, fallOut = false, outTick = null, lastHurt = -Infinity, burstTick = -Infinity, air = 0, landed = false, clear = Infinity, reach = Infinity
   let assessFall = foe.assessFall !== false && !!arena.ellipse && !foe.protect && !foe.gliding &&
     (shots.length === 1 || !shots.length && !state.onGround)
@@ -511,15 +561,18 @@ function rollout(bot: any, foe: any, shots: WindRay[], arena: WindArena, resista
     }
     if (endpointTick === null && state.onGround && (!shots.length || impacts.length && tick > burstTick && done.size === shots.length)) endpointTick = tick
     if (windOutside(arena, state.pos, foe.width)) {
-      exited = true
       fallOut ||= state.pos.y < killY
-      if (!arena.ellipse || state.onGround || state.pos.y < killY) {
-        endpointTick ??= tick
-        if (!out) { out = true; outTick = tick }
+      if (!onExteriorLedge || fallOut) {
+        exited = true
+        if (!arena.ellipse || state.onGround || fallOut) {
+          endpointTick ??= tick
+          if (!out) { out = true; outTick = tick }
+        }
       }
-    } else if (arena.ellipse && out && !fallOut) {
+    } else {
+      onExteriorLedge = false
       // A living target can run back from an exterior ledge before the forecast ends.
-      out = false; outTick = null
+      if (arena.ellipse && out && !fallOut) { out = false; outTick = null }
     }
     // An interior fall ends the forecast. Only legacy square arenas count a hole as an exit.
     if (state.pos.y < killY - 1) {
@@ -959,11 +1012,17 @@ function firstGroundObservationExpired(raw: any, at?: number) {
 export function windGroundObservationExpired(bot: any, raw: any, receiptAt: number, at?: number): boolean {
   const observedAt = at ?? raw._ndObservationNow?.()
   if (!(observedAt - receiptAt >= FIRST_GROUND_OBSERVATION_MS)) return false
-  const fair = raw._ndVisible === undefined ? windObservations.get(bot)?.sight.observe(raw) : raw
+  const fair = observedWindPlayer(bot, raw)
   return !!fair && !require('../elytra/track').gliding(fair) && firstGroundObservationExpired(fair, observedAt)
 }
 
-function enemyView(bot: any, raw: any, collision?: WindCollision) {
+export function observedWindPlayer(bot: any, raw: any, motionOnly = false) {
+  if (raw._ndVisible !== undefined) return raw
+  const sight = windObservations.get(bot)?.sight
+  return motionOnly ? sight?.observeMotion(raw) : sight?.observe(raw)
+}
+
+function enemyView(bot: any, raw: any, collision?: WindCollision, deadline?: number) {
   const tracking = windObservations.get(bot), sight = tracking?.sight
   if (raw._ndVisible === undefined && sight) raw = sight.observe(raw) || raw
   const life = bot.players?.[raw.username]?.entity
@@ -1068,7 +1127,10 @@ function enemyView(bot: any, raw: any, collision?: WindCollision) {
   if (age && !view.groundAnchor) {
     const state = bodyState(bot, view), simulate = edges.simOf(bot), world = edges.worldOf(collision || observedCollision(bot))
     if (run && !view.gliding) { state.yaw = run.yaw; state.control = { ...edges.IDLE, ...run.control } }
-    for (let tick = 0; tick < age; tick++) simulate(state, world)
+    for (let tick = 0; tick < age; tick++) {
+      if (expired(deadline)) return null
+      simulate(state, world)
+    }
     Object.assign(view, { position: state.pos, velocity: state.vel, onGround: state.onGround })
   }
   return view
@@ -1077,21 +1139,29 @@ function enemyView(bot: any, raw: any, collision?: WindCollision) {
 // Active scheduled throws maintain this same fair motion cache while waiting, without a 65-frame rollout each tick.
 export { enemyView as observeEnemyWindMotion }
 
+// A gap in direct sight ends both fitted motion intervals, even when it is too early to build a new view.
+function visibleWindTarget(bot: any, raw: any) {
+  if (raw?.position && seesPlayer(bot, raw)) return true
+  coastVelocities.delete(raw)
+  sprintVelocities.delete(raw)
+  return false
+}
+
 /** Executor revalidation starts at the latest observed pose, never the old plan's extrapolated enemy state. */
-export function enemyWindFrames(bot: any, raw: any, arena: WindArena, shots: EnemyWindShot[] = [], resistance = 0, reactAfterHit = false, collision?: WindCollision): Frame[] {
-  if (!raw?.position || !seesPlayer(bot, raw)) return []
-  const view = enemyView(bot, raw, collision)
+export function enemyWindFrames(bot: any, raw: any, arena: WindArena, shots: EnemyWindShot[] = [], resistance = 0, reactAfterHit = false, collision?: WindCollision, deadline?: number): Frame[] {
+  if (!visibleWindTarget(bot, raw) || expired(deadline)) return []
+  const view = enemyView(bot, raw, collision, deadline)
   if (!view) return []
   const world = edges.worldOf(collision || observedCollision(bot))
   const active = shots.map(shot => ({ ...shot, from: vec(shot.from), velocity: vec(shot.velocity) }))
   const foe = { ...view, reactAfterHit, assessFall: false }
-  return rollout({ ...bot, blockAt: p => world.getBlock(p) }, foe, active, arena, Math.max(0, Math.min(1, resistance)))?.frames || []
+  return rollout({ ...bot, blockAt: p => world.getBlock(p) }, foe, active, arena, Math.max(0, Math.min(1, resistance)), 0, undefined, deadline)?.frames || []
 }
 
 /** A visible in-flight allied lift can inform steering before its impact; cast and finish still need fresh motion. */
 export function enemyWindLiftFrames(bot: any, raw: any, arena: WindArena, baseline: Frame[], lead: number, deadline: number): Frame[] | null {
   if (raw?._ndVisible !== true || !baseline[1] || expired(deadline)) return null
-  const collision = windCollisionWorld(bot), foe = enemyView(bot, raw, collision)
+  const collision = windCollisionWorld(bot), foe = enemyView(bot, raw, collision, deadline)
   if (!foe || foe.onGround || foe.gliding || !foe.position.equals(baseline[0].pos) || !foe.velocity.equals(baseline[0].vel)) return null
   const pending = pendingWindHit(bot, raw, baseline.slice(0, lead + 1), [], collision, { witness: true, deadline })
   if (!pending?.witness || baseline[pending.ticks].onGround) return null
@@ -1214,7 +1284,7 @@ export function windFinishOpportunity(bot: any, target: any, arena: WindArena, c
     const block = world.blockAt(p)
     if (!block) seedUnknown = true
     return block
-  } } : world)
+  } } : world, deadline)
   if (!foe || foe.onGround || foe.gliding || seedUnknown) return null
   const unknown: { step?: number } = {}
   const run = rollout({ ...bot, blockAt: p => world.blockAt(p) }, { ...foe, reactAfterHit: true, assessFall: false }, [],
@@ -1226,7 +1296,7 @@ export function windFinishOpportunity(bot: any, target: any, arena: WindArena, c
   // contact planner requires a valid hit strictly before this cutoff.
   if (cut === undefined ? !landed : cut < 2) return null
   const frames = cut === undefined ? run.frames : run.frames.slice(0, cut)
-  if (bot._ndThrown?.size && pendingWindHit(bot, live, frames, [], world) || expired(deadline)) return null
+  if (bot._ndThrown?.size && pendingWindHit(bot, live, frames, [], world, { deadline }) || expired(deadline)) return null
   const window = { target: live.username, at: landed ? run.position : frames.at(-1)!.pos, ticks: cut ?? run.endpointTick, gameTick, frames }
   if (spear === 'preflight' && gust && Number.isSafeInteger(epoch)) spearInside.set(window, {
     bot, body: bot.entity, clock: bot.ndClock, world: bot.world, arena, target: live, epoch, gust
@@ -1247,15 +1317,18 @@ interface PendingWindHit {
   witness?: { from: Vec3; velocity: Vec3; age: number; thrower: string }
 }
 
-function visibleBirthClear(bot: any, foe: any, seen: any, view: any, record: any, velocity: Vec3,
-  owner: string, sight: Map<any, boolean>, deadline?: number, fairSight?: ReturnType<typeof createLastSeen>) {
+function observedBirthRay(seen: any, view: any, record: any) {
   const birth = view._ndWindMotion?.birth
   const age = Math.ceil((view._ndObservationNow() - record.observedAt) / 50 + 1)
   // Paper 1.21.11 ends deflection grace after the fifth movement. Include one adjacent native age before that boundary.
-  if (!birth?.velocity || birth.record !== record || !(age > 1 && age < 5) || !finite(record.p) || !vec(record.p).equals(view.position)) return false
+  if (!birth?.velocity || birth.record !== record || !(age > 1 && age < 5) || !finite(record.p) || !vec(record.p).equals(view.position)) return
   const [previous, target] = seen?._ndVisible === true ? seen._ndPositionReceipts || [] : []
-  if (!finite(previous) || !finite(target)) return false
-  const origin = vec(record.p), previousBodies = new Map<any, Point>(), ownStep = bot._ndLaunchMovement?.()
+  if (finite(previous) && finite(target)) return { from: vec(record.p), age, previous, target }
+}
+
+function visibleBirthClear(bot: any, foe: any, birth: NonNullable<ReturnType<typeof observedBirthRay>>, record: any, velocity: Vec3,
+  owner: string, sight: Map<any, boolean>, deadline?: number, fairSight?: ReturnType<typeof createLastSeen>) {
+  const previousBodies = new Map<any, Point>(), ownStep = bot._ndLaunchMovement?.()
   if (finite(ownStep)) previousBodies.set(bot.entity, vec(bot.entity.position).minus(vec(ownStep)))
   for (const body of Object.values(bot.entities || {}) as any[]) {
     if (expired(deadline)) return false
@@ -1265,9 +1338,9 @@ function visibleBirthClear(bot: any, foe: any, seen: any, view: any, record: any
     if (finite(prior) && finite(current) && prior.t < current.t && current.t >= record.observedAt) previousBodies.set(body, prior)
   }
   // Check the whole upper phase from the actual spawn position, including the local player and visible bodies in segment.
-  for (let step = 1; step <= age; step++) {
+  for (let step = 1; step <= birth.age; step++) {
     if (expired(deadline)) return false
-    const hit = segment(bot, foe, target, origin, velocity, step, owner, 0, sight, previous, undefined, false, previousBodies)
+    const hit = segment(bot, foe, birth.target, birth.from, velocity, step, owner, 0, sight, birth.previous, undefined, false, previousBodies)
     if (hit.blocked || hit.burst) return false
   }
   return true
@@ -1275,20 +1348,22 @@ function visibleBirthClear(bot: any, foe: any, seen: any, view: any, record: any
 
 export function pendingWindHit(bot: any, foe: any, frames: Frame[], scheduled: EnemyWindShot[] = [], collision?: WindCollision,
   watch?: { witness?: boolean; skip?: number; deadline?: number }): PendingWindHit | null {
-  const tick = worldTick(bot), time = observationNow()
-  if (tick === null) return null
+  const tick = worldTick(bot), time = observationNow(), deadline = watch?.deadline
+  if (tick === null || expired(deadline)) return null
   const sight = new Map<any, boolean>()
-  const world = edges.worldOf(collision || observedCollision(bot)), observed = { ...bot, blockAt: p => world.getBlock(p) }
+  const world = edges.worldOf(collision || observedCollision(bot))
+  const observed = { ...bot, blockAt: p => expired(deadline) ? null : world.getBlock(p) }
   const box = foe.position ? pick.hitboxOf(bot, foe) : { w: foe.width, h: foe.height }
-  const seen = foe._ndVisible === undefined ? windObservations.get(bot)?.sight.observe(foe) : foe
+  const seen = observedWindPlayer(bot, foe)
   const target = seen?._ndVisible === true ? seen._ndPositionReceipts?.[1] : undefined
   const unseenTicks = finite(target) ? (time - target.t) / 50 : 0
   let first: PendingWindHit | null = null
   for (const [id, record] of thrownTracker(bot)) {
-    if (expired(watch?.deadline)) return null
+    if (expired(deadline)) return null
     if (id === watch?.skip || !/^(?:breeze_)?wind_charge$/.test(record.name)) continue
     const entity = bot.entities?.[id]
     const view = entity && projectileView(bot, entity, time)
+    if (expired(deadline)) return null
     if (!view) continue
     const age = Math.max(0, Math.round((time - (record.observedAt ?? record.t0)) / 50))
     const owner = record.owner === bot.entity.id ? bot.entity : bot.entities[record.owner]
@@ -1313,12 +1388,13 @@ export function pendingWindHit(bot: any, foe: any, frames: Frame[], scheduled: E
         if (hitAt === null || passed + hitAt / length <= sinceTarget) continue
         // A known obstruction before that receipt still consumes the ray. Start at its last actual witness.
         for (let step = 0; step <= passed; step++) {
+          if (expired(deadline)) return null
           const stepVelocity = velocity.scaled(Math.min(1, stale - step)), stepAge = firstAge + step
           const stepFrom = witnessed.plus(velocity.scaled(step)).minus(stepVelocity.scaled(stepAge - 1))
           const hit = segment(observed, foe, target, stepFrom, stepVelocity, stepAge, owner?.username, 0, sight)
           if (hit.blocked) break
           if (hit.burst) {
-            if (step === passed) return { id, ticks: 1, burst: hit.burst }
+            if (step === passed) return expired(deadline) ? null : { id, ticks: 1, burst: hit.burst }
             break
           }
         }
@@ -1328,10 +1404,16 @@ export function pendingWindHit(bot: any, foe: any, frames: Frame[], scheduled: E
     const relay = watch?.witness && native && record.name === 'wind_charge' && owner?.username && owner !== bot.entity && isAlly(bot, owner)
     const advanced = witnessed.plus(velocity.scaled(stale))
     const estimated = advanced.minus(velocity.scaled(age))
-    const birth = relay && stale > 1 && visibleBirthClear(observed, foe, seen, view, record, velocity, owner.username, sight, watch.deadline, windObservations.get(bot)?.sight)
-      ? vec(record.p) : undefined
-    // Keep the earlier warning and test the cleared birth ray if receipt drift hid its contact.
-    for (const from of birth ? [estimated, birth] : [estimated]) {
+    const birth = relay && stale > 1 ? observedBirthRay(seen, view, record) : undefined
+    let clearBirth: boolean | undefined
+    const verifiedBirth = () => {
+      if (!birth) return
+      clearBirth ??= visibleBirthClear(observed, foe, birth, record, velocity, owner.username, sight, deadline, windObservations.get(bot)?.sight)
+      return clearBirth ? birth.from : undefined
+    }
+    // The ordinary warning can use the current receipt. A second ray from spawn must also prove its traveled path.
+    for (const from of birth ? [estimated, birth.from] : [estimated]) {
+      if (expired(deadline)) return null
       const position = from === estimated ? advanced : from.plus(velocity.scaled(age))
       const beforeFirst = first?.ticks ?? frames.length
       let contact = 1, near = 0
@@ -1342,10 +1424,11 @@ export function pendingWindHit(bot: any, foe: any, frames: Frame[], scheduled: E
         if (bodyHit(origin, direction, length, frames[contact].pos, age + contact, box.w, box.h, frames[contact - 1].pos) !== null) break
       }
       let surface: { tick: number; block: Vec3; burst: Vec3 } | undefined
+      if (!near && contact >= beforeFirst || from === birth?.from && !verifiedBirth()) continue
       if (near) {
         // Only a ray close enough to affect either body phase needs a terrain search.
         let unknown = false
-        const known = { ...observed, blockAt(p: Vec3) { const b = world.getBlock(p); if (!b) unknown = true; return b } }
+        const known = { ...observed, blockAt(p: Vec3) { const b = observed.blockAt(p); if (!b) unknown = true; return b } }
         const impact = windBlockImpact(known, position, direction, near * length, length)
         if (impact && !unknown) {
           const step = Math.max(1, Math.ceil(impact.distance / length))
@@ -1359,6 +1442,7 @@ export function pendingWindHit(bot: any, foe: any, frames: Frame[], scheduled: E
       if (contact >= beforeFirst) continue
       // An earlier block or entity still consumes a ray that could intersect the target.
       for (let step = 1; step <= contact; step++) {
+        if (expired(deadline)) return null
         // An incoming projectile can collide before the next player movement packet advances the body.
         const hit = segment(observed, foe, frames[step].pos, from, velocity, age + step, owner?.username, step, sight, frames[step - 1].pos,
           surface?.tick === step ? surface.block : undefined)
@@ -1366,13 +1450,14 @@ export function pendingWindHit(bot: any, foe: any, frames: Frame[], scheduled: E
         if (hit.blocked) break
         if (hit.burst) {
           first = { id, ticks: step, burst: hit.burst }
-          if (relay && (stale <= 1 || birth)) first.witness = { from: birth ?? from, velocity, age, thrower: owner.username }
+          const witnessedFrom = relay && (stale <= 1 ? from : verifiedBirth())
+          if (witnessedFrom) first.witness = { from: witnessedFrom, velocity, age, thrower: owner.username }
           break
         }
       }
     }
   }
-  return first
+  return expired(deadline) ? null : first
 }
 
 /** A nearby gust alone cannot identify our cast: its native projectile must disappear in the same tick window. */
@@ -1468,8 +1553,10 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
   const late = () => expired(options?.deadline)
   if (late()) { planTrace('late:budget'); return null }
   const now = worldTick(bot), arena = options?.arena
-  if (now === null || !arena || !raw?.position || !seesPlayer(bot, raw)) return null
-  const foe: any = enemyView(bot, raw, options.collision)
+  if (now === null || !arena || !visibleWindTarget(bot, raw)) return null
+  const start = options.startTick ?? now + 2
+  if (!Number.isSafeInteger(start) || start < now || start > now + 20) return null
+  const foe: any = enemyView(bot, raw, options.collision, options.deadline)
   if (!foe) return null
   foe.reactAfterHit = !!options.reactAfterHit
   if (options.protect?.length) foe.protect = options.protect.map(vec)
@@ -1488,18 +1575,17 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
   if (!options.protect?.length) foe.outward = outward.clone()
   const rank = (r: WindReport) => { const d = foe.position.minus(vec(r.position)), distance = d.norm(); return distance - 10 * (distance ? d.dot(outward) / distance : 0) }
   throwers.sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id))
-  const start = options.startTick ?? now + 2
-  if (!Number.isSafeInteger(start) || start < now || start > now + 20) return null
   // Price the same observed input with and without our gust; a hypothetical enemy reaction belongs to the worst-case check.
   const nominalFoe = options.protect?.length ? foe : { ...foe, keepObservedInput: true }
-  const sight = new Map<any, boolean>(), baseline = rollout(snapshot, nominalFoe, [], arena, 0, 0, sight, options.deadline), shots: EnemyWindShot[] = []
+  const sight = new WindPlanSight(), baseline = rollout(snapshot, nominalFoe, [], arena, 0, 0, sight, options.deadline), shots: EnemyWindShot[] = []
   if (!baseline) return null
   const relay = !!options.visiblePrefix && !options.protect?.length && options.maxShots === 1 && throwers.length === 1
   const pending = options.waitForHit && bot._ndThrown?.size ? pendingWindHit(bot, raw, baseline.frames, [], observed,
-    relay ? { witness: true, deadline: options.deadline } : undefined) : null
+    { witness: relay, deadline: options.deadline }) : null
+  if (late()) { planTrace('late:budget'); return null }
   if (pending?.ticks === 1) { planTrace('pending_wind_impulse'); return null }
   if (options.expectedPrefix !== undefined && pending?.id !== options.expectedPrefix) return null
-  if (relay && pending?.witness && !baseline.out) {
+  if (relay && !options.waitForRelaySlot && pending?.witness && !baseline.out) {
     const result = followVisibleWind(bot, snapshot, raw, nominalFoe, throwers[0], team, allyTracks, sight,
       observed, options, resistance, pending, baseline, now, start)
     if (result) return result
@@ -1527,6 +1613,30 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
     for (let tick = 0, speed = WIND.knockback; tick < WIND_FORECAST_TICKS && speed > 0; tick++, speed = (speed - gravity) * airdrag) gustRise += speed
   }
   const liftWorld = { ...snapshot, entity: { _ndPoseHeight: foe.height } }, liftCache = new Map<string, number | null>()
+  // A relative-move packet rounds each coordinate to 1/4096 of a block (VecDeltaCodec).
+  const sameCoordinate = (a: number, b: number) => Math.round(a * 4096) === Math.round(b * 4096)
+  const pinnedLastCharge = (run: WindRun) => {
+    if (pending || options.protect?.length || team.length !== 1 || team[0].id !== bot.entity.username || !foe.onGround ||
+        foe.velocity.x || foe.velocity.z || run.out || run.exited || run.air > baseline.air || run.fallDamage > baseline.fallDamage ||
+        !run.frames[run.endpointTick].onGround || !baseline.frames[baseline.endpointTick].onGround ||
+        !sameCoordinate(run.position.x, baseline.position.x) || !sameCoordinate(run.position.y, baseline.position.y) ||
+        !sameCoordinate(run.position.z, baseline.position.z)) return false
+    const hands = require('../mace/hands') as typeof import('../mace/hands')
+    if (!bot.inventory?.slots || !bot.inventory.items || hands.windCount(bot) !== 1) return false
+    const step = bot.physics.stepHeight
+    const room = step > 0 ? verticalLift(liftWorld, run.position, step, true) : null
+    if (room === null || room >= step) return false
+    // Preserve a sideways displacement during the flight even if the two landings coincide.
+    for (let i = 0; i <= run.endpointTick; i++) {
+      const { pos } = run.frames[i]
+      if (!sameCoordinate(pos.x, foe.position.x) || !sameCoordinate(pos.z, foe.position.z)) return false
+    }
+    // AbstractWindCharge.onHitEntity deals one raw damage. Only our confirmed hits bound the opponent’s HP.
+    const hp = (require('../pvp/combat-observe') as typeof import('../pvp/combat-observe')).foeHpUpper(bot, raw)
+    if (hp === null || hp > 1 || hands.shieldAtUs(bot, foe)) return true
+    const damage = require('../pvp/damage-model') as typeof import('../pvp/damage-model')
+    return hp > damage.afterDefense(1, 'projectile', damage.defenseOf(foe.equipment.slice(2, 6)))
+  }
   const headroom = (r: WindRun) => {
     if (!gustRise || r.out || !r.frames[r.endpointTick].onGround || late()) return null
     const key = r.position.toString()
@@ -1637,6 +1747,7 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
         const run = bounds(snapshot, nominalFoe, trial, arena, resistance.lo, team, allyTracks, sight, options.deadline,
           options.protect?.length ? undefined : compare, worthCertifying, safeImpacts)
         if (!run) { planTrace(dominated ? 'shot:dominated' : 'shot:ally_unsafe'); continue }
+        if (pinnedLastCharge(run)) continue
         // With equal outward effect, extra air can set up the next ally's throw.
         // Отвод (options.protect): чем дальше его тело проходит от своих, тем лучше; до 6 бл. — дальше копьё не достаёт с запасом.
         if (!(compare(run, nominal) > 0)) planTrace('shot:no_gain')
@@ -1678,7 +1789,7 @@ export function planEnemyWind(bot: any, raw: any, reports: WindReport[], options
             compareChoice(run, shot, selected!, baseline) > 0
         }, safeImpacts)
         const safe = improved && bounds(snapshot, foe, [shot], arena, resistance.hi, team, allyTracks, sight, deadline, undefined, undefined, safeImpacts)
-        if (improved && safe && !expired(deadline)) {
+        if (improved && safe && !expired(deadline) && !pinnedLastCharge(improved)) {
           shots[0] = shot; nominal = improved; worst = safe; repriceRim ||= terrainUsed
         }
       }

@@ -12,15 +12,18 @@ export function createTerrain(ctx: CombatContext) {
 // Пробить его стенку, счёт падений у края, ямы: выбраться, лава ему в яму.
 function createPits (ctx: CombatContext) {
 let failedPunch = null
-const punchThrough = async (availabilityOnly = false) => {
-    const eye0 = ctx.bot.entity.position.offset(0, ctx.EYE, 0)
+const punchThrough = async (availabilityOnly = false, footObstacle = false) => {
+    const me = ctx.bot.entity.position, eye0 = eyeOf(ctx.bot)
+    const origin = footObstacle ? me.offset(0, .4, 0) : eye0
     const to = ctx.entity.position.offset(0, (ctx.entity.height || 1.8) * 0.6, 0)
-    const delta = to.minus(eye0)
+    if (footObstacle) to.y = origin.y
+    const delta = to.minus(origin)
     const dist = delta.norm()
-    if (dist < 0.5 || dist > 7) return false
+    if (dist < 0.5) return false
     let hit = null
-    try { hit = ctx.bot.world.raycast(eye0, delta.scaled(1 / dist), dist, b => b && b.boundingBox === 'block') } catch {}
-    if (!hit || hit.position.offset(0.5, 0.5, 0.5).distanceTo(eye0) > 4.5) return false
+    try { hit = ctx.bot.world.raycast(origin, delta.scaled(1 / dist), Math.min(dist, footObstacle ? 1.5 : 4.5)) } catch {}
+    if (!hit || (hit.intersect || hit.position.offset(.5, .5, .5)).distanceTo(eye0) > 4.5) return false
+    if (footObstacle && !ctx.pick.blockAim(ctx.bot, hit.position, { range: 4.5, seeThrough: null })) return false
     if ((require('../swarm-work') as typeof import('../swarm-work')).isKept(ctx.bot, hit.position)) return false
     const plan = ctx.tools.bestFor(ctx.bot, hit)
     if (plan.ms > 1500) return false
@@ -31,7 +34,7 @@ const punchThrough = async (availabilityOnly = false) => {
     ctx.pathTo(false); ctx.pathing = false
     ctx.clear()
     ctx.aim = 'free'
-    const r = await ctx.tools.breakFast(ctx.bot, hit.position, { maxMs: 1500 })
+    const r = await ctx.tools.breakFast(ctx.bot, hit.position, { maxMs: 1500, ctl: ctx.ctl })
     ctx.aim = 'target'
     await ctx.holdWeapon()
     if (r.ok) { failedPunch = null; ctx.used(`пробил его стенку (${r.tool})`); return true }

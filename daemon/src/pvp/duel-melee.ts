@@ -53,7 +53,7 @@ export function installMelee (ctx: DuelCtx) {
     if (use && (use.cur || gameClock.now() - (use.endedAt || 0) < mf.clock.msPerTick)) return false
     if ((require('./turn-melee') as typeof import('./turn-melee')).targetStrikeWait(ctx, gameClock.now()) > 0) return false
     const sprintHit = mf.clock.srvSprint
-    mf.hit(e, { after: sprintHit ? 'wtap' : null, kind: 'counter' })
+    if (mf.hit(e, { after: sprintHit ? 'wtap' : null, kind: 'counter' }) === false) return false
     st.swings++
     ctx.lastSwing = gameClock.now()
     ctx.firstHitDone = true

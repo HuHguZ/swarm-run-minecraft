@@ -116,6 +116,16 @@ test('goto: попытка, приблизившая тело к цели на 8
   assert.equal(f.counts.shakes, 0, 'продвижение — не застревание')
 })
 
+test('an exact-height climb continues a partial route that gained ten blocks vertically under the destination', async () => {
+  const f = fixture(bot => { bot.entity.position.y = bot.entity.position.y === 64 ? 74 : 85 })
+  f.bot.entity.position = new Vec3(.5, 64, .5)
+  f.bot.blockAt = p => ({ position: p.floored(), boundingBox: p.y === 84 ? 'block' : 'empty' })
+  const result = await f.goto({ x: .5, y: 85, z: .5, climb: true, exactY: true, pathWait: true, range: 1, unstuck: false })
+  assert.equal(result.arrivedY, 85)
+  assert.equal(f.counts.walks, 2, 'the second route comes directly after the first vertical gain')
+  assert.equal(f.counts.shakes, 0)
+})
+
 test('strict goto first leaves a sealed own box toward the target (cl-a 14.10: 43 min boxed in)', async () => {
   const broke: any[] = []
   const f = fixture(bot => { bot.entity.position = new Vec3(94.5, 63, -12.5) }, {
@@ -127,6 +137,36 @@ test('strict goto first leaves a sealed own box toward the target (cl-a 14.10: 4
   const result = await f.goto({ x: 95, z: -12, range: 4, surface: 'strict' })
   assert.deepEqual(JSON.parse(JSON.stringify(broke)), [{ toward: { x: 95.5, z: -11.5 } }])
   assert.equal(result.arrived.x, 94)
+})
+
+for (const open of [false, true]) test(`strict goto leaves a box ${open ? 'by its open door' : 'with a sword slit too small for the body'}`, async t => {
+  const registry = require('prismarine-registry')('1.21.11'), Block = require('prismarine-block')(registry)
+  const native = require('../src/tick-plugins').getPhysics(), f = fixture(bot => { bot.entity.position = walk(25) })
+  const bot = f.bot, cell = bot.entity.position.floored(), east = cell.offset(1, 0, 0), head = east.offset(0, 1, 0)
+  const cells = new Map<string, string>(), dug = []
+  for (const side of require('../src/fortify').SIDES) for (const dy of [0, 1]) cells.set(cell.plus(side).offset(0, dy, 0).toString(), 'obsidian')
+  cells.set(cell.offset(0, 2, 0).toString(), 'stone')
+  cells.set(east.toString(), open ? 'air' : 'dirt'); cells.set(head.toString(), open ? 'air' : 'stone_slab')
+  bot.registry = registry; bot.version = '1.21.11'; bot.food = 20; bot.inventory = { items: () => [], slots: [] }
+  Object.assign(bot.entity, { velocity: new Vec3(0, 0, 0), yaw: -Math.PI / 2, pitch: 0, effects: {}, attributes: {} })
+  bot.blockAt = p => {
+    const at = p.floored(), b = Block.fromStateId(registry.blocksByName[cells.get(at.toString()) || (at.y < cell.y ? 'stone' : 'air')].defaultState)
+    b.position = at; return b
+  }
+  const world = { getBlock: bot.blockAt }, physics = native.Physics(registry, world)
+  function walk(ticks) {
+    const st = new native.PlayerState(bot, { ...require('../src/edges').IDLE, forward: true })
+    for (let i = 0; i < ticks; i++) physics.simulatePlayer(st, world)
+    return st.pos
+  }
+  t.mock.method(require('../src/tools'), 'breakFast', async (_bot, p) => {
+    dug.push(p.toString()); cells.set(p.toString(), 'air'); return { ok: true }
+  })
+  const before = walk(25)
+  assert.equal(before.x > cell.x + 2, open, 'native body can cross only the open door')
+  const result = await f.goto({ x: cell.x + 5, z: cell.z, range: 1, surface: 'strict' })
+  assert.ok(result.arrived.x >= cell.x + 4)
+  assert.deepEqual(dug, open ? [] : [head.toString(), east.toString()])
 })
 
 test('strict goto with no step from a roofed pocket digs one short exit leg, then walks on top (cl-l/cl-n 14.10)', async () => {

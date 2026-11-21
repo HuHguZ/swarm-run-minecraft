@@ -8,12 +8,15 @@ export interface CollisionWorld { blockAt(position: Vec3, extraInfos?: boolean):
 export interface Box { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number }
 export interface Support { block: CollisionBlock; box: Box; top: number; overlap: number }
 const EPS = 1e-7
+// The highest collision box in the 1.21.11 block-state registry is a fence/wall at local Y=1.5.
+// At exact sole contact intersects() reports clearance.
+const firstBodyLayer = (feetY: number) => Math.floor(feetY + EPS - 1.5) + 1
 // A body centred exactly on a riser's edge grazes it by float error (s6-author53/55:
 // the server stood the body on the upper stair half, +0.5). Keep a millimetre gap.
 const TREAD_GAP = 1e-3
 export const HAZARD = /^(lava|fire|soul_fire|magma_block|campfire|soul_campfire|cactus|sweet_berry_bush|powder_snow|wither_rose|end_portal|end_gateway)$/
 
-export function dimensions(world: CollisionWorld): { half: number; height: number } {
+export function dimensions(world: Pick<CollisionWorld, 'physics' | 'entity'>): { half: number; height: number } {
   return { half: world.physics?.playerHalfWidth ?? Math.fround(.6) / 2, height: world.entity?._ndPoseHeight ?? world.physics?.playerHeight ?? 1.8 }
 }
 export function shapeBoxes(block: CollisionBlock, at?: Point): Box[] {
@@ -33,20 +36,21 @@ export function intersects(a: Box, b: Box): boolean {
 }
 /** `powder`: a native forecast may pass through powder snow (modelled stuck motion); never a resting body. */
 // Поиск модуля — раз, а не на каждую клетку тела (bodyClear зовут тысячи раз за пересчёт бега).
-let movementMod: typeof import('../movement') | null = null
-const waterCell = () => (movementMod ??= require('../movement') as typeof import('../movement')).waterCell
+let waterMod: typeof import('../movement/water') | null = null
+const waterCell = () => (waterMod ??= require('../movement/water') as typeof import('../movement/water')).waterCell
 export function bodyClear(world: CollisionWorld, pos: Point, { web = false, water = false, powder = false, from }: { web?: boolean; water?: boolean; powder?: boolean; from?: Point } = {}): boolean {
   const body = bodyBox(world, pos), start = from ? bodyBox(world, from) : body
   const { half, height } = dimensions(world)
   const delta = from && { x: pos.x - from.x, y: pos.y - from.y, z: pos.z - from.z }
+  const endLayer = firstBodyLayer(body.minY), sweepLayer = Math.min(endLayer, firstBodyLayer(start.minY))
   for (let x = Math.floor(Math.min(body.minX, start.minX)); x <= Math.floor(Math.max(body.maxX, start.maxX)); x++) {
     for (let z = Math.floor(Math.min(body.minZ, start.minZ)); z <= Math.floor(Math.max(body.maxZ, start.maxZ)); z++) {
-      for (let y = Math.floor(Math.min(body.minY, start.minY)) - 1; y <= Math.floor(Math.max(body.maxY, start.maxY)); y++) {
+      for (let y = sweepLayer; y <= Math.floor(Math.max(body.maxY, start.maxY)); y++) {
         const block = world.blockAt(new Vec3(x, y, z), false)
         if (!block) {
           // The extra sweep tests known hazards; unknown-space refusal keeps its original endpoint grid.
           if (x >= Math.floor(body.minX) && x <= Math.floor(body.maxX) && z >= Math.floor(body.minZ) && z <= Math.floor(body.maxZ) &&
-              y >= Math.floor(body.minY) - 1 && y <= Math.floor(body.maxY)) return false
+              y >= endLayer && y <= Math.floor(body.maxY)) return false
           continue
         }
         const cell = { minX: x, minY: y, minZ: z, maxX: x + 1, maxY: y + 1, maxZ: z + 1 }
@@ -133,7 +137,7 @@ function cellStands(observed: CollisionWorld, x: number, y: number, z: number): 
     // obstruction in its head space, then require real footprint and clearance.
     const obstructions: Box[] = []
     for (let bx = Math.floor(box.minX - half * 2); bx <= Math.floor(box.maxX + half * 2); bx++) for (let bz = Math.floor(box.minZ - half * 2); bz <= Math.floor(box.maxZ + half * 2); bz++) {
-      for (let by = Math.floor(box.maxY) - 1; by <= Math.floor(box.maxY + height); by++) {
+      for (let by = firstBodyLayer(box.maxY); by <= Math.floor(box.maxY + height); by++) {
         const above = world.blockAt(new Vec3(bx, by, bz), false)
         if (above) obstructions.push(...shapeBoxes(above).filter(shape => shape.maxY > box.maxY + EPS && shape.minY < box.maxY + height))
       }
@@ -185,7 +189,7 @@ export function invalidateStands(cache: Map<string, Vec3[]>, at: Point): void {
 }
 
 export function containsWater(block: CollisionBlock): boolean {
-  return (require('../movement') as typeof import('../movement')).waterCell?.(block) || block.name === 'flowing_water' || block.isWaterlogged === true || block.getProperties?.().waterlogged === true || block.getProperties?.().waterlogged === 'true'
+  return waterCell()?.(block) || block.name === 'flowing_water' || block.isWaterlogged === true || block.getProperties?.().waterlogged === true || block.getProperties?.().waterlogged === 'true'
 }
 
 /** Body centers that fit inside one observed fluid cell and its real shapes. */

@@ -71,7 +71,7 @@ export function dodgeTurn (ctx: DuelCtx, turn: TurnFrame) {
   const { d, inc, me, r, seesBody } = turn
   const released = sawRelease()
   const aimedCb = turn.aimedCb = ctx.prof.player && seesBody ? foe.aimedAtMe(ctx.entity) : null
-  const hisCb = turn.hisCb = ctx.prof.player ? (read.crossbowInfo(bot, ctx.entity.equipment && ctx.entity.equipment[0]) || read.crossbowInfo(bot, ctx.entity.equipment && ctx.entity.equipment[1])) : null
+  const hisCb = turn.hisCb = ctx.prof.player && seesBody ? aimedCb || read.heldCrossbowInfo(bot, ctx.entity) : null
   const cbNow = !!(aimedCb && !aimedCb.piercing && guard && guard.stats && guard.stats.worn && r > HIT_REACH && d <= FAR)
   const bolt = turn.bolt = inc.find(p => /arrow|trident|firework/.test(p.name))
   const cbShield = turn.cbShield = cbNow || !!(bolt && !hisCb?.piercing && guard?.stats?.worn && r > HIT_REACH)

@@ -4,12 +4,18 @@ import assert from 'node:assert/strict'
 import { Vec3 } from 'vec3'
 import { native, worldOf, drive } from './parkour-fixture'
 
-test('a loaded bent runway preserves a real intermediate landing before the next rising jump', async () => {
+function bentRunway(extra: Array<[number, number, number, string]> = []) {
   const floor: Array<[number, number, number, string]> = [[0, 0, 1, 'stone'], [1, 0, 0, 'stone'], [1, 0, 1, 'stone'], [1, 0, 2, 'stone'], [2, 0, 0, 'stone'], [2, 0, 1, 'stone'], [2, 0, 2, 'stone'], [3, 0, 0, 'stone'], [3, 0, 1, 'stone'], [6, 1, 5, 'stone']]
-  const { bot } = worldOf(floor)
+  const { bot } = worldOf([...floor, ...extra])
+  bot.world = { getBlock: (p: Vec3) => bot.blockAt(p), raycast: require('prismarine-world/src/worldsync').prototype.raycast }
   bot.physics.playerHalfWidth = Math.fround(.6) / 2
   bot.entity.position = new Vec3(3.54227155072947, 1, 1.536848335588923); bot.entity.velocity.y = -.0784000015258789
-  const before = bot.entity.position.clone(); const target = new Vec3(6.5, 2, 5.5)
+  return { bot, target: new Vec3(6.5, 2, 5.5) }
+}
+
+test('a loaded bent runway preserves a real intermediate landing before the next rising jump', async () => {
+  const { bot, target } = bentRunway()
+  const before = bot.entity.position.clone()
   const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bodyClear }: typeof import('../src/navigation/geometry') = require('../src/navigation/geometry')
   const plan = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, planningMs: 180 })
@@ -28,6 +34,77 @@ test('a loaded bent runway preserves a real intermediate landing before the next
   bot.blockAt = (p: Vec3) => p.x < 3 ? null : observed(p)
   assert.equal(await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, planningMs: 180 }), null, 'an unobserved runway cannot supply the same earned momentum')
   assert.deepEqual(bot.entity.position, before)
+})
+
+test('bent runway braking alternatives share the grounded prefix within the native frame budget', async () => {
+  const { bot, target } = bentRunway()
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const nativeStep = bot.physics.simulatePlayer.bind(bot.physics)
+  let simulations = 0
+  bot.physics.simulatePlayer = (state, world) => { simulations++; return nativeStep(state, world) }
+  const diagnostics: import('../src/navigation/parkour').PlanningDiagnostics = { frames: 0, profiles: 0 }
+  // A direct jump from the rim is cheap to try; exhausting every run-up from there
+  // before checking the observed runway behind the bot took 2,695 native steps.
+  const maxFrames = 300
+  const plan = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, maxFrames, diagnostics })
+  assert.ok(plan, `${diagnostics.why}: ${simulations} native steps`)
+  assert.ok(simulations <= maxFrames, `${simulations} native steps`)
+  assert.deepEqual(plan.steps.flatMap((s, i) => s.control.jump ? [i] : []), [23, 35])
+  assert.equal(diagnostics.momentum?.contactTick, 34)
+  assert.equal(plan.ticks, 52)
+  const replay = simulatePlan(bot, plan.steps)
+  assert.deepEqual(replay.pos, plan.states.at(-1)!.pos)
+  assert.deepEqual(replay.vel, plan.states.at(-1)!.vel)
+  assert.ok(replay.onGround && replay.pos.distanceTo(target) < .22)
+
+  // Near the arena wall the first braking profile overshoots. The next one
+  // must inherit the same contact, not the failed branch's controls or speed.
+  simulations = 0
+  const arena = { x: 0, z: 0, r: 7.85 }
+  const bounded = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, maxFrames, arena })
+  assert.ok(bounded && simulations <= maxFrames)
+  assert.equal(bounded.ticks, 56)
+  assert.deepEqual(bounded.steps.slice(0, 35), plan.steps.slice(0, 35))
+  assert.deepEqual(bounded.states[34], plan.states[34])
+  assert.notDeepEqual(bounded.steps[35], plan.steps[35])
+  assert.ok(bounded.states.every(s => s.pos.x + bot.physics.playerHalfWidth <= arena.r - 1))
+  const withinWall = simulatePlan(bot, bounded.steps)
+  assert.deepEqual(withinWall.pos, bounded.states.at(-1)!.pos)
+  assert.deepEqual(withinWall.vel, bounded.states.at(-1)!.vel)
+  assert.ok(withinWall.onGround && withinWall.pos.distanceTo(target) < .22)
+})
+test('a wall across the runway leaves the rim launches available without simulating a blind approach', async () => {
+  const wall: Array<[number, number, number, string]> = []
+  for (let z = -1; z <= 3; z++) for (let y = 1; y <= 3; y++) wall.push([2, y, z, 'stone'])
+  const { bot, target } = bentRunway(wall)
+  const { planJumpAsync, visibleLanding }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  assert.ok(visibleLanding(bot, target))
+  assert.equal(visibleLanding(bot, new Vec3(.5, 1, 1.5)), false)
+  const nativeStep = bot.physics.simulatePlayer.bind(bot.physics)
+  let rimJumps = 0, backwardsSteps = 0
+  bot.physics.simulatePlayer = (state, world) => {
+    if (state.control.jump && state.onGround) rimJumps++
+    if (state.pos.equals(bot.entity.position) && state.control.forward && -Math.sin(state.yaw) < -.5) backwardsSteps++
+    return nativeStep(state, world)
+  }
+  const plan = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, maxFrames: 800 })
+  assert.equal(plan, null)
+  assert.ok(rimJumps > 18, 'direct run-ups resume after the immediate launch profiles')
+  assert.equal(backwardsSteps, 0, 'an occluded and disconnected runway gets no native approach')
+})
+test('a visible runway cannot earn a second jump off an unseen intermediate floor', async () => {
+  const { bot, target } = bentRunway()
+  const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  delete bot.world
+  let hiddenContacts = 0
+  bot.canSeeBlock = block => {
+    if (!block.position.equals(new Vec3(2, 0, 2))) return true
+    hiddenContacts++
+    return false
+  }
+  const plan = await planJumpAsync(bot, { aborted: false }, target, { allowWalk: true, maxTicks: 38, maxFrames: 300 })
+  assert.equal(plan, null)
+  assert.ok(hiddenContacts > 0)
 })
 test('a native grounded flag after leaving a lava-side ledge cannot supply a delayed rising jump', async () => {
   // Translated observed Author36 geometry; names with equal full collision and
@@ -157,9 +234,29 @@ test('exhausted native spring profiles bound only the impossible height family f
 test('native direct profiles solve ordinary rises before a route edge CPU budget expires', async () => {
   const { planJumpAsync }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
   const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 1, 0, 'stone']])
-  const plan = await planJumpAsync(bot, { aborted: false }, new Vec3(2.5, 2, .5), { planningMs: 180 })
+  bot.canSeeBlock = () => assert.fail('the ordinary rise must finish without looking for a second takeoff')
+  const nativeStep = bot.physics.simulatePlayer.bind(bot.physics)
+  let simulations = 0
+  bot.physics.simulatePlayer = (state, world) => { simulations++; return nativeStep(state, world) }
+  const plan = await planJumpAsync(bot, { aborted: false }, new Vec3(2.5, 2, .5), { allowWalk: true, planningMs: 180 })
   assert.ok(plan)
+  assert.ok(simulations <= 72)
+  assert.equal(plan.ticks, 16)
+  assert.deepEqual(plan.steps.flatMap((s, i) => s.control.jump ? [i] : []), [0])
   assert.ok(plan.states.every((state: { isInLava: boolean; isInWeb: boolean }) => !state.isInLava && !state.isInWeb))
+})
+test('a jump with sprint disabled retains its walk and its native slime rebound', async () => {
+  const { planJumpAsync, simulatePlan }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')
+  const { bot } = worldOf([[1, 5, 0, 'stone'], [2, 5, 0, 'stone'], [4, 0, 0, 'slime_block'], [6, 2, 0, 'stone'], [7, 2, 0, 'stone']])
+  bot.entity.position = new Vec3(2.5, 6, .5)
+  const target = new Vec3(6.5, 3, .5)
+  const plan = await planJumpAsync(bot, { aborted: false }, target, { bounce: new Vec3(4.5, 1, .5), sprint: false, maxTicks: 90 })
+  assert.ok(plan)
+  assert.equal(plan.ticks, 48)
+  assert.ok(plan.steps.every(s => !s.control.sprint))
+  assert.ok(plan.states.some(s => s.onGround && s.pos.y === 1 && s.vel.y > .3))
+  const landed = simulatePlan(bot, plan.steps)
+  assert.ok(landed.onGround && landed.pos.distanceTo(target) < .22)
 })
 test('a spring edge is refused when a rim between spring and landing stands above the native rebound apex', async () => {
   const { reboundApex }: typeof import('../src/navigation/parkour') = require('../src/navigation/parkour')

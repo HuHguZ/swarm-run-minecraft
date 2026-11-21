@@ -105,8 +105,9 @@ export function install (session, free) {
         ? incomingGliders(bot, { foes: session._ndFoes ?? null }) : []
       note(bot.entity.onGround && !wanted.jump && !wanted.sneak ? 'poll' : 'skip', gliders)
       for (const id of reportedGliders) if (!gliders.some(g => g.id === id)) reportedGliders.delete(id)
-      const shot = [...d.arrows, ...d.potions, ...gliders].filter(p => p.ticks <= 12).sort((a, b) => a.ticks - b.ticks)[0]
-      const threat = shot || d.aims[0], now = clock.now(), me = bot.entity.position
+      const covered = session.current?.coveredBow
+      const shot = [...d.arrows, ...d.potions, ...gliders].filter(p => p.ticks <= 12 && !covered?.(p)).sort((a, b) => a.ticks - b.ticks)[0]
+      const threat = shot || (covered ? d.aims.find(a => !covered(a)) : d.aims[0]), now = clock.now(), me = bot.entity.position
       if (shield && (now >= shield.until || shield.charge.why())) release()
       // На меня натянут лук, а щит в рюкзаке — в левую руку (игра пользователя 25.10: у 7 из 13 живых щит в рюкзаке, рефлекс
       // ниже его не видел, лук «Сила V» убивал за 2–3 стрелы). Тотем при хп ≤ 16 остаётся (как combat/shield.ts).

@@ -21,8 +21,22 @@ test('parkour route honors a bounded extended game-time request without changing
   const target = { x: 0, y: 1, z: 0 }
   assert.equal(parkour.call(session, { mode: 'route', target, timeoutSeconds: 1000 }).timeoutMs, 1020000)
   assert.equal(parkour.call(session, { mode: 'route', target, timeoutSeconds: 10000 }).timeoutMs, 3620000)
-  assert.equal(parkour.call(session, { mode: 'options', target, timeoutSeconds: 1000 }).timeoutMs, 620000)
   assert.equal(parkour.call(session, { mode: 'jump', target, timeoutSeconds: 1000 }).timeoutMs, 60000)
+})
+
+test('asking for visible parkour landings leaves an emergency pearl in control', async () => {
+  const { Session }: typeof import('../src/session') = require('../src/session')
+  const { worldOf }: typeof import('./parkour-fixture') = require('./parkour-fixture')
+  const { bot } = worldOf([[0, 0, 0, 'stone'], [2, 0, 0, 'stone']])
+  const rescue = { name: 'pearl_to', params: { rescue: true }, ctl: { aborted: false } }
+  const s = Object.assign(Object.create(Session.prototype), { bot, current: rescue, bus: { drain: () => [] }, state: () => ({}) })
+  const reply = await s.parkour({ mode: 'options' })
+  assert.equal(reply.status, 'done')
+  assert.ok(reply.detail.options.some(o => o.target.x === 2.5))
+  assert.equal(s.current, rescue)
+  assert.equal(rescue.ctl.aborted, false)
+  s.bot = null
+  assert.equal((await s.parkour({ mode: 'options' })).status, 'failed')
 })
 
 function fixture () {

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { Vec3 } from 'vec3'
 import { planEnemyWind } from '../src/combat/enemy-wind'
-import { windOutDecide, windKind } from '../src/combat/wind-out'
+import { installWindOut, windOutDecide, windKind } from '../src/combat/wind-out'
+import { wall } from '../src/game-clock'
 
 function fixture(yaw = -Math.PI / 2, x = 0) {
   const registry = require('prismarine-registry')('1.21.11'), Block = require('prismarine-block')(registry)
@@ -35,6 +36,35 @@ for (const yaw of [-Math.PI / 2, Math.PI / 2]) test(`opposed local throwers shar
   assert.equal(f.plan(f.reports[1]), null, 'an equal opposite native gust cannot also count as outward progress')
   const dx = plan.nominal.position.x - f.foe.position.x
   assert.ok(Math.abs(plan.nominal.progress - dx) < 1e-12)
+})
+
+test('on the diagonal of the Colosseum the reflex spends its charge only towards the elliptical edge', t => {
+  t.mock.method(wall, 'monotonic', () => 1000)
+  for (const [angle, hidden, expected] of [[130, false, 1], [225, false, 0], [130, true, 0]] as const) {
+    const f = fixture(), own = f.reports[0]
+    f.arena.x = f.arena.z = 600
+    f.foe.position.set(570.5, 1, 623.5)
+    const radians = angle * Math.PI / 180
+    own.position = { x: f.foe.position.x - 12 * Math.cos(radians), y: 1, z: f.foe.position.z - 12 * Math.sin(radians) }
+    const bot = f.botFor(own), packets: boolean[] = []
+    if (hidden) {
+      const Block = require('prismarine-block')(bot.registry), read = bot.blockAt
+      const wallX = Math.floor((bot.entity.position.x + f.foe.position.x) / 2)
+      bot.blockAt = p => {
+        if (Math.floor(p.x) !== wallX) return read(p)
+        const stone = Block.fromStateId(bot.registry.blocksByName.stone.defaultState)
+        stone.position = p.floored(); return stone
+      }
+    }
+    Object.assign(bot, { _client: new EventEmitter(), _ndLaunchMovement: () => new Vec3(0, 0, 0),
+      getControlState: () => false, activateItem: off => packets.push(off) })
+    bot.inventory.slots[45] = { name: 'wind_charge', count: 8 }
+    const session: any = { bot, current: { name: 'fight' }, _rescue: { arena: f.arena, killY: f.arena.killY } }
+    t.after(() => bot.emit('end'))
+    installWindOut(session)
+    bot.emit('physicsTick'); bot.emit('physicsTick'); bot.emit('ndMovementSent')
+    assert.equal(packets.length, expected, `angle=${angle}, hidden=${hidden}`)
+  }
 })
 
 test('the initial outward axis stays fixed even when the candidate crosses the centre', () => {

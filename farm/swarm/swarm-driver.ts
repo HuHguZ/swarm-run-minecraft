@@ -41,5 +41,6 @@ export function createSwarmDriver (opts: any) {
   sw.turn = async b => { if (!(await sw.commandTurn(b))) await auto(b) }
   Object.assign(sw, swarmLifecycle(sw))
   const { observe, guardedTurn, release, reset, snapshot, panic, canEngage, refill, boardOf, pearlObserve, windBid } = sw
-  return { observe, pearlObserve, windBid, turn: guardedTurn, release, reset, snapshot, panic, canEngage, refill, enemies: b => boardOf(b).enemies() }
+  const scout = b => sw.search(b, { members: sw.membersOf(b) })
+  return { observe, observeBreaches: sw.observeBreaches, observeDeaths: sw.observeDeaths, knownDrops: sw.knownDrops, pearlObserve, windBid, turn: guardedTurn, scout, release, reset, snapshot, panic, canEngage, refill, publicDeath: sw.publicDeath, enemies: b => boardOf(b).enemies() }
 }

@@ -2,17 +2,18 @@
 // Лук (bow.ts): цель — упреждение, наблюдаемая скорость по нативным пакетам позиции (падение, планирование), трасса прицела.
 import * as gameClock from '../game-clock'
 import * as pick from '../pick'
+import { gliding, predictGlider } from '../elytra/track'
+import { glideStep, lookVec, worldOf } from '../elytra/physics'
 
 // Цель с упреждением: скорость по двум последним позициям. Высота точки —
 // середина туловища (0.55 роста): туда стрела ложится при любой ошибке по
 // высоте в пределах полблока.
 function leadTarget (entity, velFn, bot = null, frac = .55) {
-  const sky: typeof import('../elytra') = require('../elytra')
   return (ticks) => {
     const v = velFn ? velFn() : observedVelocity(entity)
     ticks += v.ageTicks || 0
-    const flying = sky.gliding(entity)
-    const p = flying ? sky.predictGlider(entity, v, ticks) : entity.position.offset(v.x * ticks, 0, v.z * ticks)
+    const flying = gliding(entity)
+    const p = flying ? predictGlider(entity, v, ticks) : entity.position.offset(v.x * ticks, 0, v.z * ticks)
     if (!flying && entity.onGround === false) {
       // travelInAir: move, then (v.y - gravity) * .98f. Horizontal input
       // is unknown: ponytail: keep observed strafe, re-aim every server tick.
@@ -24,10 +25,11 @@ function leadTarget (entity, velFn, bot = null, frac = .55) {
       p.y += v.y * sum - gravity * drag * (n - sum) / (1 - drag)
       p.y += (ticks - n) * (v.y * drag ** n - gravity * drag * (1 - drag ** n) / (1 - drag))
       if (bot) {
-        const floor = sky.worldOf(bot).floorBelow(p.x, entity.position.y, p.z, Math.ceil(entity.position.y - p.y) + 2)
+        const floor = worldOf(bot).floorBelow(p.x, entity.position.y, p.z, Math.ceil(entity.position.y - p.y) + 2)
         if (floor && !floor.lava && !floor.water) p.y = Math.max(p.y, floor.top)
       }
     }
+    if (frac === 0) return p
     const height = bot ? pick.hitboxOf(bot, entity).h : flying ? .6 : (entity.height || 1.8)
     return p.offset(0, height * frac, 0)
   }
@@ -76,9 +78,8 @@ function observedGlideVelocity(previous, current, yaw, pitch) {
   // At zero pitch vertical motion is a monotone piecewise affine map, independent
   // of horizontal speed. Other pitches are not promoted by this bounded inverse.
   if (pitch !== 0 || !Number.isFinite(yaw) || !['x', 'y', 'z'].every(a => Number.isFinite(previous[a]) && Number.isFinite(current[a]))) return null
-  const sky: typeof import('../elytra') = require('../elytra')
   if (!levelGlideIntervals) {
-    const nextY = y => { const p = { x: 0, y: 0, z: 0 }; const v = { x: 0, y, z: 0 }; sky.glideStep(p, v, 0, 0, false); return v.y }
+    const nextY = y => { const p = { x: 0, y: 0, z: 0 }; const v = { x: 0, y, z: 0 }; glideStep(p, v, 0, 0, false); return v.y }
     const down = nextY(-1) - nextY(-2); const downLoss = nextY(-1) + down
     const up = nextY(2) - nextY(1); const upLoss = nextY(1) - up
     const boundary = n => -upLoss * (1 - up ** n) / (1 - up) / up ** n
@@ -94,7 +95,7 @@ function observedGlideVelocity(previous, current, yaw, pitch) {
         parts.push({ lo: positive ? boundary(positive) : -Infinity, hi: positive < ticks ? boundary(positive + 1) : Infinity, a, b, sum, loss })
       }
       const p = { x: 0, y: 0, z: 0 }; const v = { x: 1, y: 0, z: 0 }
-      for (let i = 0; i < ticks; i++) sky.glideStep(p, v, 0, 0, false)
+      for (let i = 0; i < ticks; i++) glideStep(p, v, 0, 0, false)
       return { ticks, parts, perpendicular: p.x }
     })
   }
@@ -121,13 +122,13 @@ function observedGlideVelocity(previous, current, yaw, pitch) {
   }
   if (!interval) return null
   const vertical = inverseY(interval, current.y)
-  const look = sky.lookVec(yaw, 0); const sideways = { x: -look.z, z: look.x }
+  const look = lookVec(yaw, 0); const sideways = { x: -look.z, z: look.x }
   const perpendicular = (current.x * sideways.x + current.z * sideways.z) / interval.perpendicular
   const wanted = current.x * look.x + current.z * look.z
   const run = forward => {
     const p = { x: 0, y: 0, z: 0 }
     const v = { x: look.x * forward + sideways.x * perpendicular, y: vertical.start, z: look.z * forward + sideways.z * perpendicular }
-    for (let i = 0; i < interval.ticks; i++) sky.glideStep(p, v, yaw, 0, false)
+    for (let i = 0; i < interval.ticks; i++) glideStep(p, v, yaw, 0, false)
     return { p, v, forward: p.x * look.x + p.z * look.z }
   }
   // The parallel map is strictly increasing: its derivative is drag*(.9+.1*v/|v|).
@@ -165,7 +166,7 @@ function trackTarget (entity, nowOf = null) {
   let airSamples = []
   let fallDelta = null
   let glideDelta = null
-  let flying = (require('../elytra') as typeof import('../elytra')).gliding(entity)
+  let flying = gliding(entity)
   let yaw = entity.yaw; let pitch = entity.pitch; let boosted = !!entity._ndGlideBoosted
   let revision = entity._ndGlideRevision || 0
   let phasePending = false
@@ -176,7 +177,7 @@ function trackTarget (entity, nowOf = null) {
     const freshReceipt = receipt && receipt !== lastReceipt
     if (freshReceipt) lastReceipt = receipt
     const relative = receipt?.kind === 'rel_entity_move' || receipt?.kind === 'entity_move_look'
-    const nextFlying = (require('../elytra') as typeof import('../elytra')).gliding(entity)
+    const nextFlying = gliding(entity)
     // A steering glider changes look every receipt: that cancels the physical endpoint fit and its confidence, but
     // the positional estimate stays (try-lance 23.10: a full rebaseline kept a steering glider's velocity at 0 —
     // the lance aimed at where it was, 0.02 hits per pass on a turning target).
@@ -279,7 +280,7 @@ function trackTarget (entity, nowOf = null) {
             velocity.z = distance ? dz / distance * speed : 0
           }
         }
-        if (entity.onGround === false && !(require('../elytra') as typeof import('../elytra')).gliding(entity)) {
+        if (entity.onGround === false && !gliding(entity)) {
           const d = Math.fround(.98); const sum = (1 - d ** dt) / (1 - d)
           const start = (p.y - base.y + .08 * d * (dt - sum) / (1 - d)) / sum
           velocity.y = start * d ** dt - .08 * d * sum

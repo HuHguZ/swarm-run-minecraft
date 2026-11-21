@@ -118,37 +118,8 @@ function terrainCoverMethods ({ session, gameClock }: RpcContext) {
     // (по бокам клетки опора) — ставить; на открытом — лава под ноги на его пути (ведро) или вода (сбивает бег).
     block_behind: async (p) => session.immediate(async () => {
       const bot = session.require()
-      const Vec3 = require('vec3'); const { placeBlockAt, pickFiller } = require('../build')
       const foe = (p?.from && bot.players?.[p.from]?.entity) || (p?.fromId != null ? bot.entities[p.fromId] : null)
-      if (!foe) return { ok: false, why: 'не вижу его' }
-      const me = bot.entity.position
-      const dx = foe.position.x - me.x; const dz = foe.position.z - me.z
-      const ax = Math.abs(dx) >= Math.abs(dz)
-      const step = ax ? new Vec3(Math.sign(dx), 0, 0) : new Vec3(0, 0, Math.sign(dz))
-      const cell = me.floored().plus(step)
-      const free = (v) => { const b = bot.blockAt(v); return b && b.boundingBox === 'empty' && !/water|lava/.test(b.name) }
-      const solid = (v) => { const b = bot.blockAt(v); return b && b.boundingBox === 'block' }
-      if (!free(cell) || foe.position.floored().equals(cell)) return { ok: false, why: 'клетка занята' }
-      const side = ax ? new Vec3(0, 0, 1) : new Vec3(1, 0, 0)
-      const corridor = solid(cell.plus(side)) && solid(cell.minus(side))
-      const has = (n) => bot.inventory.items().find(i => i.name === n)
-      const put = async (v, item) => { const r = await placeBlockAt(bot, v, { item, honest: true, timeoutMs: 1200 }).catch(() => null); return !!(r && r.ok) }
-      // Паутина — не сплошной блок: placeBlockAt ждёт твёрдую клетку, поэтому проверка — по имени блока.
-      if (has('cobweb')) { await put(cell, 'cobweb'); if (bot.blockAt(cell)?.name === 'cobweb') return { ok: true, how: 'паутина', corridor } }
-      if (corridor && pickFiller(bot)) {
-        const a = await put(cell, null); const b = await put(cell.offset(0, 1, 0), null)
-        if (a || b) return { ok: true, how: `стена ${(a ? 1 : 0) + (b ? 1 : 0)}`, corridor }
-      }
-      for (const [item, how] of [['lava_bucket', 'лава'], ['water_bucket', 'вода']]) {
-        const it = has(item); if (!it || !solid(cell.offset(0, -1, 0))) continue
-        try {
-          await bot.equip(it, 'hand')
-          await bot.lookAt(cell.offset(0.5, 0.05, 0.5), true)
-          bot.activateItem()
-          return { ok: true, how, corridor }
-        } catch {}
-      }
-      return { ok: false, why: 'нечем', corridor }
+      return (require('../combat/rear-barrier') as typeof import('../combat/rear-barrier')).blockBehind(bot, foe)
     })
   }
 }

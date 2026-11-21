@@ -9,10 +9,13 @@ import { stubRequire } from './stub-require'
 import { afterPacket } from '../src/mace/hands'
 import { windMovement, windOutward, worldTick } from '../src/combat/team-wind'
 import { cancelWindOrder, reserveWindOrder } from '../src/combat/wind-coordination'
+import { swarmWind } from '../../farm/swarm/swarm-driver/wind'
 
 function fixture(planMs = 35, adapted = true, releaseMs = 0, fall?: { atRelease: boolean }, rim?: { atRelease: boolean; feetDelta: number }, inward?: 'alternate' | 'lift' | 'none') {
   let now = 0, sent = new Vec3(0, 0, 0), moved = false, visible = true, useful = true, throwing = false, relay = false, smash = false, lateLift = false, earlyLift = false
-  const events: string[] = [], plans: any[] = [], shots: any[] = []
+  const events: string[] = [], plans: any[] = [], shots: any[] = [], releaseDeadlines: number[] = []
+  let flightTicks = 3, releaseFeet: Vec3 | undefined
+  const sightChecks: string[] = []
   const foe: any = { id: 2, username: 'Enemy', type: 'player', position: new Vec3(4, 5, .5), velocity: new Vec3(.1, .2, 0),
     onGround: false, width: .6, height: 1.8, metadata: [], equipment: [],
     _ndPositionReceipts: [{ x: 3.9, y: 4.8, z: .5, t: 950 }, { x: 4, y: 5, z: .5, t: 1000 }] }
@@ -32,7 +35,7 @@ function fixture(planMs = 35, adapted = true, releaseMs = 0, fall?: { atRelease:
   }
   const report = () => ({ id: bot.username, position: { ...bot.entity.position }, velocity: { ...bot.entity.velocity },
     launchMovement: { ...windMovement(bot) }, onGround: bot.entity.onGround, eyeHeight: 1.62, gameTick: worldTick(bot) })
-  const shot = own => ({ thrower: own.id, fireDelay: 0, ticks: 3, from: new Vec3(own.position.x, own.position.y + 1.62, own.position.z),
+  const shot = own => ({ thrower: own.id, fireDelay: 0, ticks: flightTicks, from: new Vec3(own.position.x, own.position.y + 1.62, own.position.z),
     aim: foe.position.offset(0, .4, 0), feet: foe.position.clone(), burst: foe.position.offset(inward ? .5 : -.5, .4, 0),
     velocity: new Vec3(1.5, .1, 0), yaw: 0, pitch: 0 })
   // The actual CD #1123 ray at release. The earlier utility plan was not captured.
@@ -40,7 +43,7 @@ function fixture(planMs = 35, adapted = true, releaseMs = 0, fall?: { atRelease:
     from: new Vec3(577.9253049880568, 125.62, 568.0387917704294), aim: new Vec3(573.5986561939295, 146.33652858577753, 575.9248996350485),
     feet: new Vec3(573.5986561939295, 144.73652858577753, 575.9248996350485), burst: new Vec3(573.9278413094033, 144.76034961234598, 575.3248996231276) })
   let queued = 0, forecasts = 0
-  let releaseCertificate: 'exact' | 'different' | 'expired' | undefined, safetyChecks = 0, safetyMs = 0
+  let releaseCertificate: 'exact' | 'different' | 'expired' | undefined, safetyChecks = 0, safetyMs = 0, unsafeAlly: string | undefined
   const impactKey = s => [s.fireDelay + s.ticks, s.burst.x, s.burst.y, s.burst.z].join(',')
   const file = path.resolve(__dirname, '../src/combat/wind-out.js'), module = { exports: {} as any }
   const req = stubRequire(file, {
@@ -51,29 +54,32 @@ function fixture(planMs = 35, adapted = true, releaseMs = 0, fall?: { atRelease:
     './enemy-wind': { installWindTracking() {}, windMotionFresh: () => true, windCollisionWorld: () => bot,
       windGroundObservationExpired: (...args) => require('../src/combat/enemy-wind').windGroundObservationExpired(...args), windImpactKey: impactKey,
       planEnemyWind: (_b, _foe, reports, options) => {
-        events.push('plan'); plans.push({ moved, at: now, report: structuredClone(reports[0]), options })
+        events.push('plan'); plans.push({ moved, at: now, target: _foe.username, report: structuredClone(reports[0]), options })
         if (throwing) throw Error('bounded native failure')
-        now += planMs
-        if (!useful || rim && options.delays[0] === 0 && !rim.atRelease) return null
+        now += options.certifyRelease ? (_foe.releaseCostMs ?? planMs) : planMs
+        if (!useful || _foe.noPlan || rim && options.delays[0] === 0 && !rim.atRelease) return null
         const atRelease = options.delays[0] === 0
         if (atRelease && inward === 'none') return null
         const ray = inward === 'lift' && atRelease ? reaim(reports[0]) : shot(reports[0])
         if (rim && options.delays[0] === 0) ray.feet.x += rim.feetDelta
         const selected = { ...ray, fireDelay: options.delays[0] }
         if (atRelease && releaseCertificate === 'expired') now += 125
-        return { targetAt: foe.position.clone(), gameTick: worldTick(bot), fallThreat: !!fall && (plans.length === 1 || fall.atRelease), repriceRim: !!rim, lateLift, earlyLift,
+        return { targetAt: foe.position.clone(), gameTick: worldTick(bot), fallThreat: !!fall && (plans.length === 1 || fall.atRelease), repriceRim: !!rim, lateLift, earlyLift: _foe.earlyLift ?? earlyLift,
           resistance: { lo: 0, hi: 0 }, baseline: { out: false, progress: relay ? 2 : 0, air: 10, outwardEffect: 0 },
           nominal: { out: false, exited: false, progress: 1, air: 15, outwardEffect: 1 }, worst: { out: false, exited: false, progress: 0 },
           shots: [selected], ...(options.certifyRelease && releaseCertificate && { releaseSafeKey: releaseCertificate === 'different' ? 'different' : impactKey(selected) }) }
       },
-      enemyWindFrames: () => { forecasts++; return [{}] }, enemyWindShot: (_b, _e, own) => {
+      enemyWindFrames: (...args) => { releaseDeadlines.push(args[7]); forecasts++; return [{ pos: releaseFeet || foe.position }] }, enemyWindShot: (_b, _e, own) => {
         const ray = inward ? reaim(own) : shot(own)
         shots.push({ ...structuredClone(own), ray }); return ray
       },
-      pendingWindHit: () => { now += releaseMs; return null }, windTeamSafe: () => { safetyChecks++; now += safetyMs; return true }, observeOwnWindBurst: () => () => {} },
-    './ally-safety': { isAlly: () => false }, '../pvp/last-seen': { seesPlayer: () => visible },
+      pendingWindHit: (...args) => { releaseDeadlines.push(args[5]?.deadline); now += releaseMs; return null },
+      windTeamSafe: (_bot, team) => { safetyChecks++; now += safetyMs; return !team.some(a => a.id === unsafeAlly) }, observeOwnWindBurst: () => () => {} },
+    './ally-safety': { isAlly: (_bot, entity) => !!entity.ally }, '../pvp/last-seen': { seesPlayer: (_bot, entity) => {
+      sightChecks.push(entity.username); return visible && !entity.hidden
+    } },
     '../pvp/search': { observedCollision: () => bot }, '../bow/track': { observedVelocity: () => ({ x: .1, y: .2, z: 0 }) },
-    '../elytra/track': { gliding: () => false }, '../threats': { smashes: () => smash ? [{ name: 'Enemy', ticks: 9 }] : [] }
+    '../elytra/track': { gliding: e => !!e.elytraFlying }, '../threats': { smashes: () => smash ? [{ name: 'Enemy', ticks: 9 }] : [] }
   })
   vm.runInThisContext(`(function(require,module,exports,__filename,__dirname){${transpiledSource(file)}\n})`, { filename: file })(req, module, module.exports, file, path.dirname(file))
   module.exports.installWindOut(session)
@@ -84,7 +90,7 @@ function fixture(planMs = 35, adapted = true, releaseMs = 0, fall?: { atRelease:
     sent = new Vec3(.25, .5, 0); moved = true
     events.push('position_look', 'tick_end'); bot.emit('ndMovementSent')
   }
-  return { bot, foe, session, plans, shots, events, enqueue, movement, get queued() { return queued }, get forecasts() { return forecasts }, get safetyChecks() { return safetyChecks },
+  return { bot, foe, session, plans, shots, events, sightChecks, releaseDeadlines, enqueue, movement, get queued() { return queued }, get forecasts() { return forecasts }, get safetyChecks() { return safetyChecks },
     set(p: any) {
       if ('visible' in p) visible = p.visible
       if ('useful' in p) useful = p.useful
@@ -93,12 +99,22 @@ function fixture(planMs = 35, adapted = true, releaseMs = 0, fall?: { atRelease:
       if ('relay' in p) relay = p.relay
       if ('lateLift' in p) lateLift = p.lateLift
       if ('earlyLift' in p) earlyLift = p.earlyLift
+      if ('flightTicks' in p) flightTicks = p.flightTicks
+      if ('releaseFeet' in p) releaseFeet = p.releaseFeet
       if ('releaseCertificate' in p) releaseCertificate = p.releaseCertificate
       if ('safetyMs' in p) safetyMs = p.safetyMs
+      if ('unsafeAlly' in p) unsafeAlly = p.unsafeAlly
       if ('smash' in p) { smash = p.smash; session._ndFoes = ['Enemy']; bot.inventory.items = () => [{ name: 'shield' }] }
     },
     clean() { bot.emit('end'); bot.removeAllListeners(); bot._client.removeAllListeners() } }
 }
+
+test('the release passes its remaining wall-clock deadline to both motion forecasts', t => {
+  const f = fixture(15); t.after(f.clean)
+  f.enqueue(); f.movement(0)
+  assert.ok(f.events.includes('use_item'))
+  assert.deepEqual(f.releaseDeadlines, [65, 65], '15 ms planning, then one release tick of 50 ms')
+})
 
 test('a dangerous fall shot needs the lower landing to remain useful at actual release', t => {
   for (const atRelease of [true, false]) {
@@ -148,6 +164,24 @@ test('a granted single throw reuses its fresh same-team certificate before the r
   }
 })
 
+test('an expired opening relay skips the entire release forecast and a new movement tick can still throw', async t => {
+  const f = fixture(15); t.after(f.clean)
+  let finished = 0
+  f.foe.onGround = true; f.set({ earlyLift: true })
+  f.session._windRadio = async () => () => { finished++ }
+  f.enqueue(); f.movement(0); await Promise.resolve()
+  assert.equal(f.plans.length, 1)
+  f.movement(200) // The movement packet follows the grant exactly at its existing exclusive cutoff.
+  assert.equal(f.session._windOut.log.at(-1).why, 'stale_release')
+  assert.match(f.session._windOut.log.at(-1).dbg, /истёк заказ роя/)
+  assert.equal(finished, 1)
+  assert.deepEqual({ plans: f.plans.length, safety: f.safetyChecks, fired: f.session._windOut.fired }, { plans: 1, safety: 0, fired: 0 })
+  f.bot.ndClock.ticks++; f.set({ earlyLift: false })
+  f.enqueue(); f.movement(0)
+  assert.equal(f.session._windOut.fired, 1)
+  assert.equal(f.plans.length, 2)
+})
+
 test('wind refuses an otherwise certified ray if the moving first landing expires during repricing', t => {
   for (const [mode, start, fires] of [
     ['moving', 117, false], ['boundary', 112, false], ['fresh', 111, true],
@@ -177,6 +211,19 @@ test('a fresh inward juggle ray needs one full release plan before it may fire',
     assert.equal(f.events.includes('use_item'), mode !== 'none')
     if (mode !== 'none') assert.equal(f.bot.entity.yaw, mode === 'lift' ? ray.yaw : 0)
   }
+})
+
+test('the final charge uses the currently observed motion frame after a centre crossing', t => {
+  const f = fixture(15, true, 0, undefined, undefined, 'none'); t.after(f.clean)
+  const raw = f.foe.position, arena = f.session._rescue.arena, advanced = raw.offset(0, 0, -1)
+  arena.x = raw.x + .5; arena.z = raw.z - .5
+  f.set({ releaseFeet: advanced })
+  f.enqueue(); f.movement(0)
+  const ray = f.shots[0].ray, impulse = ray.feet.minus(ray.burst)
+  assert.ok(impulse.dot(windOutward(arena, raw)) > 0)
+  assert.ok(impulse.dot(windOutward(arena, advanced)) < 0)
+  assert.deepEqual(f.plans.map(p => p.options.delays[0]), [1, 0])
+  assert.ok(!f.events.includes('use_item'))
 })
 
 for (const intent of ['flee', 'loot']) test(`wind reflex still throws while the weak body performs ${intent}`, t => {
@@ -288,6 +335,213 @@ test('a grounded opening lift bids while an ordinary grounded push remains local
   }
 })
 
+test('a full wind radio leaves an independent throw available and immediately reopens the relay when drained', async t => {
+  const f = fixture(10); t.after(f.clean)
+  const bids: string[] = []
+  let ready = false
+  f.session._windRadio = Object.assign(async bid => {
+    bids.push(bid.target)
+    if (ready) return () => {}
+  }, { canBid: () => ready })
+  f.foe.onGround = true
+  f.set({ earlyLift: true })
+  const other = { ...f.foe, id: 9, username: 'Other', earlyLift: false, position: new Vec3(3, 5, .5) }
+  f.bot.players.Other = { entity: other, gamemode: 0 }; f.bot.entities[9] = other
+  // The first opening needs a team slot. The alternate outward push can be used independently.
+  f.enqueue(); f.movement(0); await Promise.resolve()
+  assert.deepEqual(bids, [])
+  assert.deepEqual(f.plans.filter(p => !p.options.certifyRelease).map(p => [p.target, p.options.waitForRelaySlot]),
+    [['Enemy', true], ['Other', true]])
+  assert.equal(f.session._windOut.fired, 1)
+  ready = true
+  f.enqueue(); f.movement(0); await Promise.resolve(); f.movement(0)
+  assert.deepEqual(bids, ['Enemy'])
+  assert.equal(f.session._windOut.fired, 2)
+})
+
+for (const next of ['same lift', 'ordinary push', 'second target']) test('a released local wind flight preserves ' + next, async t => {
+  const f = fixture(15); t.after(f.clean)
+  const actor = { name: 'Blue', team: 'blue' }, bids: string[] = []
+  const team = swarmWind({ generation: 1, teamOf: b => b.team, alive: () => true, hostile: () => true } as any)
+  let id = 0
+  f.session._windRadio = async bid => {
+    const q = { ...bid, id: ++id, type: 'wind_bid' }
+    bids.push(bid.target)
+    if (team.windBid(actor, q)) return shot => team.windBid(actor, { ...q, type: 'wind_bid_done', shot })
+  }
+  f.foe.onGround = true
+  f.set({ earlyLift: true, flightTicks: 16 })
+  f.enqueue(); f.movement(0); await Promise.resolve(); f.movement(0)
+  assert.equal(f.session._windOut.fired, 1)
+  if (next === 'ordinary push') f.set({ earlyLift: false })
+  if (next === 'second target') {
+    const foe = { ...f.foe, id: 9, username: 'Other' }
+    f.bot.players.Other = { entity: foe, gamemode: 0 }; f.bot.entities[9] = foe
+  }
+  f.enqueue(); f.movement(0); await Promise.resolve()
+  assert.ok(f.plans.some(p => p.target === 'Enemy' && p.options.waitForRelaySlot === true))
+  assert.deepEqual(bids, next === 'second target' ? ['Enemy', 'Other'] : ['Enemy'])
+  f.movement(0)
+  assert.equal(f.session._windOut.fired, next === 'same lift' ? 1 : 2)
+  if (next === 'same lift') {
+    f.bot.usingHeldItem = true
+    for (let i = 0; i < 20; i++) f.bot.emit('physicsTick')
+    f.bot.usingHeldItem = false
+    f.enqueue(); f.movement(0); await Promise.resolve(); f.movement(0)
+    assert.deepEqual(bids, ['Enemy', 'Enemy'])
+    assert.equal(f.session._windOut.fired, 2)
+  }
+})
+
+test('nineteen allied sight checks serve twenty candidates; a grant takes a fresh allied roster', async t => {
+  const f = fixture(0); t.after(f.clean)
+  f.foe.onGround = true
+  for (let i = 1; i < 20; i++) {
+    const enemy = { ...f.foe, id: 10 + i, username: 'Foe' + i }
+    const ally = { ...f.foe, id: 50 + i, username: 'Ally' + i, ally: true, hidden: i === 1, position: new Vec3(50 + i, 0, 0) }
+    for (const body of [enemy, ally]) {
+      f.bot.players[body.username] = { entity: body, gamemode: 0 }
+      f.bot.entities[body.id] = body
+    }
+  }
+  f.set({ useful: false }); f.enqueue(); f.movement(0)
+  assert.equal(f.plans.length, 20)
+  assert.equal(f.sightChecks.filter(id => id.startsWith('Ally')).length, 19)
+  assert.ok(f.plans.every(p => p.options.allies.length === 18 && !p.options.allies.some(a => a.id === 'Ally1')))
+  f.set({ useful: true, earlyLift: true, unsafeAlly: 'Ally1' })
+  f.session._windRadio = async () => () => {}
+  f.enqueue(); f.movement(0); await Promise.resolve()
+  f.bot.players.Ally1.entity.hidden = false
+  f.bot.players.Ally1.entity.position = new Vec3(3, 5, 0)
+  f.movement(0)
+  const released = f.plans.at(-1).options.allies
+  assert.equal(released[1].id, 'Ally1', 'the newly visible closest ally is checked first after the thrower')
+  assert.equal(released.length, 20)
+  assert.equal(f.events.includes('use_item'), false)
+  assert.equal(f.session._windOut.log.at(-1).why, 'changed_before_release')
+})
+
+test('an elytra interception protects the thrower and visible nearby allies only', t => {
+  const f = fixture(0); t.after(f.clean)
+  f.foe.elytraFlying = true
+  for (const [i, name] of ['Seen', 'BehindWall', 'Spectator'].entries()) {
+    const ally = { ...f.foe, id: i + 5, username: name, position: new Vec3(i + 2, 0, 0), height: 1.5, ally: true, elytraFlying: false, hidden: name === 'BehindWall' }
+    f.bot.players[name] = { entity: ally, gamemode: name === 'Spectator' ? 3 : 0 }
+    f.bot.entities[ally.id] = ally
+  }
+  f.set({ useful: false }); f.enqueue(); f.movement(0)
+  const plan = f.plans.find(p => p.options.protect)
+  assert.ok(plan)
+  assert.deepEqual(plan.options.protect.map(p => p.x), [.25, 2])
+  assert.equal(plan.options.protect[1].y, 1.27)
+})
+
+test('a busy wind relay checks the roster once after movement and sees a replacement target in the next window', async t => {
+  const f = fixture(15); t.after(f.clean)
+  f.foe.onGround = true
+  for (let i = 1; i < 20; i++) {
+    const foe = { ...f.foe, id: i + 2, username: 'Foe' + i }
+    f.bot.players[foe.username] = { entity: foe, gamemode: 0 }
+    f.bot.entities[foe.id] = foe
+  }
+  const bids = []
+  f.session._windRadio = async bid => { bids.push(bid.target) }
+  f.set({ earlyLift: true })
+  f.enqueue(); f.movement(0); await Promise.resolve()
+  assert.deepEqual(bids, ['Enemy'])
+  assert.equal(f.session._windOut.log.at(-1).why, 'wind_relay_busy')
+  assert.equal(f.sightChecks.length, 1 + 20, 'an admitted phase needs one first witness plus the fresh ranked roster')
+  f.enqueue()
+  f.foe.hidden = true
+  f.set({ earlyLift: false }); f.movement(0); await Promise.resolve()
+  assert.deepEqual(f.plans.map(p => p.target), ['Enemy', 'Foe1'])
+  assert.deepEqual(bids, ['Enemy'], 'the independent push is still local')
+  assert.equal(f.events.filter(e => e === 'use_item').length, 1)
+})
+
+for (const mode of ['two occupied', 'moved', 'next window', 'only target', 'ordinary fallback']) test('denied wind bids reprice current targets: ' + mode, async t => {
+  const f = fixture(15); t.after(f.clean)
+  const actor = { name: 'Blue', team: 'blue' }, other = { name: 'Relay', team: 'blue' }
+  const team = swarmWind({ generation: 1, teamOf: b => b.team, alive: () => true, hostile: () => true } as any)
+  f.foe.onGround = true; f.set({ earlyLift: true })
+  const blockers = [], bids = []
+  for (const [i, name] of (mode === 'only target' ? ['Enemy'] : ['Enemy', 'Second', 'Third']).entries()) {
+    const entity = i ? { ...f.foe, id: 2 + i, username: name } : f.foe
+    f.bot.players[name] = { entity, gamemode: 0 }; f.bot.entities[entity.id] = entity
+    if (i < 2) {
+      const bid = { id: 21 + i, type: 'wind_bid', entity: entity.id, target: name, tick: 500, ticks: 16 }
+      assert.ok(team.windBid(other, bid)); blockers.push(bid)
+    }
+  }
+  f.session._windRadio = async bid => {
+    const q = { ...bid, id: 1 + bids.length, type: 'wind_bid' }
+    bids.push(q.target)
+    if (team.windBid(actor, q)) return shot => team.windBid(actor, { ...q, type: 'wind_bid_done', shot })
+  }
+  for (let i = 0; i < 6 && !f.session._windOut.fired; i++) {
+    if (i) f.bot.ndClock.age += 2n
+    if (i === 1 && mode !== 'two occupied') {
+      if (mode === 'moved') f.foe.position = f.foe.position.offset(1, 0, 0)
+      if (mode === 'next window') f.bot.ndClock.age += 5n
+      if (mode === 'ordinary fallback') {
+        f.set({ earlyLift: false })
+        f.bot.players.Second.entity.noPlan = f.bot.players.Third.entity.noPlan = true
+      } else team.windBid(other, { ...blockers[0], type: 'wind_bid_done' })
+    }
+    f.enqueue(); f.movement(0); await Promise.resolve(); f.movement(0)
+  }
+  const expected = mode === 'two occupied' ? ['Enemy', 'Second', 'Third'] : mode === 'ordinary fallback' ? ['Enemy'] : ['Enemy', 'Enemy']
+  assert.deepEqual(bids, expected)
+  assert.deepEqual(f.plans.filter(p => !p.options.certifyRelease).map(p => p.target),
+    mode === 'ordinary fallback' ? ['Enemy', 'Second', 'Third', 'Enemy'] : expected)
+  assert.deepEqual(f.plans.filter(p => p.options.certifyRelease).map(p => p.target), mode === 'ordinary fallback' ? [] : expected.slice(-1))
+  assert.equal(f.session._windOut.fired, 1)
+})
+
+for (const mode of ['fresh alternative', 'failed alternative', 'same-frame fallback', 'newly visible alternative', 'hidden alternative',
+  'only target', 'changed pose', 'different owner', 'new hand window', 'defence']) {
+  test('a local release deadline leaves a fair next opening: ' + mode, t => {
+    const f = fixture(35, true, 0, undefined, { atRelease: true, feetDelta: 0 }); t.after(f.clean)
+    f.foe.releaseCostMs = 65
+    const others = mode === 'only target' ? 0 : mode.endsWith('visible alternative') || mode === 'hidden alternative' ? 1 : 38
+    for (let i = 0; i < others; i++) {
+      const name = 'Other' + i
+      const e = { ...f.foe, id: 3 + i, username: name, position: f.foe.position.offset(-1, 0, 0), releaseCostMs: 25,
+        hidden: mode === 'newly visible alternative' }
+      f.bot.players[name] = { entity: e, gamemode: 0 }; f.bot.entities[e.id] = e
+    }
+    const pulse = () => { f.enqueue(); f.movement(0) }
+    pulse()
+    assert.equal(f.session._windOut.log.at(-1)?.why, 'stale_release')
+    assert.equal(f.session._windOut.fired, 0)
+    pulse()
+    assert.equal(f.plans.length, 2, 'the same expired native frame is not repriced')
+    f.bot.ndClock.ticks++
+    if (mode === 'failed alternative' || mode === 'same-frame fallback') f.bot.players.Other0.entity.noPlan = true
+    if (mode === 'hidden alternative' || mode === 'newly visible alternative') f.bot.players.Other0.entity.hidden = mode === 'hidden alternative'
+    if (mode === 'changed pose') f.foe.position.x += 1
+    if (mode === 'different owner') f.session.current = { name: 'wing_orbit', ctl: { aborted: false } }
+    if (mode === 'new hand window') f.bot.ndClock.ticks += 10
+    if (mode === 'defence') f.set({ smash: true })
+    if (mode !== 'failed alternative') f.foe.releaseCostMs = 25
+    pulse()
+    const expected = mode === 'fresh alternative' || mode === 'newly visible alternative' ? ['Enemy', 'Other0'] :
+      mode === 'failed alternative' || mode === 'same-frame fallback' ? ['Enemy', 'Other0', 'Enemy'] : ['Enemy', 'Enemy']
+    if (mode === 'defence') {
+      assert.ok(f.events.includes('shield_equip'))
+      assert.equal(f.plans.length, 2)
+    } else {
+      assert.deepEqual(f.plans.filter(p => !p.options.certifyRelease).map(p => p.target), expected)
+      if (mode === 'failed alternative') {
+        assert.equal(f.session._windOut.fired, 0)
+        f.bot.ndClock.ticks++; pulse()
+        assert.equal(f.plans.at(-1).target, 'Other1', 'a repeatedly failing runner-up does not monopolize the next chance')
+      }
+      assert.equal(f.session._windOut.fired, 1)
+    }
+  })
+}
+
 for (const cost of [35, 37]) test(`wind decision starts after the sent movement, not before 96ms of other physics work (${cost}ms plan)`, t => {
   const f = fixture(cost); t.after(f.clean)
   f.enqueue()
@@ -311,6 +565,22 @@ test('the final wind ray expires after a native tick even while its planning win
     assert.equal(f.plans.length, 1)
     assert.equal(f.events.includes('use_item'), fired)
     if (!fired) assert.equal(f.session._windOut.log[0].why, 'stale_release')
+  }
+})
+
+test('an expired interception ends before aiming or ally simulation and logs the actual release budget', t => {
+  for (const elapsed of [25, 26]) {
+    const f = fixture(10, true, elapsed); t.after(f.clean)
+    f.bot.ndClock.observationRate = () => 40
+    f.enqueue(); f.movement(0)
+    assert.equal(f.events.includes('use_item'), elapsed === 25)
+    assert.equal(f.shots.length, elapsed === 25 ? 1 : 0)
+    assert.equal(f.safetyChecks, elapsed === 25 ? 1 : 0)
+    if (elapsed === 26) {
+      const entry = f.session._windOut.log.at(-1)
+      assert.equal(entry.why, 'stale_release')
+      assert.match(entry.dbg, /перехват: бюджет перепроверки, 26 из 25 мс/)
+    }
   }
 })
 

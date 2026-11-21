@@ -23,7 +23,7 @@ function scene(cells = [0], supports = [1]) {
   const clear = (x, z = 0, dug = 1) => work.set(`Champ:dig:${x},119,${z}`, { at: 10000, active: false, failed: false, work: 10, alternative: 100,
     deadline: 20000, penalty: 0, penaltyAt: 10000, dug })
   const run = () => { board.setMembers(team); const S: any = { board, team, enemies: [foe], plan: new Map(), aggressive: true,
-    options: { digSites: () => [...sites] }, weak: () => false, state: pvpState(board) }; pvpDiggers(S); return S }
+    options: { digSites: () => [...sites] }, confirmed: () => true, weak: () => false, state: pvpState(board) }; pvpDiggers(S); return S }
   return { team, sites, foe, board, work, clear, run }
 }
 

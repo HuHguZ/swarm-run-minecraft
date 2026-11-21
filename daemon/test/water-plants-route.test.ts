@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 const Vec3: typeof import('vec3').Vec3 = require('vec3')
 import movement = require('../src/movement')
 import { shoreRoute } from '../src/survival/hold-out'
@@ -7,6 +8,17 @@ import { waterLevel, standingInSource } from '../src/survival/out-of-water'
 import * as geometry from '../src/navigation/geometry'
 const geometryRegistry = (require('minecraft-data') as typeof import('minecraft-data'))('1.21.11')
 const NativeBlock = (require('prismarine-block') as typeof import('prismarine-block'))(geometryRegistry as any)
+
+test('cold collision checks do not initialise movement and pathfinding inside a jump forecast', () => {
+  execFileSync(process.execPath, ['-e', `
+    const assert = require('node:assert/strict')
+    const { bodyClear, containsWater } = require('../src/navigation/geometry')
+    const air = { blockAt: p => ({ name: 'air', boundingBox: 'empty', position: p }) }
+    assert.equal(bodyClear(air, { x: .5, y: 64, z: .5 }), true)
+    assert.equal(containsWater({ name: 'kelp' }), true)
+    assert.equal(Boolean(require.cache[require.resolve('../src/movement')]), false)
+  `], { cwd: __dirname })
+})
 
 function geometryPool(name: string | null, head = 'air') {
   return { blockAt(at: any) {

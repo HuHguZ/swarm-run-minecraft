@@ -13,13 +13,13 @@ const turn = () => new Promise(resolve => setImmediate(resolve))
 // Ручки окружения, меняющие опрос и конец раунда: тест — на умолчаниях.
 delete process.env.FFA_POLL_MS; delete process.env.ARMS_MOBS; delete process.env.ARMS_PHASES
 
-function fixture(t) {
+function fixture(t, options = {}) {
   let now = 50000, fastFrame = 20, fastX = 5
   const intervals = [], slowWaiters = [], calls = [], observations = []
   const reply = (name, x, frame = 20) => ({ state: { pos: { x, y: 64, z: 0 }, health: 20, inventory: {},
     physicsTicks: frame, clock: { id: name, ticks: frame } }, detail: {} })
-  const peer = name => ({ name, c: { call(method) {
-    calls.push({ name, method })
+  const peer = name => ({ name, c: { call(method, params?) {
+    calls.push({ name, method, params })
     if (method !== 'status') return Promise.resolve({})
     return name === 'fast' ? Promise.resolve(reply(name, fastX, fastFrame)) : new Promise(resolve => slowWaiters.push(resolve))
   } } })
@@ -31,7 +31,7 @@ function fixture(t) {
     busy: new Set(), out: new Set(), deadNow: new Set(), alive: () => true, enemiesOf: () => [], teamOf: name => bots.find(b => b.name === name)?.team,
     Y: 64, humans: {}, readDeaths() {}, STOPF: path.join(os.tmpdir(), `ffa-poll-no-stop-${process.pid}`),
     arms: false, teams: false, names: ['fast', 'slow'], labNeed: {}, deathAt: {}, log() {},
-    swarmDriver: { observe: (b, data) => observations.push({ name: b.name, data }), panic: () => false }
+    swarmDriver: { observe: (b, data) => observations.push({ name: b.name, data }), panic: () => false }, ...options
   }
   t.mock.method(Date, 'now', () => now)
   t.mock.method(globalThis, 'setInterval', (fn, ms) => { intervals.push({ fn, ms }); return intervals.length })
@@ -44,6 +44,35 @@ function fixture(t) {
     advance: ms => { now += ms }, fast: (x, frame) => { fastX = x; fastFrame = frame } }
 }
 
+test('a poll below the plane tracks the body without dispatching loot or an ambush until it returns', async t => {
+  const f = fixture(t, { arms: true, Y: 120, L: { y0: -4 } }), actor = f.bots[0]
+  let y = 62.3
+  const decisions = [], sent = []
+  f.context.swarmDriver.pearlObserve = () => decisions.push('pearl')
+  f.context.swarmDriver.observe = () => decisions.push('observe')
+  f.context.swarmDriver.panic = () => { decisions.push('panic'); return false }
+  f.context.swarmDriver.observeDeaths = (_bot, deaths) => sent.push(...deaths)
+  actor.c.call = async () => ({ state: { pos: { x: 524, y, z: 545 }, health: 20, clock: { ticks: 10 } },
+    detail: { pearls: [{}], sightings: [], witnessedDeaths: [{ self: true }] } })
+  f.poll(); await turn()
+  assert.equal(f.context.pos.fast.p.y, 62.3)
+  assert.deepEqual(sent, [{ self: true }])
+  assert.deepEqual(decisions, [])
+  y = 113; f.poll(); await turn()
+  assert.deepEqual(decisions, ['pearl', 'observe', 'panic'])
+})
+
+test('a delayed missing-body reply from last round cannot erase the respawned position', async t => {
+  const f = fixture(t)
+  let finish
+  f.bots[0].c.call = () => new Promise(resolve => { finish = resolve })
+  f.poll(); f.context.round++
+  const fresh = f.context.pos.fast = { p: { x: 610, y: 120, z: 600 }, hp: 20 }
+  finish({ status: 'done', state: {} })
+  await turn()
+  assert.equal(f.context.pos.fast, fresh)
+})
+
 test('one slow status never blocks another body update or its next independent status cycle', async t => {
   const f = fixture(t)
   f.poll(); await turn()
@@ -52,6 +81,9 @@ test('one slow status never blocks another body update or its next independent s
   assert.equal(f.context.pos.fast.p.x, 12)
   assert.equal(f.calls.filter(c => c.name === 'fast' && c.method === 'status').length, 2)
   assert.equal(f.calls.filter(c => c.name === 'slow' && c.method === 'status').length, 1, 'only the slow peer keeps one request in flight')
+  f.advance(1200); f.release(); await turn()
+  assert.equal(f.context.pos.slow.hpAskedAt, 50000)
+  assert.equal(f.context.pos.slow.observedAt, 51200)
 })
 
 test('a late status from the previous round cannot overwrite the reset pose or share old sightings', async t => {
@@ -194,7 +226,8 @@ test('owned round reset parks bodies before the clone and teleports before resto
 
 test('a chest taken through the arena wrapper is marked opened, so the ARMS_LOOT_X refill can find it', async () => {
   const L = { y0: 0, chests: [{ x: 10, y: 5, z: 10 }, { x: -4, y: 5, z: 2, pair: { x: 97, y: 105, z: 102 } }] }
-  const bot: any = { name: 'A', c: { call: async (method, p) => method === 'chest_take' ? { status: 'done', detail: { at: { x: p.x, y: p.y, z: p.z } } } : {} } }
+  let reply: any
+  const bot: any = { name: 'A', c: { call: async (method, p) => reply || (method === 'chest_take' ? { status: 'done', detail: { at: { x: p.x, y: p.y, z: p.z } } } : {}) } }
   const ctx: any = { arms: true, bots: [bot], names: ['A'], pos: {}, humans: {}, X: 100, Y: 100, Z: 100, R: 20, L, log: () => {}, opened: new Set(),
     alive: () => true, armsHome: () => ({ x: 100, y: 100, z: 100 }), hostile: () => false }
   installSight(ctx)
@@ -203,12 +236,50 @@ test('a chest taken through the arena wrapper is marked opened, so the ARMS_LOOT
   await bot.c.call('chest_take', { item: 'all', x: 1, y: 1, z: 1 })
   await turn()
   assert.deepEqual([...ctx.opened].sort(), ['-4,5,2', '10,5,10'], 'single chest by its cell, double chest by its second half, a foreign chest ignored')
+  ctx.opened.clear()
+  const chest = { x: 110, y: 105, z: 110 }
+  reply = { status: 'failed', detail: { why: 'cannot see the chest' } }
+  await bot.c.call('chest_take', chest)
+  assert.equal(ctx.opened.size, 0, 'requested coordinates do not prove the lid actually opened')
+  let finish
+  reply = new Promise(resolve => { finish = resolve })
+  ctx.round = 1
+  const late = bot.c.call('chest_take', chest)
+  ctx.round = 2
+  finish({ status: 'done', detail: { at: chest } })
+  await late
+  assert.equal(ctx.opened.size, 0, 'a reply from the old round cannot refill the new chest')
+  reply = { status: 'interrupted', detail: { at: chest, contents: {} } }
+  await bot.c.call('chest_take', chest)
+  assert.deepEqual([...ctx.opened], ['10,5,10'], 'an opened window counts even if the transfer was interrupted')
+})
+
+test('a healer waiting above the arena after looting has no failed chest approach to cancel', t => {
+  const f = fixture(t), b = f.bots[0], frame = f.context.pos.fast
+  f.context.Y = 120
+  frame.p = { x: 600.5, y: 128, z: 575.5 }
+  frame.observedAt = frame.frameAt = 50000
+  b.swarmTask = { kind: 'heal' }
+  b.anchor = { p: { ...frame.p }, at: 38000 }
+  b.last = { m: 'chest_take', p: { x: 601, y: 128, z: 575, timeoutSeconds: 8 }, at: 37000, status: 'done', pending: false }
+  f.watchdog()
+  assert.equal(f.calls.filter(c => c.name === 'fast').length, 0)
+  assert.equal(b.badSpots?.length || 0, 0)
+  b.last = { m: 'goto', p: { x: 600, y: 134, z: 575, timeoutSeconds: 3 }, at: 50000, pending: true }
+  f.watchdog()
+  f.advance(7000)
+  frame.observedAt = frame.frameAt = 57000
+  f.watchdog()
+  assert.deepEqual(f.calls.filter(c => c.name === 'fast').map(c => c.method), ['stop'])
 })
 
 for (const [method, params, grace] of [
   ['chest_take', { timeoutSeconds: 8 }, 12000],
   ['chest_take', {}, 49000],
-  ['assist', { mode: 'pickup' }, 10000]
+  ['assist', { mode: 'pickup' }, 10000],
+  ['assist', { mode: 'deny' }, 10000],
+  ['assist', { mode: 'toss', item: 'ender_pearl' }, 6000],
+  ['assist', { mode: 'heal' }, 6000]
 ] as const) test('the watchdog respects and expires the loot budget: ' + method + ' ' + grace, t => {
   const f = fixture(t), b = f.bots[0]
   f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = 50000
@@ -219,6 +290,47 @@ for (const [method, params, grace] of [
   b.last.at--
   f.watchdog()
   assert.equal(f.calls.filter(c => c.name === 'fast' && c.method === 'stop').length, 1)
+})
+
+test('a confirmed handover does not turn its stationary giver into a failed route', async t => {
+  const f = fixture(t), b = f.bots[0], frame = f.context.pos.fast
+  b.c.call = async (method) => {
+    f.calls.push({ name: b.name, method })
+    return { status: 'done', detail: { ok: true, sent: 1 } }
+  }
+  f.context.humans = {}
+  Object.assign(f.context, { X: 0, Y: 64, Z: 0, R: 30, home: () => '0 0', armsHome: () => frame.p })
+  installSight(f.context)
+  await b.c.call('assist', { mode: 'toss', item: 'ender_pearl', ally: 'slow' })
+  f.advance(13000)
+  frame.observedAt = frame.frameAt = Date.now()
+  b.anchor = { p: { ...frame.p }, at: 40000 }
+  f.watchdog()
+  assert.deepEqual(f.calls.filter(c => c.name === b.name).map(c => c.method), ['assist'])
+})
+
+test('an empty pickup leaves the next loot route and its watchdog intact', async t => {
+  const f = fixture(t), b = f.bots[0], frame = f.context.pos.fast
+  b.c.call = async method => {
+    f.calls.push({ name: b.name, method })
+    return { status: 'done', detail: { ok: false, why: 'на земле нет вещей' } }
+  }
+  Object.assign(f.context, { X: 0, Y: 64, Z: 0, R: 30, armsHome: () => frame.p })
+  installSight(f.context)
+  b.swarmTask = { kind: 'loot' }
+  await b.c.call('assist', { mode: 'pickup' })
+  for (let i = 0; i < 3; i++) {
+    f.advance(12000)
+    frame.observedAt = frame.frameAt = Date.now()
+    b.anchor = { p: { ...frame.p }, at: Date.now() - 6000 }
+    f.watchdog()
+    await turn()
+  }
+  assert.deepEqual(f.calls.filter(c => c.name === b.name).map(c => c.method), ['assist'])
+  b.last = { m: 'goto', p: { x: 10, y: 64, z: 0, timeoutSeconds: 3 }, at: Date.now() - 7000, pending: true }
+  b.anchor = { p: { ...frame.p }, at: Date.now() - 6000 }
+  f.watchdog()
+  assert.equal(f.calls.at(-1)?.method, 'stop')
 })
 
 for (const method of ['eat', 'antidote']) test('fresh ' + method + ' can finish after a stationary route and an expired one still resets', t => {
@@ -300,9 +412,8 @@ test('тревога прерывает копателя с _hunt в конта�
 test('тревога рвёт поход к старому месту человека и поход, когда он уже рядом, но не погоню, подъём и отход', t => {
   const f = fixture(t), b = f.bots[0]
   f.context.teamOf = () => b.team
-  f.context.enemiesOf = () => [{ n: 'Tester', d: 4, spd: 6, human: true }]
   let seen = { x: 4, y: 64, z: 0 }
-  f.context.swarmDriver.enemies = () => [{ id: 'Tester', position: seen, seenAt: Date.now() }]
+  f.context.enemiesOf = () => [{ n: 'Tester', p: seen, d: 4, spd: 6, human: true, seenAt: Date.now() }]
   let tick: any
   t.mock.method(globalThis, 'setInterval', fn => { tick = fn; return 1 as any })
   watchAlarm(f.context)
@@ -375,6 +486,28 @@ test('watchdog drops a fighter stuck high above the field instead of only stoppi
   assert.equal(drop.reserved, true, 'ход не перебивает спуск')
   await turn(); await turn()
   assert.equal(b.swarmReserved, undefined, 'после ответа бот снова в ходе')
+})
+
+for (const change of ['a new escape', 'a fall below the arena floor']) test(`a delayed watchdog stop on the roof cannot start a descent after ${change}`, async t => {
+  const f = fixture(t, { arms: true, L: { y0: -4 } }), b = f.bots[0], frame = f.context.pos.fast
+  frame.p.y = 89
+  frame.observedAt = frame.frameAt = 50000
+  b.anchor = { p: { ...frame.p }, at: 30000 }
+  b.last = { m: 'fight', at: 40000, p: { target: 'Foe' }, pending: true }
+  let finish
+  const commands = []
+  b.c.call = (method) => {
+    commands.push(method)
+    return method === 'stop' ? new Promise(resolve => { finish = resolve }) : Promise.resolve({})
+  }
+  f.watchdog()
+  assert.deepEqual(commands, ['stop'])
+  if (change === 'a new escape') b.last = { m: 'evade', at: 50000, pending: true }
+  else frame.p.y = 56
+  finish({})
+  await turn()
+  assert.deepEqual(commands, ['stop'])
+  assert.equal(b.swarmReserved, undefined)
 })
 
 // cl27r/cl28a: false-retreat bait eats at its rally on purpose — «стоит 6 с — eat (0 с)» ×3–6 at every round start.
@@ -454,6 +587,36 @@ for (const opened of [false, true]) test(`a failed finishing hunt ${opened ? 'br
   assert.equal(f.calls.filter(c => c.method === 'goto').length, opened ? 1 : 2)
   assert.equal(f.sw.telemetry.searches, opened ? 0 : 1)
   assert.equal(f.task.data.target, 'Foe')
+})
+
+test('standing on the same spawn square starts a new watchdog timer at the first advancing physics frame of this round', async t => {
+  const f = fixture(t), b = f.bots[0]
+  const sample = async () => { f.poll(); await turn(); f.watchdog() }
+  await sample()
+  f.advance(1000); f.context.round++; f.context.roundT0 = Date.now()
+  b.last = { m: 'goto', pending: true, round: f.context.round, at: Date.now(), p: { x: 12, y: 64, z: 0, timeoutSeconds: 4 } }
+  b.swarmTask = { kind: 'loot' }
+  f.watchdog()
+  assert.equal(b.anchor, null, 'the last physical sample still belongs to the previous round')
+  await sample()
+  assert.equal(b.anchor, null, 'a new status response can still contain the same old physics frame')
+  f.advance(3500); f.fast(5, 21); await sample()
+  const start = Date.now(); assert.equal(b.anchor.at, start)
+  f.advance(3000); f.fast(5, 22); await sample()
+  assert.ok(!f.calls.some(c => c.name === b.name && c.method === 'stop'), 'the new goto has only stood for three observed seconds')
+  f.advance(2500); f.fast(5, 23); await sample()
+  assert.ok(f.calls.some(c => c.name === b.name && c.method === 'stop'), 'a genuine current-round stall is recovered after its own budget')
+})
+
+test('a delayed status requested before a same-round death cannot start a new standing timer', async t => {
+  const f = fixture(t), b = f.bots[1]
+  f.poll(); await turn()
+  f.advance(1000); f.context.deathAt[b.name] = { at: Date.now() }
+  b.last = { m: 'goto', pending: true, round: f.context.round, at: Date.now(), p: { x: 80, y: 64, z: 0 } }
+  f.advance(1000); f.release(); await turn(); f.watchdog()
+  assert.equal(b.anchor, null)
+  f.poll(); await turn(); f.release(); await turn(); f.watchdog()
+  assert.equal(b.anchor.at, Date.now(), 'a sample actually requested in the new life starts the timer')
 })
 
 test('watchdog records the failed approach and escalates a second freeze without a forty-second window', async t => {
@@ -563,14 +726,16 @@ test('watchdog follows operation ownership rather than the former swarm busy/hol
 
 test('an unsuccessful watchdog dig does not become a timed retry; a new tool can reopen recovery', async t => {
   const f = fixture(t), b = f.bots[0]
+  const arena = { x: .5, y: 64, z: .5, r: 20, killY: 57, avoid: [{ x: 3, y: 64, z: 1, r: 2 }] }
   const stuck = async () => {
     f.context.pos.fast.observedAt = f.context.pos.fast.frameAt = Date.now()
     b.anchor = { p: { ...f.context.pos.fast.p }, at: 0 }
-    b.last = { m: 'goto', at: 0, p: { x: 8, y: 64, z: 0, timeoutSeconds: 4 } }
+    b.last = { m: 'goto', at: 0, p: { x: 8, y: 64, z: 0, arena, timeoutSeconds: 4 } }
     f.watchdog(); await turn()
   }
   await stuck(); f.advance(10000); await stuck()
   assert.equal(f.calls.filter(c => c.method === 'dig_to').length, 1)
+  assert.deepEqual(f.calls.find(c => c.method === 'dig_to').params.arena, arena)
   f.advance(3600000); await stuck()
   assert.equal(f.calls.filter(c => c.method === 'dig_to').length, 1, 'the same failed recovery stays failed')
   f.context.pos.fast.inv = { iron_pickaxe: 1 }; await stuck()

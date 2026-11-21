@@ -12,6 +12,9 @@
 import type { SwarmPosition } from './types'
 
 export type Box = { x0: number; x1: number; y0: number; y1: number; z0: number; z1: number }
+// The entrance is a foot cell. Price the walk to its center with the same detour allowance used by the executor.
+export const cacheWalkSeconds = (me: SwarmPosition, cell: SwarmPosition) =>
+  Math.hypot(cell.x + .5 - me.x, cell.y - me.y, cell.z + .5 - me.z) * 1.5 / 4
 export type CacheScan = {
   eye: SwarmPosition; n: number; spin: number; range: number
   // по лучу: [x, y, z, грань] первой непрозрачной клетки (грань — нормаль к смотрящему, FACES), [t] — непрогруженное с t
@@ -20,7 +23,7 @@ export type CacheScan = {
   pie?: { step: number; range: number; bins: number[][] } // [рысканье, тангаж, счёт] — только ненулевые окна
   chests?: number[][] // сундуки, видимые сейчас (грань под лучом)
 }
-export type DigPlan = { from: SwarmPosition; to: SwarmPosition; gain: number; cost: number; rate: number; cells: number; exposed: number[] }
+export type DigPlan = { from: SwarmPosition; to: SwarmPosition; surface?: SwarmPosition; gain: number; cost: number; rate: number; cells: number; exposed: number[] }
 
 export const FACES = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]]
 const UNKNOWN = 0, AIR = 1, SOLID = 2, DUG = 3
@@ -89,7 +92,7 @@ export class CacheModel {
   box: Box; sx: number; sy: number; sz: number
   state: Uint8Array
   colTop: Int16Array
-  lw: Float32Array
+  private probability: Float32Array
   pies: PieScan[] = []
   known = new Map<string, SwarmPosition>()
   found = new Set<string>()
@@ -99,13 +102,18 @@ export class CacheModel {
   cand: Int32Array = new Int32Array(0)
   total = 0
   scans = 0
+  private field: boolean
+  private tops = new Set<number>()
+  private examined = new Set<number>()
+  private fieldMass = new Map<number, number>()
 
-  constructor (box: Box, { expected = 2.5 }: { expected?: number } = {}) {
+  constructor (box: Box, { expected = 2.5, field = false }: { expected?: number; field?: boolean } = {}) {
     this.box = box
+    this.field = field
     this.sx = box.x1 - box.x0 + 1; this.sy = box.y1 - box.y0 + 1; this.sz = box.z1 - box.z0 + 1
     this.state = new Uint8Array(this.sx * this.sy * this.sz)
     this.colTop = new Int16Array(this.sx * this.sz).fill(-1)
-    this.lw = new Float32Array(this.state.length)
+    this.probability = new Float32Array(this.state.length)
     this.expected = expected
     this.unknown = expected
   }
@@ -152,7 +160,13 @@ export class CacheModel {
       const h = s.hits[k], d = dirs[k]
       if (h && h.length === 1) { this.trace(s.eye, d, h[0], null); continue }
       this.trace(s.eye, d, h ? Math.hypot(h[0] + .5 - s.eye.x, h[1] + .5 - s.eye.y, h[2] + .5 - s.eye.z) + 1 : s.range, h || null)
-      if (h) this.solid(h[0], h[1], h[2])
+      if (h) {
+        this.solid(h[0], h[1], h[2])
+        if (this.field && h[1] === this.box.y0 && h[3] === 3) {
+          const i = this.idx(h[0], h[1], h[2])
+          if (i >= 0) this.tops.add(i)
+        }
+      }
     }
     for (const c of s.chests || []) { this.known.set(`${c[0]},${c[1]},${c[2]}`, { x: c[0], y: c[1], z: c[2] }); this.solid(c[0], c[1], c[2]) }
     if (s.pie) {
@@ -217,53 +231,141 @@ export class CacheModel {
     const list: number[] = []
     for (let i = 0; i < this.state.length; i++) if (this.candidate(i)) list.push(i)
     this.cand = Int32Array.from(list)
-    const N = list.length
+    // The first layer indexes the lid of a possible field chest. It is never a tunnel target.
+    const rockCount = list.length
     // Невиданных сундуков в «пироге» (больше всего с одного места: окна минус известные) — тайники и ещё не увиденные обычные
     // (комнаты, галереи). Вес клеток — на всех невиданных; доля тайников в находке — left/unknown (знание правила: их 2–3).
     const left = Math.max(0.5, this.expected - this.found.size)
+    // Zero means outside this view. Real angular bins start at one.
+    const dense = (b: number) => 1 + Math.floor(b / 1000) * 64 + b % 1000
+    // A remembered field layout may differ from today's. An empty bearing from another view proves
+    // that this old position cannot explain a positive bearing elsewhere this round.
+    const known = [...this.known.values()].filter(c => !this.field || c.y !== this.box.y0 - 1 || !this.pies.some(p => {
+      const x = c.x + .5, y = c.y + .5, z = c.z + .5
+      const dx = x - p.eye.x, dy = y - p.eye.y, dz = z - p.eye.z
+      return dx * dx + dy * dy + dz * dz <= p.range * p.range && !p.bins.has(pieBin(p.eye, x, y, z, p.step))
+    }))
     let U = 0
-    for (const p of this.pies) {
-      const known = new Map<number, number>()
-      for (const c of this.known.values()) if (Math.hypot(c.x + .5 - p.eye.x, c.y + .5 - p.eye.y, c.z + .5 - p.eye.z) <= p.range) { const b = pieBin(p.eye, c.x + .5, c.y + .5, c.z + .5, p.step); known.set(b, (known.get(b) || 0) + 1) }
-      let u = 0
-      for (const [b, k] of p.bins) u += Math.max(0, k - (known.get(b) || 0))
-      U = Math.max(U, u)
+    const windows = this.pies.map(p => {
+      const remaining = new Int32Array(128 * 64 + 1), r2 = p.range * p.range
+      for (const [b, count] of p.bins) remaining[dense(b)] = count
+      for (const c of known) {
+        const dx = c.x + .5 - p.eye.x, dy = c.y + .5 - p.eye.y, dz = c.z + .5 - p.eye.z
+        if (dx * dx + dy * dy + dz * dz <= r2) remaining[dense(pieBin(p.eye, c.x + .5, c.y + .5, c.z + .5, p.step))]--
+      }
+      let unexplained = 0
+      for (const b of p.bins.keys()) unexplained += Math.max(0, remaining[dense(b)])
+      U = Math.max(U, unexplained)
+      return { p, remaining }
+    })
+    this.fieldMass.clear()
+    if (this.field && this.tops.size) {
+      const y = this.box.y0 - .5, knownFloor = new Set<number>()
+      for (const c of known) if (c.y === this.box.y0 - 1) {
+        const i = this.idx(c.x, this.box.y0, c.z)
+        if (i >= 0) knownFloor.add(i)
+      }
+      // All possible positions in the floor compete for a bearing, including places no one can inspect yet.
+      // Only actually seen top faces can produce a job. Never count a historical chest again as an unexplained echo.
+      const addFieldCell = (i: number) => {
+        if (this.examined.has(i) || this.state[i] === AIR || this.state[i] === DUG) return
+        const recalled = knownFloor.has(i)
+        if (recalled && !this.tops.has(i)) return
+        const x = this.box.x0 + i % this.sx + .5, z = this.box.z0 + Math.floor(i / this.sx) + .5
+        let supported = false, confidence = 1
+        for (const { p, remaining } of windows) {
+          const dx = x - p.eye.x, dy = y - p.eye.y, dz = z - p.eye.z
+          if (dx * dx + dy * dy + dz * dz > p.range * p.range) continue
+          const b = pieBin(p.eye, x, y, z, p.step), excess = remaining[dense(b)]
+          if (recalled) {
+            const observed = p.bins.get(b) || 0
+            confidence = Math.min(confidence, observed / Math.max(1, observed - excess))
+          } else if (excess <= 0) { confidence = 0; break }
+          supported = true
+        }
+        if (confidence <= 0) return
+        if (recalled) this.fieldMass.set(i, confidence)
+        else if (supported) list.push(i)
+      }
+      if (windows.length) for (let i = 0; i < this.sx * this.sz; i++) addFieldCell(i)
+      else for (const i of knownFloor) addFieldCell(i)
     }
+    const N = list.length
     this.unknown = Math.max(left, U)
     const rho0 = N ? this.unknown / N : 1
-    const lw = this.lw
+    const lw = new Float32Array(N)
     const cx = new Float32Array(N), cy = new Float32Array(N), cz = new Float32Array(N)
-    for (let k = 0; k < N; k++) { const i = list[k]; lw[i] = 0; const p = this.at(i); cx[k] = p.x + .5; cy[k] = p.y + .5; cz[k] = p.z + .5 }
-    // Окна — плотным массивом (рысканье < 128, тангаж < 64 при шаге ≥ 3°).
-    const dense = (b: number) => Math.floor(b / 1000) * 64 + b % 1000
-    const binOf = new Int32Array(N)
-    for (const p of this.pies) {
-      const r2 = p.range * p.range, known = new Int32Array(128 * 64), M = new Int32Array(known.length)
-      for (const c of this.known.values()) {
-        const dx = c.x + .5 - p.eye.x, dy = c.y + .5 - p.eye.y, dz = c.z + .5 - p.eye.z
-        if (dx * dx + dy * dy + dz * dz <= r2) known[dense(pieBin(p.eye, c.x + .5, c.y + .5, c.z + .5, p.step))]++
-      }
+    for (let k = 0; k < N; k++) { const p = this.at(list[k]); cx[k] = p.x + .5; cy[k] = p.y + (k < rockCount ? .5 : -.5); cz[k] = p.z + .5 }
+    const weighted = windows.map(w => ({ ...w, binOf: new Uint16Array(N) }))
+    for (const { p, remaining, binOf } of weighted) {
+      const r2 = p.range * p.range, M = new Int32Array(remaining.length)
       // Вычеркнутые прежними окнами в счёт клеток окна не идут: тайника там нет — лишний сундук делится на оставшиеся.
       for (let k = 0; k < N; k++) {
-        binOf[k] = -1
-        if (lw[list[k]] === -Infinity) continue
+        if (lw[k] === -Infinity) continue
         const dx = cx[k] - p.eye.x, dy = cy[k] - p.eye.y, dz = cz[k] - p.eye.z
         if (dx * dx + dy * dy + dz * dz > r2) continue
-        const b = pieBin(p.eye, cx[k], cy[k], cz[k], p.step); binOf[k] = b; M[dense(b)]++
+        const b = dense(pieBin(p.eye, cx[k], cy[k], cz[k], p.step)); binOf[k] = b; M[b]++
       }
       for (let k = 0; k < N; k++) {
-        const b = binOf[k]; if (b < 0) continue
-        const r = Math.max(0, (p.bins.get(b) || 0) - known[dense(b)])
-        lw[list[k]] += r === 0 ? -Infinity : Math.log(r / M[dense(b)] / rho0)
+        const b = binOf[k]; if (!b) continue
+        const r = remaining[b]
+        lw[k] += r <= 0 ? -Infinity : Math.log(r / M[b] / rho0)
       }
     }
     let total = 0
-    for (const i of list) total += Math.exp(Math.min(30, lw[i]))
+    const probability = this.probability
+    for (let k = 0; k < N; k++) {
+      const i = list[k]
+      probability[i] = Math.exp(Math.min(30, lw[k]))
+      total += probability[i]
+    }
     this.total = total
+    const live: number[] = []
+    for (let k = 0; k < N; k++) {
+      const i = list[k]
+      probability[i] = total ? Math.min(1, probability[i] / total * this.unknown) : 0
+      if (probability[i] > 0) live.push(k)
+    }
+    // Triangulation can concentrate weight, but a sector with one unexplained chest can only pay for one.
+    // Unlocated chests may be outside the modeled diggable rock. Leave their mass unassigned.
+    for (const { binOf, remaining } of weighted) {
+      const mass = new Float64Array(remaining.length)
+      for (const k of live) mass[binOf[k]] += probability[list[k]]
+      for (const k of live) {
+        const b = binOf[k]
+        if (b && mass[b] > remaining[b]) probability[list[k]] *= remaining[b] / mass[b]
+      }
+    }
+    for (let k = rockCount; k < N; k++) if (this.tops.has(list[k]) && probability[list[k]] > 0) this.fieldMass.set(list[k], probability[list[k]])
   }
-  weight (i: number): number { return this.candidate(i) ? Math.exp(Math.min(30, this.lw[i])) : 0 }
+  // A real inspection belongs to this round. The team's next model starts without these exclusions.
+  surveySurface(cap: SwarmPosition): void {
+    const i = this.idx(cap.x, cap.y, cap.z)
+    if (i >= 0 && cap.y === this.box.y0) { this.examined.add(i); this.fieldMass.delete(i); this.dirty = true }
+  }
+  planSurface(me: SwarmPosition, { reserved = new Set<number>(), away = [] as SwarmPosition[], skip = null as ((to: SwarmPosition, from: SwarmPosition) => boolean) | null, opened = new Set<string>() } = {}): DigPlan | null {
+    if (!this.field || !this.tops.size) return null
+    this.refresh()
+    let best: DigPlan | null = null
+    for (const [i, gain] of this.fieldMass) {
+      if (reserved.has(i) || this.state[i] !== SOLID) continue
+      const surface = this.at(i), to = { ...surface, y: surface.y - 1 }
+      if (opened.has(`${to.x},${to.y},${to.z}`) || away.some(a => Math.hypot(a.x - to.x, a.z - to.z) < 10)) continue
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const from = { x: surface.x + dx, y: surface.y + 1, z: surface.z + dz }
+        const floor = this.idx(from.x, surface.y, from.z)
+        if (!this.tops.has(floor) || this.state[floor] !== SOLID || !this.open(from.x, from.y, from.z) || !this.open(from.x, from.y + 1, from.z) ||
+            Math.abs(me.y - from.y) > 8 || skip?.(to, from)) continue
+        // One ordinary sand block (hardness .5, hand: 15 ticks) plus the same interaction overhead as a tunnel.
+        const cost = 1 + .75 + cacheWalkSeconds(me, from), rate = gain / cost
+        if (!best || rate > best.rate) best = { from, to, surface, gain, cost, rate, cells: 1, exposed: [i] }
+      }
+    }
+    return best
+  }
+  weight (i: number): number { return this.prob(i) * (this.total / this.unknown) }
   // Вероятность, что тайник в клетке i (из оставшихся ожидаемых).
-  prob (i: number): number { return this.total > 0 ? this.weight(i) / this.total * this.unknown : 0 }
+  prob (i: number): number { return this.candidate(i) ? this.probability[i] : 0 }
   // Доля тайников среди невиданных сундуков (1 — без «пирога» или когда обычные все известны).
   get share (): number { return Math.min(1, Math.max(0.5, this.expected - this.found.size) / this.unknown) }
 
@@ -340,7 +442,7 @@ export class CacheModel {
   }
 
   // Лучший ход для копателя в me: к каждой горячей точке — от себя и от мест, где можно стоять рядом с ней; цена — дорога
-  // (путь ×1.3, бег 4 бл/с) и копка (digS на блок, ход по ходу 2 бл/с); выгода — вероятность найти тайник в открытом.
+  // (путь ×1.5, бег 4 бл/с) и копка (digS на блок, ход по ходу 2 бл/с); выгода — вероятность найти тайник в открытом.
   // reserved — клетки, открытые планами других копателей; away — их цели (сектора: не ближе sep к чужой цели).
   // skip(to) — цель, что уже не вышла с этого места (повтор по причине у драйвера).
   planDig (me: SwarmPosition, { digS = 0.5, maxLen = 14, reserved = new Set<number>(), away = [] as SwarmPosition[], sep = 10, skip = null as ((to: SwarmPosition, from: SwarmPosition) => boolean) | null } = {}): DigPlan | null {
@@ -359,7 +461,7 @@ export class CacheModel {
       if (far(to) || skip?.(to, s) || to.y < floorY) return
       const { dug, solid, gain, exposed } = this.dig(s, to, reserved)
       if (!dug.length || dug.some(c => c.y < floorY)) return
-      const travel = s === feet ? 0 : Math.hypot(s.x - me.x, s.y - me.y, s.z - me.z) * 1.5 / 4
+      const travel = s === feet ? 0 : cacheWalkSeconds(me, s)
       const cost = 1 + travel + solid * digS + dug.length / 4
       const rate = gain / cost
       if (!best || rate > best.rate) best = { from: s, to, gain, cost, rate, cells: dug.length, exposed }

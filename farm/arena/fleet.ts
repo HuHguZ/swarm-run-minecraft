@@ -33,11 +33,16 @@ export function client (url) {
     const m = JSON.parse(raw.toString())
     if (m.type === 'danger') { c.onDanger?.(m); return }
     if (m.type === 'wind_bid' || m.type === 'wind_bid_done') {
-      const granted = c.onWindBid?.(m) === true
-      if (m.type === 'wind_bid' && ws.readyState === 1) ws.send(JSON.stringify({ type: 'wind_bid_answer', id: m.id, granted }))
+      const result = c.onWindBid?.(m)
+      if (m.type === 'wind_bid') {
+        const answer = granted => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'wind_bid_answer', id: m.id, granted: granted === true })) }
+        if (result instanceof Promise) void result.then(answer, () => answer(false))
+        else answer(result)
+      }
       return
     }
-    if (pending.has(m.id)) m.ok ? settle(m.id, 'resolve', m.result) : settle(m.id, 'reject', new Error(m.error))
+    if (pending.has(m.id)) m.ok ? settle(m.id, 'resolve', m.result) : settle(m.id, 'reject', Object.assign(new Error(m.error),
+      typeof m.code === 'string' && { code: m.code }, m.notStarted === true && { notStarted: true }))
   })
   ws.on('close', () => failAll(`RPC ${url}: сокет закрыт`)); ws.on('error', () => {})
   // Демон с застрявшим циклом событий принимает TCP, но рукопожатие WebSocket не отвечает — без срока старт арены ждал вечно
@@ -103,125 +108,111 @@ async function onServer (s: Actor, i) {
 
 const onLoopbackServer = (peek, port) => ['127.0.0.1', 'localhost', '::1'].some(host => peek.detail?.server === `${host}:${port}`)
 
-/** Disconnect the old match before its clients receive the entire replacement Colosseum. */
-export async function leaveForRestore (i: number, bots, confirm = rcon) {
-  if (LAN || !bots.length) return 0
-  return withRestoreClients(bots, async clients => (await detachFromPaper(i, clients, confirm)).exited)
-}
-
 type RestoreClient = { b: { name: string; ws: number }; c: ReturnType<typeof client> }
 
-async function withRestoreClients<T> (bots, run: (clients: RestoreClient[]) => Promise<T>): Promise<T> {
-  const clients = bots.map(b => ({ b, c: client(`ws://127.0.0.1:${b.ws}`) }))
-  try { return await run(clients) } finally { for (const { c } of clients) c.ws.terminate() }
+async function paperRoster (i: number, confirm: typeof rcon, names: string[]): Promise<Set<string>> {
+  const reply = String(await confirm(i, 'list')).trim()
+  const list = /^There are (\d+) of a max of \d+ players online:\s*(.*)$/s.exec(reply)
+  if (!list) throw new Error('Paper не подтвердил полный список игроков')
+  const listed = list[2].split(',').map(n => n.trim()).filter(Boolean)
+  const complete = (players: string[]) => players.length === +list[1] && new Set(players).size === players.length
+  if (listed.every(n => /^\w{1,16}$/.test(n)) && complete(listed)) return new Set(listed)
+  // Paper abbreviates /list with "..." on the 40-player Colosseum. RCON can concatenate
+  // multiple named data replies without separators, or truncate a very large response.
+  const data = String(await confirm(i, 'execute as @a run data get entity @s playerGameType')).trim()
+  const row = /(\w{1,16}) has the following entity data: [0-3]/g
+  const players = Array.from(data.matchAll(row), match => match[1])
+  if (!data.replace(row, '').trim() && complete(players)) return new Set(players)
+  const present = new Set<string>()
+  for (const name of names) {
+    const answer = String(await confirm(i, `execute if entity @a[name=${name}]`)).trim()
+    if (/^Test passed(?:[.,] count: 1)?$/i.test(answer)) present.add(name)
+    else if (!/^Test failed(?:[.,] count: 0)?$/i.test(answer)) throw new Error(`Paper не подтвердил список игроков: ${name}`)
+  }
+  return present
 }
 
-async function detachFromPaper (i: number, clients: RestoreClient[], confirm: typeof rcon, allowUnavailable = false) {
-  if (!clients.length) throw new Error('восстановление: нет бойцов раунда')
-  const probeDeadline = AbortSignal.timeout(20000)
-  const probeTimeout = new Promise<never>((_, reject) => probeDeadline.addEventListener('abort', () => reject(new Error('демон не ответил при проверке сервера за 20 с')), { once: true }))
-  const checked = await Promise.all(clients.map(async ({ b, c }) => {
-    let peek
-    try {
-      peek = await Promise.race([probeTimeout, c.ready.then(() => c.call('peek'))])
-    } catch (error) {
-      if (!allowUnavailable) throw error
-      return null
-    }
-    if (!onLoopbackServer(peek, 25600 + i) || typeof peek.state?.connected !== 'boolean') throw new Error(`${b.name}: демон не подтвердил сервер фермы`)
-    return peek.state.connected as boolean
-  }))
-  const verified = clients.filter((_, index) => checked[index] !== null)
-  if (!verified.length) throw new Error('восстановление: нет доступных бойцов раунда')
-  const leaving = clients.filter((_, index) => checked[index] === true)
-  const stop = new AbortController()
-  const deadline = AbortSignal.any([stop.signal, AbortSignal.timeout(20000)]) // wall time, independent of accelerated arena timers
-  const timeout = new Promise<never>((_, reject) => deadline.addEventListener('abort', () => reject(new Error('восстановление: не подтверждён выход бойцов за 20 с')), { once: true }))
-  const rejoinable = new Set(clients.filter((_, index) => checked[index] === false))
+// Cross-dimension teleport removes the old Paper chunk subscriptions without closing the game socket.
+// A named, dimension-scoped read confirms the spectator even if the teleport reply was lost or ambiguous.
+export async function restoreRoundRoster (i: number, bots, confirm: typeof rcon, rebuild: () => Promise<void>,
+  report: (s: string) => void, home: { x: number; y: number; z: number }) {
+  if (LAN || !bots.length || ![home.x, home.y, home.z].every(Number.isFinite)) throw new Error('неверная площадка восстановления раунда')
+  const slots = new Map([...baseActors(i), ...EXTRA.map((_, k) => extra(i, k))].map(b => [b.name, b.ws]))
+  if (bots.some(b => slots.get(b.name) !== b.ws) || new Set(bots.map(b => b.name)).size !== bots.length) throw new Error('не подтверждён состав слота')
+  const clients: RestoreClient[] = bots.map(b => ({ b, c: client(`ws://127.0.0.1:${b.ws}`) }))
   try {
-    const departures = Promise.allSettled(leaving.map(async entry => {
-      const { b, c } = entry
-      if ((await c.call('disconnect', { reason: 'восстановление Колизея' }))?.ok !== true) throw new Error(`${b.name}: выход не подтверждён`)
-      rejoinable.add(entry)
+    const checked = await Promise.all(clients.map(async ({ b, c }) => {
+      let peek
+      try { await c.ready; peek = await c.call('peek', { timeoutSeconds: 0 }) } catch { return null }
+      if (!onLoopbackServer(peek, 25600 + i) || typeof peek.state?.connected !== 'boolean') throw new Error(`${b.name}: демон не подтвердил сервер фермы`)
+      return peek.state.connected as boolean
     }))
-    if (!allowUnavailable) {
-      const failure = (await Promise.race([timeout, departures])).find(result => result.status === 'rejected')
-      if (failure) throw failure.reason
-    }
-    const wanted = new Set(clients.map(({ b }) => b.name))
-    // All clients share one RCON stream. Read one complete roster per attempt,
-    // after the disconnects, instead of interleaving a command per player.
-    await Promise.race([timeout, (async () => {
-      for (;;) {
-        deadline.throwIfAborted()
-        try {
-          const reply = String(await confirm(i, 'list')).trim()
-          const match = /^There are (\d+) of a max of \d+ players online:\s*(.*)$/s.exec(reply)
-          if (match) {
-            const names = match[2].split(',').map(n => n.trim()).filter(Boolean)
-            if (names.length === Number(match[1]) && new Set(names).size === names.length && names.every(n => /^\w{1,16}$/.test(n) && !wanted.has(n))) return
-          }
-        } catch (e) {
-          if (!/ECONNABORTED|ECONNRESET|EPIPE|rcon (closed|timeout)/i.test(String(e))) throw e
-        }
-        await sleep(200)
-      }
-    })()])
-    // Paper proves departure even if a quit reply was lost. Only reuse a socket
-    // whose previous quit completed, so a late handler cannot evict the new body.
-    if (allowUnavailable) await Promise.race([timeout, departures]).catch(() => {})
-    if (!rejoinable.size) throw new Error('восстановление: нет доступных бойцов раунда')
-    return { exited: leaving.length, verified: verified.filter(entry => rejoinable.has(entry)) }
-  } catch (error) {
-    stop.abort()
-    // Restore only sessions verified online before this attempt. connect is
-    // idempotent for a body that never left.
-    if (leaving.length) {
-      const restored = new Set()
-      const expired = AbortSignal.timeout(20000)
-      await Promise.race([new Promise<void>(resolve => expired.addEventListener('abort', () => resolve(), { once: true })),
-        Promise.allSettled(leaving.map(async ({ b, c }) => {
-          if ((await c.call('connect')).state?.connected === true) restored.add(b.name)
-        }))])
-      const missing = leaving.filter(({ b }) => !restored.has(b.name))
-      if (missing.length) throw new Error(`${error}; не подтвердили обратный вход: ${missing.map(({ b }) => b.name).join(', ')}`)
-    }
-    throw error
-  } finally { stop.abort() }
-}
+    const verified = clients.filter((_, k) => checked[k] !== null)
+    if (!verified.length) throw new Error('восстановление: нет доступных бойцов раунда')
+    const knownOnline = new Set(clients.filter((_, k) => checked[k] === true).map(({ b }) => b.name))
+    // A failed control socket is tolerable only if Paper also says its body is absent.
+    const onlineNames = () => paperRoster(i, confirm, clients.map(({ b }) => b.name))
+    const before = await onlineNames()
+    for (const { b } of clients) if (before.has(b.name) && !knownOnline.has(b.name)) throw new Error(`${b.name}: онлайн без подтверждения демона`)
+    await Promise.all(verified.filter(({ b }) => before.has(b.name)).map(({ c }) => c.call('stop')))
 
-// Use the same verified control sockets on both sides of the clone. Fight RPC wrappers
-// may skip commands while a bot is climbing; those wrappers do not own the session.
-export async function restoreRoundRoster (i: number, bots, confirm: typeof rcon, rebuild: () => Promise<void>, report: (s: string) => void) {
-  if (LAN) throw new Error('переподключение раунда доступно только на ферме')
-  return withRestoreClients(bots, async clients => {
-    const { exited, verified } = await detachFromPaper(i, clients, confirm, true)
-    report(`до восстановления Колизея вышли бойцы раунда (${exited})`)
-    const joined = new Set<string>()
-    try { await rebuild() } finally {
-      // A sequential warm login of 40 took 38 wall seconds on slot 31. Bound
-      // simultaneous chunk loads and give the group one shared wall deadline.
-      const deadline = AbortSignal.timeout(60000)
-      const pending = verified.slice()
-      const join = async () => {
-        while (!deadline.aborted) {
-          const entry = pending.shift()
-          if (!entry) return
-          const { b, c } = entry
-          try { if ((await c.call('connect')).state?.connected === true) joined.add(b.name) } catch {}
+    const move = async (name: string, dimension: string, at: string) => {
+      await confirm(i, `gamemode spectator ${name}`)
+      await confirm(i, `execute as ${name} if entity @s[gamemode=spectator] in minecraft:${dimension} run tp @s ${at}`).catch(() => {})
+      const receipt = String(await confirm(i, `execute as ${name} at @s if dimension minecraft:${dimension} run data get entity @s playerGameType`)).trim()
+      return receipt === `${name} has the following entity data: 3`
+    }
+    const attempted = new Set<string>(), parked = new Set<string>(), joined = new Set<string>()
+    const homeAt = `${home.x} ${home.y} ${home.z}`
+    let rebuildError: unknown
+    let rebuilt = false
+    try {
+      for (const { b } of verified) if (before.has(b.name)) {
+        attempted.add(b.name) // Includes a move whose reply is subsequently lost.
+        if (await move(b.name, 'the_nether', '0.5 128 0.5')) parked.add(b.name)
+        else if ((await onlineNames()).has(b.name)) {
+          throw new Error(`${b.name}: Paper не подтвердил парковку в Незере`)
         }
       }
-      const workers = () => Promise.all(Array.from({ length: Math.min(4, pending.length) }, join))
-      await Promise.race([new Promise<void>(resolve => deadline.addEventListener('abort', () => resolve(), { once: true })), (async () => {
-        await workers()
-        pending.push(...verified.filter(({ b }) => !joined.has(b.name)))
-        await workers()
-      })()])
-      const missing = clients.filter(({ b }) => !joined.has(b.name)).map(({ b }) => b.name)
-      report(`после восстановления Колизея вошли бойцы ${joined.size}/${clients.length}${missing.length ? '; не вошли: ' + missing.join(', ') : ''}`)
+      const current = await onlineNames()
+      for (const { b } of clients) if (current.has(b.name) && !parked.has(b.name)) throw new Error(`${b.name}: появился во время парковки`)
+      report(`до восстановления Колизея в Незере бойцов: ${[...parked].filter(n => current.has(n)).length}`)
+      await rebuild()
+      rebuilt = true
+    } catch (e) { rebuildError = e }
+    // A failed clone also returns its parked bodies. Only an actually absent, verified session needs a login.
+    const returning = verified.filter(({ b }) => rebuilt || attempted.has(b.name))
+    const online = await onlineNames().catch(() => null)
+    const offline = returning.filter(({ b }) => online && !online.has(b.name))
+    const connected = new Set<string>()
+    const deadline = AbortSignal.timeout(60000)
+    const join = async () => {
+      while (!deadline.aborted) {
+        const entry = offline.shift()
+        if (!entry) return
+        try { if ((await entry.c.call('connect', { timeoutSeconds: 0 })).state?.connected === true) connected.add(entry.b.name) } catch {}
+      }
     }
-    return new Set(joined)
-  })
+    if (offline.length) await Promise.all(Array.from({ length: Math.min(4, offline.length) }, join))
+    for (const { b } of returning) {
+      if (online && !online.has(b.name) && !connected.has(b.name)) continue
+      try {
+        if (!await move(b.name, 'overworld', homeAt)) throw new Error('возврат не подтверждён')
+        joined.add(b.name)
+      } catch (e) { report(`⚠ ${b.name}: ${e}`) }
+    }
+    report(`после восстановления Колизея вернулись бойцы ${joined.size}/${clients.length}`)
+    // Never start another round with a connected fighter stranded in the parking dimension.
+    const missing = returning.filter(({ b }) => !joined.has(b.name)).map(({ b }) => b.name)
+    if (missing.length) {
+      const stillOnline = await onlineNames().catch(() => null)
+      if (!stillOnline || missing.some(n => stillOnline.has(n)) || !joined.size) {
+        throw new Error(`${rebuildError ? String(rebuildError) + '; ' : ''}не подтвердили возврат в обычный мир: ${missing.join(', ')}`)
+      }
+    }
+    if (!rebuilt) throw rebuildError
+    return joined
+  } finally { for (const { c } of clients) c.ws.terminate() }
 }
 
 const baseActors = i => [{ name: `NeuroFarm${i}`, ws: 8800 + i }, { name: `NeuroFarm${i}b`, ws: 8900 + i }]
@@ -284,8 +275,9 @@ export async function up (i, n) {
     log(`${s.name}: демон ${s.ws} ✓ (${path.basename(cwd)})`)
   }
 }
-export async function down (i) {
-  const count = await mutate(ownedExtras(i, await inspect(registeredPorts(i))), 'Stop-Process -InputObject $p -ErrorAction Stop')
+export async function down (i, names?: ReadonlySet<string>) {
+  const owned = ownedExtras(i, await inspect(registeredPorts(i)))
+  const count = await mutate(names ? owned.filter(b => names.has(b.name)) : owned, 'Stop-Process -InputObject $p -ErrorAction Stop')
   log(`слот ${i}: остановлено подтверждённых демонов ${count}; неподтверждённые процессы не трогал`)
   return count
 }

@@ -4,6 +4,12 @@ import { SwarmBoard, planPvp, type SwarmMember } from '../daemon/src/swarm'
 import { createDriverState } from './swarm/swarm-driver/state'
 import { swarmMoves } from './swarm/swarm-driver/moves'
 import { swarmLoot } from './swarm/swarm-driver/loot'
+import { swarmClimb } from './swarm/swarm-driver/climb'
+import { swarmRetry } from './swarm/swarm-driver/retry'
+import { swarmMethods } from '../daemon/src/rpc/swarm'
+import { block, testBot } from '../daemon/test/tick-plugins-fixture'
+import { assist } from '../daemon/src/pvp/team-assist'
+import { inPickup } from '../daemon/src/drops'
 import { swarmTurn } from './swarm/swarm-driver/turn'
 import { swarmTurnWork } from './swarm/swarm-driver/turn-work'
 import { assessSwarmFight, memberFight } from '../daemon/src/swarm/fight'
@@ -12,15 +18,15 @@ import { ascentActive } from './swarm/swarm-driver/ascent'
 process.env.ARMS_CACHE_MEMORY = '0'
 process.env.ARMS_CACHE_SEARCH = '0'
 
-function fixture({ gap = 40, sites = [{ x: -10, y: 64, z: .5 }] as any[], inventory = {}, arms = true, attackArrows = undefined, loadedCrossbow = false } = {}) {
+function fixture({ gap = 40, sites = [{ x: -10, y: 64, z: .5 }] as any[], inventory = {}, arms = true, attackArrows = undefined, loadedCrossbow = false, teamSize = 12 } = {}) {
   const calls: any[] = [], now = () => 1000, arena = { x: 0, y: 64, z: 0, r: 100, killY: 60 }
-  const members: SwarmMember[] = Array.from({ length: 12 }, (_, i) => ({ id: 'blue' + i, team: 'blue',
+  const members: SwarmMember[] = Array.from({ length: teamSize }, (_, i) => ({ id: 'blue' + i, team: 'blue',
     position: { x: .5, y: 64, z: .5 }, health: 20, strength: 20, role: 'fighter', inventory: i ? {} : inventory, armor: [] }))
   const member = members[0], board = new SwarmBoard('blue', now)
   board.setMembers(members)
-  for (let i = 0; i < 12; i++) board.observe(member.id, now(), { id: 'red' + i, visible: true,
+  for (let i = 0; i < teamSize; i++) board.observe(member.id, now(), { id: 'red' + i, visible: true,
     position: { x: .5 + gap, y: 64, z: .5 }, equipment: { armor: [] } })
-  const task = planPvp(board, members, { quorum: 1, foesLeft: 12, doctrine: 'buffalo' }).get(member.id)!
+  const task = planPvp(board, members, { quorum: 1, foesLeft: teamSize, doctrine: 'buffalo' }).get(member.id)!
   const pos = { [member.id]: { p: member.position, hp: 20, inv: inventory, armor: {}, attackArrows, loadedCrossbow } }
   const b: any = { name: member.id, team: 'blue', c: { async call(method, params: any = {}) {
     calls.push({ method, params })
@@ -40,6 +46,65 @@ function fixture({ gap = 40, sites = [{ x: -10, y: 64, z: .5 }] as any[], invent
   sw.cacheTurn = async () => false
   return { calls, task, sw, b, pos, board, member, members, run: () => swarmTurn(sw).turn(b) }
 }
+
+test('a regular 20v20 looter takes a visible sword on the ground before touring chests', async () => {
+  for (const hidden of [false, true]) {
+    const f = fixture({ gap: 50, teamSize: 20 }), body = testBot()
+    Object.assign(f.sw, swarmRetry(f.sw), swarmClimb(f.sw))
+    body.entity.position.y = 64
+    const drop = body.entity.position.offset(2, 0, 0)
+    body.entities[42] = { id: 42, name: 'item', type: 'object', position: drop, width: .25, height: .25,
+      getDroppedItem: () => ({ name: 'iron_sword', count: 1 }) }
+    body.blockAt = p => block(hidden && Math.floor(p.x) === 1 ? 'stone' : 'air', p)
+    const senses = swarmMethods({ session: { require: () => body, immediate: fn => fn() } } as any)
+    const call = f.b.c.call.bind(f.b.c), methods = []
+    let waited = 0, received = false
+    body.waitForTicks = async n => { waited += n }
+    f.b.c.call = async (m, p) => {
+      methods.push(m)
+      if (m === 'items_near') return { detail: await senses.items_near(p) }
+      if (m === 'goto' && p.x === drop.x) {
+        const reply = await call(m, p)
+        body.entity.position.set(p.x, p.y, p.z)
+        assert.ok(inPickup(body.entity.position, drop))
+        // The server can deliver the slot and remove the drop before goto replies.
+        body.inventory.slots[36] = { name: 'iron_sword', count: 1 }; delete body.entities[42]
+        return reply
+      }
+      if (m === 'assist') {
+        const detail = await assist({ require: () => body }, p)
+        received = detail.ok
+        return { detail }
+      }
+      if (m === 'status') return { state: { inventory: body.inventory.slots[36] ? { iron_sword: 1 } : {} } }
+      return call(m, p)
+    }
+    assert.equal(f.task.kind, 'fight', 'the unarmed fighter must rearm before moving toward the formation')
+    await f.run()
+    assert.ok(methods.includes('items_near'), 'ordinary swarm looters get their own view of ground items')
+    assert.equal(methods.includes('assist'), !hidden)
+    assert.equal(received, !hidden)
+    assert.equal(waited, 0, 'a delivered weapon needs no more pickup ticks')
+    assert.equal(f.sw.pos.blue0.inv.iron_sword, hidden ? undefined : 1)
+    if (!hidden) assert.ok(f.calls.some(c => c.method === 'goto' && c.params.x === drop.x))
+  }
+})
+
+test('a sword rush during a ground pickup ends the old turn before it can order an unarmed attack', async () => {
+  const f = fixture({ gap: 50, teamSize: 20 })
+  Object.assign(f.sw, swarmRetry(f.sw), swarmClimb(f.sw))
+  const drop = { x: 2.5, y: 64, z: .5 }
+  const call = f.b.c.call.bind(f.b.c)
+  f.b.c.call = async (method, params) => {
+    if (method === 'items_near') return { detail: { items: [{ name: 'diamond_chestplate', at: drop, d: 2 }] } }
+    if (method === 'goto' && params.x === drop.x) f.board.observe(f.member.id, f.sw.now(), {
+      id: 'red0', visible: true, position: { ...drop, z: 2 }, equipment: { weapon: 'netherite_sword', armor: [] }
+    })
+    return call(method, params)
+  }
+  await f.run()
+  assert.deepEqual(f.calls.map(c => c.method), ['goto'])
+})
 
 function contactLootFixture({ gap = 1.15, inventory = { netherite_sword: 1 } as Record<string, number>, enemyEquipment = { armor: [] } as any, seenAt = 1000 } = {}) {
   const f = fixture({ gap, inventory, sites: [] })

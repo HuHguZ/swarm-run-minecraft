@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createSwarmDriver } from './swarm/swarm-driver'
+import { SwarmBoard, planPvp } from '../daemon/src/swarm'
 
 function scenario(gap: number, inventory: Record<string, number>, equipped = false, cornered = false,
-  shove: { edge?: { x: number; z: number; at: number; drop: number; lava?: boolean }; enchanted?: boolean } = {}) {
+  shove: { edge?: { x: number; z: number; at: number; drop: number; lava?: boolean }; enchanted?: boolean } = {}, firstReport = true) {
   const calls: any[] = []
   let now = 1000
   const b: any = { name: 'A', team: 'blue', c: { async call(method, params) {
@@ -19,7 +20,7 @@ function scenario(gap: number, inventory: Record<string, number>, equipped = fal
   const observation: any = { id: 'Human', visible: true, position: { x: 0, y: 64, z: 0 }, velocity: { x: 0, y: 0, z: 0 },
     equipment: { weapon: 'netherite_sword', armor: ['netherite_helmet', 'netherite_chestplate', 'netherite_leggings', 'netherite_boots'], enchanted: shove.enchanted ?? true } }
   Object.defineProperty(observation, 'health', { get() { throw Error('hidden player HP') } })
-  driver.observe(b, [observation])
+  if (firstReport) driver.observe(b, [observation])
   return { calls, b, driver, perch, pos, observation, observe: () => { now += 500; driver.observe(b, [observation]) } }
 }
 
@@ -40,6 +41,44 @@ test('without a perch the unarmed body checks escape before a physically cornere
     assert.deepEqual(f.calls.map(c => c.method), cornered ? ['flee', 'fight'] : ['flee'])
     if (cornered) assert.equal(f.calls[1].params.lastStand, true)
   }
+})
+
+test('a sword that cannot penetrate seen armor makes a lone fighter and its swarm check for an exit', async () => {
+  for (const cornered of [false, true]) {
+    const f = scenario(3, { stone_sword: 1 }, false, cornered)
+    assert.equal(f.driver.panic(f.b), true, 'a new armored contact must interrupt the previous action before the next planning cycle')
+    await f.driver.turn(f.b)
+    assert.equal(f.b.swarmTask.kind, 'flee')
+    assert.deepEqual(f.calls.map(c => c.method), cornered ? ['flee', 'fight'] : ['flee'])
+    if (cornered) assert.equal(f.calls[1].params.lastStand, true)
+  }
+  const f = scenario(3, { stone_sword: 1 })
+  const members = Array.from({ length: 12 }, (_, i) => ({ id: 'A' + i, team: 'blue', role: 'fighter' as const, strength: 20,
+    health: 20, position: { x: 3, y: 64, z: i / 100 }, weapon: 'stone_sword', inventory: { stone_sword: 1 }, armor: ['iron_chestplate'] }))
+  const board = new SwarmBoard('blue', () => 1000)
+  board.setMembers(members); board.observe('A0', 1000, f.observation)
+  const plan = planPvp(board, members, { aggressive: true, hideouts: [{x: 12, y: 64, z: 0}] })
+  assert.equal([...plan.values()].filter(t => t.kind === 'flee').length, 12, 'numbers cannot repair an ineffective melee trade')
+  assert.ok([...plan.values()].some(t => t.data?.hide), 'use the safer known shelter')
+})
+
+test('a first danger poll honors a winning void shove and a fighter with a viable trade', () => {
+  const edge = scenario(-2.5, {}, false, false, { edge: { x: 1, z: 0, at: .1, drop: Infinity } })
+  const armed = scenario(3, { netherite_sword: 1 }, true)
+  for (const f of [edge, armed]) assert.equal(f.driver.panic(f.b), false)
+})
+
+test('newly visible armor breaks a cached safe poll for the same player, while a name alone does not', async () => {
+  const f = scenario(3, { stone_sword: 1 }, false, false, {}, false)
+  const bare = { ...f.observation, equipment: { weapon: null, armor: [] } }
+  f.driver.observe(f.b, [bare]); await f.driver.turn(f.b)
+  assert.equal(f.b.swarmTask.kind, 'fight'); assert.equal(f.driver.panic(f.b), false)
+  f.driver.observe(f.b, [{...bare, visible: false, nametag: true}])
+  assert.equal(f.driver.panic(f.b), false)
+  f.driver.observe(f.b, [f.observation])
+  assert.equal(f.driver.panic(f.b), true, 'the same opponent geared up since the previous plan, even within one poll interval')
+  await f.driver.turn(f.b)
+  assert.equal(f.b.swarmTask.kind, 'flee')
 })
 
 test('a capable armed fighter still attacks the same stationary human nearby', async () => {
